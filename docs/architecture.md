@@ -6,7 +6,8 @@ The Worker is being built in PR-sized phases:
 
 - Phase 0 proved deployment and MCP connectivity with `GET /healthz` and initialize-only `POST /mcp`.
 - Phase 1 adds fixture-backed read-only catalog tools/resources while real DynamoDB and Shopify credentials/schema are still unconfirmed.
-- Later phases replace fixtures with a scheduled joined catalog snapshot and add optics/recommendation/product-detail capabilities behind tests.
+- Phase 2 adds fixture-backed FoV calculation scaffolding with explicit parity warnings while real projection coefficients remain unconfirmed.
+- Later phases replace fixtures with a scheduled joined catalog snapshot and add recommendation/product-detail capabilities behind tests.
 
 No live Shopify, Acumatica, or database behavior is implemented yet. No checkout, cart, inventory mutation, or write tool is implemented.
 
@@ -53,3 +54,15 @@ Phase 1 exposes these read-only methods from fixture-backed catalog data:
 - `resources/read` for `commonlands://catalog/lenses` and `commonlands://catalog/sensors`
 
 Responses include MCP-style `structuredContent` plus text content for tool calls. Lens responses intentionally return gated datasheet notes instead of direct DocSend URLs. Mechanical drawing URLs are limited to validated HTTPS Commonlands or Shopify CDN hosts.
+
+
+## Phase 2 MCP surface
+
+Phase 2 adds `compute_fov` as a fixture-backed optics contract. It accepts `lensSku`, `sensorPartNumber`, and optional `workingDistanceMm`, then returns:
+
+- image-circle clipping status and effective sensor dimensions;
+- HFOV, VFOV, DFOV, and optional scene width/height;
+- angular resolution in px/degree;
+- projection model, coefficient count, assumptions, warnings, and calculation model version.
+
+The calculation is intentionally labeled `fixture_parity_scaffold`. It follows the confirmed legacy pattern at a contract level, but production coefficient convention/sign/units must be connected and tested before launch claims.

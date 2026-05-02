@@ -1,13 +1,13 @@
 # Data Audit Plan
 
-The Worker does not yet connect to AWS, Shopify, Acumatica, or a database. Phase 1 catalog behavior is fixture-backed until the real data contracts below are confirmed.
+The Worker does not yet connect to AWS, Shopify, Acumatica, or a database. Phase 1/2 catalog and FoV behavior is fixture-backed until the real data contracts below are confirmed.
 
 ## Confirmed from planning/discovery
 
 - Legacy calculator uses a DynamoDB/AppSync lens data source.
 - Known local Amplify names: AppSync API `lenslist`, DynamoDB storage base `dynamoLensList`, region `us-west-2`.
 - Local `src/aws-exports.js` was missing in the legacy app, so deployed endpoint/API key are not available from local source.
-- Legacy FoV calculation uses `alpha`, `beta`, `efl`, `image_circle`, and `max_fov`.
+- Legacy FoV calculation uses `alpha`, `beta`, `efl`, `image_circle`, and `max_fov`. Phase 2 only preserves the contract-level pattern until coefficient convention/sign/units are confirmed.
 - Shopify mapping sheet fields identified during planning:
   - product handle / slug
   - short part number
@@ -20,8 +20,8 @@ Capture 5-10 sanitized lens records and document:
 
 - Canonical table/API name and environment.
 - Primary key and SKU/short-part-number field.
-- Lens optical fields: EFL, image circle, projection model, distortion coefficients, max FoV, F-number, mount.
-- Sensor fields needed for parity fixtures.
+- Lens optical fields: EFL, image circle, projection model, distortion coefficients, coefficient convention/sign/units, max FoV, F-number, mount.
+- Sensor fields needed for parity fixtures: active area, resolution, pixel size, and any calculator-specific clipping behavior.
 - Shopify join key and collision/missing-record behavior.
 - Mechanical drawing field format: public URL vs file reference.
 - Any fields that are private, gated, deprecated, or unsafe to expose.
