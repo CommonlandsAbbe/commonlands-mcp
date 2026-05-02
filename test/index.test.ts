@@ -429,6 +429,91 @@ describe('Commonlands MCP Worker', () => {
     expect(JSON.stringify(getResult(body))).not.toMatch(/client-secret-test|client-id-test|shpat|shpss|accessToken|Authorization|Bearer/i);
   });
 
+  it('falls back from exact SKU filter to safe text search when Shopify SKU indexing misses short part numbers', async () => {
+    const calls: string[] = [];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      if (url.endsWith('/admin/oauth/access_token')) {
+        return Response.json({ access_token: 'shpat_fallback_token_never_return', expires_in: 86400, scope: shopifyReadonlyEnv.SHOPIFY_SCOPES });
+      }
+      if (url.endsWith('/admin/api/2026-04/graphql.json')) {
+        const body = String(init?.body ?? '');
+        calls.push(body);
+        expect(body).toContain('productVariants');
+        expect(body).not.toMatch(/mutation|customer|order/i);
+        const variables = JSON.parse(body).variables as { query: string };
+        if (variables.query === 'sku:CIL250') {
+          return Response.json({ data: { productVariants: { nodes: [] } } });
+        }
+        expect(variables.query).toBe('CIL250');
+        return Response.json({
+          data: {
+            productVariants: {
+              nodes: [
+                {
+                  id: 'gid://shopify/ProductVariant/123',
+                  sku: 'NOT-CIL250-SKU',
+                  title: 'Default Title',
+                  price: '34.00',
+                  inventoryQuantity: 42,
+                  inventoryItem: { id: 'gid://shopify/InventoryItem/456', tracked: true },
+                  metafields: {
+                    nodes: [
+                      { namespace: 'mm-google-shopping', key: 'mpn', type: 'single_line_text_field', value: 'CIL250' },
+                    ],
+                  },
+                  product: {
+                    id: 'gid://shopify/Product/789',
+                    handle: 'telephoto-25mm-m12-lens-cil250',
+                    title: 'IR Corrected 25mm M12 Lens',
+                    status: 'ACTIVE',
+                    productType: 'Lens',
+                    vendor: 'Commonlands',
+                    tags: ['M12'],
+                    onlineStoreUrl: 'https://commonlands.com/products/telephoto-25mm-m12-lens-cil250',
+                    metafields: {
+                      nodes: [
+                        { namespace: 'custom', key: 'short_partnumber', type: 'single_line_text_field', value: 'CIL250' },
+                      ],
+                    },
+                    media: { nodes: [] },
+                  },
+                },
+              ],
+            },
+          },
+        });
+      }
+      return new Response('unexpected fetch', { status: 500 });
+    }) as typeof fetch;
+
+    const { body } = await rpc(
+      'tools/call',
+      { name: 'read_shopify_products', arguments: { sku: 'CIL250', limit: 1 } },
+      'read-shopify-products-sku-fallback',
+      { ...shopifyReadonlyEnv, SHOPIFY_CLIENT_ID: 'client-id-fallback-test' },
+    );
+    const structuredContent = getStructuredContent(body);
+
+    expect(structuredContent).toMatchObject({
+      connector: {
+        status: 'ok',
+        source: 'live_shopify_admin_graphql',
+        messages: ['Exact Shopify SKU search returned no results; retried as safe text search for short part number/MPN metafields.'],
+      },
+      products: [
+        {
+          handle: 'telephoto-25mm-m12-lens-cil250',
+          title: 'IR Corrected 25mm M12 Lens',
+          metafields: [{ namespace: 'custom', key: 'short_partnumber', valuePreview: 'CIL250' }],
+          variants: [{ sku: 'NOT-CIL250-SKU', metafields: [{ namespace: 'mm-google-shopping', key: 'mpn', valuePreview: 'CIL250' }] }],
+        },
+      ],
+    });
+    expect(calls).toHaveLength(2);
+    expect(JSON.stringify(getResult(body))).not.toMatch(/shpat_fallback_token_never_return|client-secret-test|client-id-fallback-test|Authorization|Bearer/i);
+  });
+
   it('exchanges Shopify token and reads product variants without leaking credentials or mutating state', async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
