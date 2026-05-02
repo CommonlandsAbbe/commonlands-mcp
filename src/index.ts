@@ -15,6 +15,13 @@ import {
   type LensRecommendation,
 } from './recommendations';
 import { getShopifyUcpReadiness } from './shopify-ucp-readiness';
+import {
+  buildUcpDiscoveryProfile,
+  getProduct,
+  lookupCatalog,
+  prepareShopifyPurchaseHandoff,
+  searchCatalog,
+} from './ucp-catalog';
 import { getCatalogSnapshotStatus } from './snapshot-status';
 
 export interface Env {
@@ -181,6 +188,88 @@ const TOOLS: ToolDefinition[] = [
     inputSchema: {
       type: 'object',
       properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'search_catalog',
+    title: 'Search UCP catalog',
+    description:
+      'Fixture-backed UCP Catalog search alias for Shopify-native product discovery; no live Shopify calls or cart behavior.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        meta: { type: 'object', description: 'Optional UCP agent metadata.' },
+        catalog: {
+          type: 'object',
+          properties: {
+            query: { type: 'string' },
+            limit: { type: 'integer', minimum: 1, maximum: 25, default: 10 },
+          },
+          additionalProperties: true,
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'lookup_catalog',
+    title: 'Lookup UCP catalog products',
+    description:
+      'Fixture-backed UCP Catalog lookup alias for product, variant, SKU, handle, or URL identifiers; returns not-found messages instead of writes.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        meta: { type: 'object' },
+        catalog: {
+          type: 'object',
+          properties: {
+            ids: { type: 'array', minItems: 1, maxItems: 10, items: { type: 'string' } },
+          },
+          required: ['ids'],
+          additionalProperties: true,
+        },
+      },
+      required: ['catalog'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'get_product',
+    title: 'Get UCP catalog product',
+    description:
+      'Fixture-backed UCP Catalog product detail alias with Commonlands optical metadata and Shopify-native handoff fields.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        meta: { type: 'object' },
+        catalog: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+          },
+          required: ['id'],
+          additionalProperties: true,
+        },
+      },
+      required: ['catalog'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'prepare_shopify_purchase_handoff',
+    title: 'Prepare Shopify purchase handoff',
+    description:
+      'Build a read-only Shopify-native purchase handoff seam for a selected lens without creating carts, checkout, orders, inventory mutations, or writes.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sku: { type: 'string' },
+        quantity: { type: 'integer', minimum: 1, maximum: 999, default: 1 },
+        sensorPartNumber: { type: 'string' },
+        selectedVariantId: { type: 'string' },
+      },
+      required: ['sku'],
       additionalProperties: false,
     },
   },
@@ -502,6 +591,38 @@ function toolCallResponse(id: unknown, params: unknown): Response {
     return toolResult(id, getShopifyUcpReadiness());
   }
 
+  if (params.name === 'search_catalog') {
+    try {
+      return toolResult(id, searchCatalog(args));
+    } catch (error) {
+      return ucpCatalogError(id, error);
+    }
+  }
+
+  if (params.name === 'lookup_catalog') {
+    try {
+      return toolResult(id, lookupCatalog(args));
+    } catch (error) {
+      return ucpCatalogError(id, error);
+    }
+  }
+
+  if (params.name === 'get_product') {
+    try {
+      return toolResult(id, getProduct(args));
+    } catch (error) {
+      return ucpCatalogError(id, error);
+    }
+  }
+
+  if (params.name === 'prepare_shopify_purchase_handoff') {
+    try {
+      return toolResult(id, prepareShopifyPurchaseHandoff(args));
+    } catch (error) {
+      return purchaseHandoffError(id, error);
+    }
+  }
+
   if (params.name === 'recommend_lenses_for_application') {
     const validation = validateRecommendationArgs(args);
     if (validation) return rpcError(id, validation);
@@ -605,6 +726,25 @@ function validateOptionalPositiveNumber(value: unknown, field: string): JsonRpcE
   return undefined;
 }
 
+function ucpCatalogError(id: unknown, error: unknown): Response {
+  const message = error instanceof Error ? error.message : 'UCP catalog request failed';
+  if (message.startsWith('Invalid params:')) {
+    return rpcError(id, { code: -32602, message });
+  }
+  return rpcError(id, { code: -32603, message: 'Internal UCP catalog error' });
+}
+
+function purchaseHandoffError(id: unknown, error: unknown): Response {
+  const message = error instanceof Error ? error.message : 'Purchase handoff failed';
+  if (message.startsWith('Invalid params:')) {
+    return rpcError(id, { code: -32602, message });
+  }
+  if (message.startsWith('Lens not found:')) {
+    return rpcError(id, { code: -32004, message });
+  }
+  return rpcError(id, { code: -32603, message: 'Internal purchase handoff error' });
+}
+
 function recommendationError(id: unknown, error: unknown): Response {
   const message = error instanceof Error ? error.message : 'Recommendation failed';
   if (message.startsWith('Sensor not found:') || message.startsWith('Lens not found:')) {
@@ -680,6 +820,11 @@ export default {
     if (url.pathname === '/healthz') {
       if (request.method !== 'GET') return methodNotAllowed();
       return health(env);
+    }
+
+    if (url.pathname === '/.well-known/ucp') {
+      if (request.method !== 'GET') return methodNotAllowed();
+      return json(buildUcpDiscoveryProfile(url.origin));
     }
 
     if (url.pathname === '/mcp') {
