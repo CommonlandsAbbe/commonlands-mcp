@@ -7,6 +7,7 @@ import {
   type LensCatalogItem,
 } from './catalog';
 import { computeFov } from './optics';
+import { buildProductPageDetails } from './product-page';
 import {
   compareLenses,
   matchLensesToSensor,
@@ -146,6 +147,20 @@ const TOOLS: ToolDefinition[] = [
     },
   },
   {
+    name: 'get_product_page_details',
+    title: 'Get product page details',
+    description:
+      'Return safe product-page handoff details for one lens, including DynamoDB-sourced optical specs and gated datasheet policy.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sku: { type: 'string', description: 'Commonlands short part number, for example CIL250.' },
+      },
+      required: ['sku'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'recommend_lenses_for_application',
     title: 'Recommend lenses for an application',
     description:
@@ -240,7 +255,7 @@ function initializeResponse(id: unknown): Response {
     },
     serverInfo: SERVER_INFO,
     instructions:
-      'Commonlands MCP read-only catalog and optics endpoint. Catalog, FoV, and recommendations are fixture-backed until live DDB/Shopify adapters are configured.',
+      'Commonlands MCP read-only catalog, optics, product-page handoff, and recommendation endpoint. Catalog, FoV, product details, and recommendations are fixture-backed until live DDB/Shopify adapters are configured.',
   });
 }
 
@@ -406,6 +421,19 @@ function toolCallResponse(id: unknown, params: unknown): Response {
     }
   }
 
+  if (params.name === 'get_product_page_details') {
+    if (typeof args.sku !== 'string') {
+      return rpcError(id, { code: -32602, message: 'Invalid params: sku is required' });
+    }
+
+    const lens = getLensBySku(args.sku);
+    if (!lens) {
+      return rpcError(id, { code: -32004, message: `Lens not found: ${args.sku}` });
+    }
+
+    return toolResult(id, buildProductPageDetails(lens));
+  }
+
   if (params.name === 'recommend_lenses_for_application') {
     const validation = validateRecommendationArgs(args);
     if (validation) return rpcError(id, validation);
@@ -517,7 +545,7 @@ function recommendationError(id: unknown, error: unknown): Response {
   return rpcError(id, { code: -32603, message: 'Internal recommendation error' });
 }
 
-function summarizeLens(lens: LensCatalogItem): Omit<LensCatalogItem, 'source'> {
+function summarizeLens(lens: LensCatalogItem): Omit<LensCatalogItem, 'source' | 'fixtureDistortion'> {
   const summary: Omit<LensCatalogItem, 'source' | 'fixtureDistortion'> = {
     sku: lens.sku,
     title: lens.title,
@@ -531,6 +559,7 @@ function summarizeLens(lens: LensCatalogItem): Omit<LensCatalogItem, 'source'> {
     fNumber: lens.fNumber,
     imageCircleMm: lens.imageCircleMm,
     maxFovDeg: lens.maxFovDeg,
+    resolution: lens.resolution,
     projectionModel: lens.projectionModel,
     coefficientCount: lens.coefficientCount,
     datasheet: lens.datasheet,

@@ -8,7 +8,8 @@ The Worker is being built in PR-sized phases:
 - Phase 1 adds fixture-backed read-only catalog tools/resources while real DynamoDB and Shopify credentials/schema are still unconfirmed.
 - Phase 2 adds fixture-backed FoV calculation scaffolding with explicit parity warnings while real projection coefficients remain unconfirmed.
 - Phase 3 adds fixture-backed engineering recommendation tools for deterministic lens shortlists and tradeoff explanations.
-- Later phases replace fixtures with a scheduled joined catalog snapshot and add product-detail/inventory enrichment behind tests.
+- Phase 4 adds fixture-backed product-page handoff details, including DynamoDB-sourced resolution metadata and gated datasheet policy.
+- Later phases replace fixtures with a scheduled joined catalog snapshot and connector-backed enrichment behind tests.
 
 No live Shopify, Acumatica, or database behavior is implemented yet. No checkout, cart, inventory mutation, or write tool is implemented.
 
@@ -78,3 +79,16 @@ Phase 3 adds deterministic, fixture-backed recommendation tools:
 - `recommend_lenses_for_application` applies lightweight application preferences such as embedded robotics/M12 preference, machine-vision/C-mount preference, low-distortion preference, and fixture stock preference.
 
 Recommendation responses include `schemaVersion: recommendations.v1`, `correctionStatus: fixture_recommendation_scaffold`, ranked lens summaries, FoV/image-circle/angular-resolution outputs, tradeoffs, warnings, and explicit assumptions. The ranking is a deterministic shortlist helper, not final optical design approval. It intentionally excludes live Shopify stock, price breaks, MTF, CRA, and production coefficient parity until the real integrations and audited fields are available.
+
+
+## Phase 4 MCP surface
+
+Phase 4 adds `get_product_page_details` as a safe commerce-handoff contract. It accepts a Commonlands lens SKU and returns:
+
+- product handle, public product URL, fixture price, availability, and validated mechanical drawing URL when present;
+- technical specifications from the optical catalog fixture, including EFL, F-number, image circle, max FoV, projection model, coefficient count, and resolution;
+- an explicit `resolution.source` field set to the DynamoDB-backed optical source contract, not Shopify enrichment;
+- gated datasheet policy and no direct gated-document URL;
+- source provenance for optical and commerce fixture data.
+
+This phase still does not call Shopify, DynamoDB/AppSync, Acumatica, or any live connector at request time. It is the response contract that live adapters must satisfy later.

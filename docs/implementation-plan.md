@@ -32,6 +32,12 @@ The repo is being built in PR-sized phases. Each phase must preserve the public 
    - Explains image-circle coverage, FoV target fit, mount/application preferences, availability uncertainty, and wide-angle/distortion tradeoffs.
    - Results are explicitly labeled `fixture_recommendation_scaffold` until production ranking inputs are audited.
 
+5. **Phase 4 — Fixture-backed product page detail contract**
+   - Tool: `get_product_page_details`.
+   - Returns public product URL, handle, fixture price/availability, validated drawing URL, gated datasheet policy, and optical specs.
+   - Treats lens `resolution` as a DynamoDB/AppSync optical catalog field, not Shopify enrichment.
+   - Results are explicitly labeled `fixture_commerce_handoff` until live read-only connectors are approved and configured.
+
 ## Still out of scope
 
 - Live AppSync/DynamoDB reads or scans.
