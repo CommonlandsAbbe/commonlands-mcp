@@ -14,10 +14,11 @@ The Worker is being built in PR-sized phases:
 - Phase 7 adds fixture-backed UCP catalog aliases, `/.well-known/ucp`, and a read-only Shopify purchase handoff seam so clients can discover products in Shopify-native shapes without creating transaction state.
 - Phase 8 adds fixture-backed purchase-route options for AI agents and robotics engineers, showing the future Commonlands MCP purchase surface, Shopify-native checkout path, and engineering review path without mutating commerce state.
 - Phase 9 adds credential-gated diagnostic Shopify Admin GraphQL read tools for product/variant/metaobject summary verification while leaving fixture-backed catalog and purchase-handoff flows unchanged.
-- Phase 10 adds an explicitly scoped Shopify Cart UCP proxy for create/get/update/cancel cart state while keeping checkout, payment, order, customer, inventory, and catalog writes blocked.
+- Phase 10 adds an explicitly scoped Shopify Cart UCP proxy for create/get/update/cancel cart state while keeping payment, order, customer, inventory, and catalog writes blocked outside Shopify checkout.
+- Phase 11 adds an explicitly scoped Shopify Checkout MCP proxy for create/get/update/complete/cancel checkout state. `complete_checkout` requires Shopify checkout authentication, verified buyer name/email/phone/address, card/payment authorization, and idempotency; Commonlands never accepts raw payment credentials.
 - Later phases replace fixtures with a scheduled joined catalog snapshot and connector-backed enrichment behind tests.
 
-No live Acumatica or database behavior is implemented yet. Shopify behavior is limited to explicit diagnostic read-only tools plus the separately approved Shopify Cart UCP proxy. No checkout, payment completion, order, customer-account, RFQ, inventory mutation, inventory sync change, or catalog write tool is implemented.
+No live Acumatica or database behavior is implemented yet. Shopify behavior is limited to explicit diagnostic read-only tools plus the separately approved Shopify Cart UCP and Checkout MCP proxies. Checkout completion is only through Shopify Checkout MCP after Shopify-authenticated buyer/payment verification; no direct payment capture, raw card handling, customer-account, RFQ, inventory mutation, inventory sync change, or catalog write tool is implemented.
 
 ## Target endpoint
 
@@ -40,7 +41,7 @@ Keep the Workers.dev endpoint live for now. Do not move `commonlands.com` DNS to
 - No database writes.
 - No secrets in source control.
 - No direct DocSend URLs in fixtures, responses, logs, or docs.
-- Cart UCP is the only approved Shopify mutation surface; no checkout/customer-account/order/write tools outside that cart boundary.
+- Cart UCP and Checkout MCP create/update/complete/cancel are the only approved Shopify mutation surfaces; no customer-account/order/write tools outside those Shopify-managed boundaries.
 - Live Shopify reads must remain diagnostic and read-only until audited joined snapshots are ready.
 
 ## Deployment metadata
@@ -174,4 +175,15 @@ Phase 10 adds a narrow Shopify Cart UCP proxy:
 
 Commonlands MCP does not store cart state in a database, KV namespace, Durable Object, cookie, or session memory. Shopify Cart MCP owns cart persistence and mutation. Agents must retain `cart.id` and/or `continue_url` across sessions; if both are lost, Commonlands MCP cannot reliably recover the prior cart.
 
-The Cart UCP proxy validates request shape and safety boundaries before forwarding. It rejects customer/buyer fields, non-ProductVariant IDs, invalid cart IDs, and cancel requests without an idempotency key. Checkout creation, checkout completion, payment, order creation, customer records, discounts, inventory reservation/mutation, product writes, metafield writes, Acumatica writes, database writes, and inventory sync changes remain out of scope.
+The Cart UCP proxy validates request shape and safety boundaries before forwarding. It rejects customer/buyer fields, non-ProductVariant IDs, invalid cart IDs, and cancel requests without an idempotency key. Checkout completion, payment, order creation, customer records, discounts, inventory reservation/mutation, product writes, metafield writes, Acumatica writes, database writes, and inventory sync changes remain out of scope.
+
+Phase 11 adds a narrow Shopify Checkout MCP proxy:
+
+- `create_checkout` forwards a retained Shopify Cart gid or explicit ProductVariant line items to Shopify Checkout MCP and returns Shopify-owned checkout handoff state, including checkout ID/URL/totals/messages/expiry when Shopify provides them.
+- `get_checkout` refreshes Shopify-owned checkout state by checkout ID.
+- `update_checkout` replaces allowed checkout line item/context state; buyer, customer, address, payment, discount, and gift-card fields are rejected.
+- `cancel_checkout` cancels Shopify-owned checkout state by checkout ID and requires `meta["idempotency-key"]` UUID for retry safety.
+
+Commonlands MCP does not store checkout state in a database, KV namespace, Durable Object, cookie, session memory, customer profile, or payment record. Shopify Checkout MCP owns checkout persistence and mutation. Agents must retain `checkout.id` and/or `checkout.checkout_url` across sessions; if both are lost, Commonlands MCP cannot recover the prior checkout.
+
+The Checkout MCP proxy dispatches `complete_checkout` only when Shopify checkout authentication has already verified name, email, phone, address, and card/payment authorization, and the request includes an idempotency key. Commonlands has no raw payment credential, customer-account, inventory, or catalog write path.

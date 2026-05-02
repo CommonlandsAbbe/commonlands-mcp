@@ -119,17 +119,18 @@ export interface UcpDiscoveryProfile {
     'dev.ucp.shopping.catalog.search',
     'dev.ucp.shopping.catalog.lookup',
     'dev.ucp.shopping.cart',
+    'dev.ucp.shopping.checkout',
   ];
   schema: {
-    name: 'Commonlands catalog and cart profile';
+    name: 'Commonlands catalog, cart, and checkout profile';
     url: string;
   };
   metadata: {
     service: 'commonlands-mcp';
-    mode: 'fixture_static_with_shopify_cart_proxy';
-    liveConnectors: 'shopify_cart_mcp_configured_separately';
-    cartPersistence: 'shopify_owned_cart_id_resume';
-    cartBoundary: 'cart_ucp_enabled_no_checkout';
+    mode: 'fixture_static_with_shopify_cart_checkout_proxy';
+    liveConnectors: 'shopify_cart_checkout_mcp_configured_separately';
+    cartPersistence: 'shopify_owned_cart_checkout_id_resume';
+    cartBoundary: 'cart_and_checkout_mcp_enabled_authenticated_completion';
   };
 }
 
@@ -142,17 +143,18 @@ export function buildUcpDiscoveryProfile(origin: string): UcpDiscoveryProfile {
       'dev.ucp.shopping.catalog.search',
       'dev.ucp.shopping.catalog.lookup',
       'dev.ucp.shopping.cart',
+      'dev.ucp.shopping.checkout',
     ],
     schema: {
-      name: 'Commonlands catalog and cart profile',
+      name: 'Commonlands catalog, cart, and checkout profile',
       url: `${origin}/schemas/ucp-catalog.json`,
     },
     metadata: {
       service: 'commonlands-mcp',
-      mode: 'fixture_static_with_shopify_cart_proxy',
-      liveConnectors: 'shopify_cart_mcp_configured_separately',
-      cartPersistence: 'shopify_owned_cart_id_resume',
-      cartBoundary: 'cart_ucp_enabled_no_checkout',
+      mode: 'fixture_static_with_shopify_cart_checkout_proxy',
+      liveConnectors: 'shopify_cart_checkout_mcp_configured_separately',
+      cartPersistence: 'shopify_owned_cart_checkout_id_resume',
+      cartBoundary: 'cart_and_checkout_mcp_enabled_authenticated_completion',
     },
   };
 }

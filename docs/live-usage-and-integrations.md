@@ -2,7 +2,7 @@
 
 This guide is for agents and humans using the live public Commonlands MCP endpoint.
 
-The current production service is public and read-mostly. Its user-facing catalog, optics, product lookup, and purchase-handoff flows remain fixture-backed by default. It also exposes credential-gated diagnostic Shopify Admin read tools for product/metaobject summary checks when approved read-only Shopify configuration is present. Cart UCP support is a separate, explicitly approved commerce-mutation path: when configured, it may create/update/cancel Shopify-owned cart state only. It does not create checkouts, complete purchases, create orders, create RFQs, create customer records, reserve inventory, mutate inventory, write Shopify catalog data, or touch inventory sync.
+The current production service is public and read-mostly. Its user-facing catalog, optics, product lookup, and purchase-handoff flows remain fixture-backed by default. It also exposes credential-gated diagnostic Shopify Admin read tools for product/metaobject summary checks when approved read-only Shopify configuration is present. Cart UCP and Checkout MCP support are separate, explicitly approved commerce-mutation paths: when configured, they may create/update/cancel Shopify-owned cart and checkout handoff state only. They do not complete purchases, capture payment, create orders, create RFQs, create/read customer records, apply discounts, reserve inventory, mutate inventory, write Shopify catalog data, or touch inventory sync.
 
 ## Endpoint
 
@@ -128,7 +128,7 @@ Current limitations:
 - Cart UCP tools require `SHOPIFY_CART_MCP_ENDPOINT`; without that binding they return `not_configured` and do not mutate state.
 - Diagnostic Shopify reads require approved client credentials/scopes and may return `not_configured`, `missing_scope`, or sanitized Shopify errors if the production app/store cannot exchange a token.
 - No live DynamoDB/AppSync optical reads.
-- No cart mutations unless routed through the approved Cart UCP tools; no checkouts, orders, RFQs, customer records, inventory reservations, inventory sync changes, or Shopify catalog writes.
+- No cart mutations unless routed through approved Cart UCP tools; no checkout mutations unless routed through approved Checkout MCP tools. `complete_checkout` is allowed only after Shopify checkout authentication verifies buyer name, email, phone, address, and card/payment authorization. No raw payment handling, RFQs, customer records, discounts, inventory reservations, inventory sync changes, or Shopify catalog writes.
 - Datasheets remain gated; responses must not expose direct gated-document URLs.
 
 ## Shopify read-only diagnostic access
@@ -167,7 +167,7 @@ All diagnostic results include read-only safety flags and redact tokens/client c
 
 ## Shopify Cart UCP ordering path
 
-Cart UCP is the approved first ordering step for agents. It lets an agent build and revise a Shopify cart before the buyer commits to checkout. It is intentionally narrower than Checkout MCP: it does not create checkouts, complete payments, create orders, create customer records, reserve inventory, or mutate product/catalog/inventory data.
+Cart UCP is the approved first ordering step for agents. It lets an agent build and revise a Shopify cart before the buyer commits to checkout. It does not complete payments, create orders, create customer records, reserve inventory, or mutate product/catalog/inventory data.
 
 When deployed and configured, Commonlands exposes these MCP tools:
 
@@ -292,7 +292,119 @@ Cancel a cart:
 
 ### Agent ordering rules
 
-Agents may build carts only after the buyer has selected specific line items and quantities. Agents should always show the final cart summary and `continue_url` to the buyer before checkout. Checkout MCP, payment completion, order creation, customer account access, discounts, inventory reservations, and inventory writes are out of scope until separately approved and implemented.
+Agents may build carts only after the buyer has selected specific line items and quantities. Agents should always show the final cart summary and `continue_url` to the buyer before checkout. Payment completion, order creation, customer account access, discounts, inventory reservations, and inventory writes remain out of scope.
+
+## Shopify Checkout MCP handoff path
+
+Checkout MCP is the approved checkout step after a buyer has confirmed cart or line-item intent. It lets an agent create, refresh, revise, complete, or cancel Shopify-owned checkout state. `complete_checkout` is allowed only through Shopify Checkout MCP after the Shopify checkout phase has authenticated/verified buyer name, email, phone, address, and card/payment authorization. Commonlands never accepts raw card numbers, CVV/CVC, payment tokens, customer records, discounts, inventory reservation/mutation, inventory sync, or catalog writes.
+
+When deployed and configured, Commonlands exposes these MCP tools:
+
+- `create_checkout`: create Shopify-owned checkout handoff state from a retained Shopify Cart gid or explicit Shopify `ProductVariant` GIDs and quantities.
+- `get_checkout`: fetch latest Shopify-owned checkout state by checkout ID.
+- `update_checkout`: replace allowed checkout line item/context state. Buyer, customer, address, payment, discount, and gift-card fields are rejected.
+- `complete_checkout`: finalize through Shopify Checkout MCP only after Shopify-hosted checkout authentication verifies buyer name, email, phone, address, and card/payment authorization. Requires `meta["idempotency-key"]` UUID and an `authentication` object with all verification flags true; raw card/payment fields are rejected.
+- `cancel_checkout`: cancel Shopify-owned checkout state by checkout ID. Requires `meta["idempotency-key"]` as a UUID for retry safety.
+
+### Where checkout state is stored and mutated
+
+Checkout state is stored by Shopify Checkout MCP, not by the Commonlands Worker. Commonlands validates the request shape and forwards it to `SHOPIFY_CHECKOUT_MCP_ENDPOINT`, normally a merchant endpoint such as `https://commonlands.com/api/checkout/mcp` when available. Shopify Checkout MCP owns checkout IDs, URLs, totals, validation messages, expiry, and the hosted buyer completion flow.
+
+The Worker does not keep a checkout database, KV namespace, Durable Object, session cookie, customer profile, payment record, or server-side checkout memory. Agents must retain `checkout.id` and/or `checkout.checkout_url` across sessions. If both are lost, Commonlands MCP cannot recover the checkout because it stores no customer/session/checkout state.
+
+### Checkout MCP syntax examples
+
+Create checkout handoff state from a cart ID:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 20,
+  "method": "tools/call",
+  "params": {
+    "name": "create_checkout",
+    "arguments": {
+      "checkout": {
+        "cart_id": "gid://shopify/Cart/cart_abc123",
+        "context": {
+          "address_country": "US",
+          "address_region": "CA",
+          "postal_code": "92101"
+        }
+      }
+    }
+  }
+}
+```
+
+Refresh checkout in a later agent session:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 21,
+  "method": "tools/call",
+  "params": {
+    "name": "get_checkout",
+    "arguments": {
+      "id": "gid://shopify/Checkout/chk_abc123"
+    }
+  }
+}
+```
+
+Complete checkout after Shopify authentication/authorization:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 22,
+  "method": "tools/call",
+  "params": {
+    "name": "complete_checkout",
+    "arguments": {
+      "id": "gid://shopify/Checkout/chk_abc123",
+      "meta": {
+        "idempotency-key": "660e8400-e29b-41d4-a716-446655440003"
+      },
+      "authentication": {
+        "method": "shopify_checkout_authenticated",
+        "buyerVerified": true,
+        "paymentAuthorized": true,
+        "nameVerified": true,
+        "emailVerified": true,
+        "phoneVerified": true,
+        "addressVerified": true,
+        "cardAuthorized": true,
+        "authenticatedAt": "2026-05-02T20:15:00.000Z"
+      }
+    }
+  }
+}
+```
+
+Cancel checkout state:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 22,
+  "method": "tools/call",
+  "params": {
+    "name": "cancel_checkout",
+    "arguments": {
+      "id": "gid://shopify/Checkout/chk_abc123",
+      "meta": {
+        "idempotency-key": "660e8400-e29b-41d4-a716-446655440002"
+      }
+    }
+  }
+}
+```
+
+### Agent checkout rules
+
+Agents may create checkout only after the buyer has confirmed specific line items and quantities. Authentication is not required until the checkout phase. Before calling `complete_checkout`, the agent must have Shopify Checkout MCP authentication evidence that buyer name, email, phone, address, and card/payment authorization were verified; if the checkout status is `requires_escalation` or that evidence is missing, send the buyer to the Shopify-hosted `continue_url` instead. Commonlands MCP must never collect, store, log, or proxy raw card numbers, CVV/CVC, payment tokens, passwords, or customer-account credentials.
 
 
 ## How to interpret results
@@ -302,14 +414,14 @@ Agents and users should label default catalog output as fixture-backed when disc
 Good phrasing:
 
 - `The MCP fixture catalog includes CIL078 as a candidate.`
-- `Use the returned product URL as the next step; this MCP server did not create a checkout.`
+- `Use the returned product URL, cart continue_url, or checkout URL as the next step; only `complete_checkout` through Shopify Checkout MCP may finalize checkout, and only after Shopify authentication/authorization verification.`
 - `Price and availability from the default catalog are fixture-backed unless a diagnostic Shopify read result is explicitly cited.`
 
 Bad phrasing:
 
 - `This item is definitely in stock.`
 - `The live Shopify price is final/guaranteed...`
-- `I created a checkout/cart/RFQ for you.`
+- `I charged a card directly, handled raw payment credentials, created a customer record, reserved inventory, or created an RFQ for you.`
 
 ## Future custom domain note
 
