@@ -220,7 +220,7 @@ export async function readShopifyProducts(env: ShopifyReadAdapterEnv, args: Shop
 
   return {
     ...base,
-    connector: { status: 'ok', source: 'live_shopify_admin_graphql', messages: [] },
+    connector: { status: 'ok', source: 'live_shopify_admin_graphql', messages: productsResponse.messages ?? [] },
     shopify: { ...base.shopify, token: 'exchanged_and_redacted' },
     products,
   };
@@ -467,7 +467,7 @@ async function getAccessToken(input: { shopDomain: string; clientId: string; cli
 async function readProductNodes(
   client: { shopDomain: string; apiVersion: string; accessToken: string },
   parsed: { sku?: string; handle?: string; query?: string; limit: number; includeMetafields: boolean },
-): Promise<{ products: ShopifyReadonlyProduct[] } | { error: string }> {
+): Promise<{ products: ShopifyReadonlyProduct[]; messages?: string[] } | { error: string }> {
   if (parsed.handle && !parsed.sku && !parsed.query) {
     const response = await shopifyGraphQl<ProductByHandleGraphQlData>(client, productByHandleQuery(parsed.includeMetafields), {
       handle: parsed.handle,
@@ -482,7 +482,19 @@ async function readProductNodes(
     first: parsed.limit,
   });
   if ('error' in response) return response;
-  return { products: normalizeProducts(response.data.productVariants?.nodes ?? [], parsed.includeMetafields) };
+
+  const products = normalizeProducts(response.data.productVariants?.nodes ?? [], parsed.includeMetafields);
+  if (products.length > 0 || !parsed.sku || parsed.query) return { products };
+
+  const fallbackResponse = await shopifyGraphQl<ProductVariantsGraphQlData>(client, productVariantsQuery(parsed.includeMetafields), {
+    query: escapeShopifySearchValue(parsed.sku),
+    first: parsed.limit,
+  });
+  if ('error' in fallbackResponse) return fallbackResponse;
+  return {
+    products: normalizeProducts(fallbackResponse.data.productVariants?.nodes ?? [], parsed.includeMetafields),
+    messages: ['Exact Shopify SKU search returned no results; retried as safe text search for short part number/MPN metafields.'],
+  };
 }
 
 async function shopifyGraphQl<T>(client: { shopDomain: string; apiVersion: string; accessToken: string }, query: string, variables: Record<string, unknown>): Promise<{ data: T } | { error: string }> {
