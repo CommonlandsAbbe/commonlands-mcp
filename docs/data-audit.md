@@ -1,6 +1,6 @@
 # Data Audit Plan
 
-The Worker does not yet connect to AWS, Shopify, Acumatica, or a database. Phase 1/2/3/4/5 catalog, FoV, recommendation, product-page detail, and snapshot-status behavior is fixture-backed until the real data contracts below are confirmed.
+The Worker does not yet connect to AWS, Shopify, Acumatica, or a database. Phase 1/2/3/4/5/6 catalog, FoV, recommendation, product-page detail, snapshot-status, and Shopify/UCP-readiness behavior is fixture-backed until the real data contracts below are confirmed.
 
 ## Confirmed from planning/discovery
 
@@ -71,3 +71,19 @@ Before replacing Phase 3 fixture ranking with production ranking, confirm:
 - Which application categories Commonlands wants to expose publicly (embedded robotics, machine vision inspection, Raspberry Pi/student, harsh environment, etc.).
 - Whether price should influence ranking or stay out of engineering recommendations.
 - What launch tolerance is acceptable for “recommended” vs. “conditional” candidates.
+
+
+## Shopify Storefront MCP / UCP compatibility audit requirements
+
+Before exposing first-class Shopify/UCP aliases such as `search_catalog`, `lookup_catalog`, or `get_product`, confirm:
+
+- Stable Shopify product and variant identifiers to return in UCP-shaped `id` fields.
+- Whether Commonlands should expose UCP aliases directly or keep Commonlands-native tools plus compatibility metadata.
+- Price and availability freshness rules, including whether public MCP responses can show current price/stock or should use product-page handoff only.
+- Country/language/currency behavior for UCP `context` hints.
+- Category, tag, option, media, and seller fields required for launch clients.
+- Unknown-SKU lookup semantics: UCP-style success with `not_found` messages vs. JSON-RPC tool errors for Commonlands-native tools.
+- Whether a `/.well-known/ucp` profile, separate UCP catalog endpoint, or only `/mcp` is required for target clients.
+- Whether legacy `/sse` support is required, or Streamable HTTP at `/mcp` is sufficient.
+
+Cart, checkout, customer-account, order, and return tools require separate approval, OAuth/protected-customer-data review where relevant, and a write-safety design. They are intentionally absent from the public read-only MVP.

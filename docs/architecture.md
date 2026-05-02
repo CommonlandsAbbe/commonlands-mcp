@@ -10,9 +10,10 @@ The Worker is being built in PR-sized phases:
 - Phase 3 adds fixture-backed engineering recommendation tools for deterministic lens shortlists and tradeoff explanations.
 - Phase 4 adds fixture-backed product-page handoff details, including DynamoDB-sourced resolution metadata and gated datasheet policy.
 - Phase 5 adds fixture-backed joined snapshot status/validation contracts for future cache and connector work.
+- Phase 6 adds fixture-backed Shopify Storefront MCP / UCP Catalog compatibility readiness so Commonlands can interoperate with commerce agents without enabling write flows.
 - Later phases replace fixtures with a scheduled joined catalog snapshot and connector-backed enrichment behind tests.
 
-No live Shopify, Acumatica, or database behavior is implemented yet. No checkout, cart, inventory mutation, or write tool is implemented.
+No live Shopify, Acumatica, or database behavior is implemented yet. No checkout, cart, inventory mutation, customer-account, order-management, or write tool is implemented.
 
 ## Target endpoint
 
@@ -35,7 +36,7 @@ Cloudflare account, route, zone, and deployment environment are placeholders unt
 - No database writes.
 - No secrets in source control.
 - No direct DocSend URLs in fixtures, responses, logs, or docs.
-- No checkout/cart/write tools in the public MVP.
+- No checkout/cart/customer-account/order/write tools in the public MVP.
 
 ## Deployment metadata
 
@@ -105,3 +106,18 @@ Phase 5 adds `get_catalog_snapshot_status` and the resource `commonlands://catal
 - refresh metadata stating that live connectors are not connected.
 
 This creates the typed seam future AppSync/DynamoDB, Shopify, and cache refresh adapters must satisfy without adding live reads, secrets, or write paths.
+
+
+## Phase 6 MCP surface
+
+Phase 6 adds `get_shopify_ucp_readiness` and the resource `commonlands://compatibility/shopify-ucp`. The response is a connector-free launch planning contract for Shopify Storefront MCP and UCP Catalog compatibility.
+
+It reports:
+
+- the safe read-only UCP catalog target tools Commonlands can map toward: `search_catalog`, `lookup_catalog`, and `get_product`;
+- a UCP-shaped fixture sample with product IDs, variant IDs, URLs, categories, USD minor-unit prices, availability, and optical metadata;
+- explicit non-goals for Shopify cart, checkout, customer-account, order, and write flows;
+- launch blockers for Shopify read-only IDs/metafields, Cloudflare routing, optional UCP profile metadata, and `/sse` compatibility decisions;
+- why Commonlands should be better than generic storefront MCP for lens selection: FoV, angular resolution, sensor matching, engineering recommendations, and DynamoDB/AppSync optical provenance.
+
+This phase does not expose Shopify-native tool aliases yet. That is intentional: UCP aliases should only be advertised after Shopify product/variant identifiers, price/availability freshness rules, and profile endpoint requirements are confirmed.
