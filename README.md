@@ -15,7 +15,9 @@ See [`docs/live-usage-and-integrations.md`](docs/live-usage-and-integrations.md)
 - `GET /healthz` returns deploy metadata.
 - `GET /.well-known/ucp` returns catalog discovery metadata.
 - `POST /mcp` supports MCP JSON-RPC tools/resources for fixture-backed lens discovery, optics calculations, product details, recommendations, and safe purchase handoff planning.
-- No live Shopify writes, Acumatica writes, database writes, cart/checkout/order/customer/inventory mutations, or production credentials.
+- Two credential-gated diagnostic tools can read Shopify Admin product/variant/metaobject summary data when approved read-only Shopify config is present: `read_shopify_products` and `read_shopify_metaobjects`.
+- Fixture-backed catalog and purchase-handoff flows remain the default user-facing behavior until live catalog joins are validated.
+- No Shopify writes, Acumatica writes, database writes, cart/checkout/order/customer/inventory mutations, inventory sync changes, or secret exposure.
 
 ## Local commands
 
