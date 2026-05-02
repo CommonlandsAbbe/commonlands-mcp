@@ -107,6 +107,7 @@ describe('Commonlands MCP Worker', () => {
       'compute_fov',
       'match_lenses_to_sensor',
       'compare_lenses',
+      'get_product_page_details',
       'recommend_lenses_for_application',
     ]);
     expect(tools[0]?.inputSchema.type).toBe('object');
@@ -334,6 +335,50 @@ describe('Commonlands MCP Worker', () => {
     expect(structuredContent.assumptions).toContain(
       'Ranking is fixture-backed and excludes live Shopify stock, price breaks, MTF, CRA, and production coefficient parity until integrations are approved.',
     );
+  });
+
+
+  it('returns safe product page details with DynamoDB-sourced resolution metadata', async () => {
+    const { body } = await rpc('tools/call', {
+      name: 'get_product_page_details',
+      arguments: { sku: 'CIL250' },
+    });
+    const structuredContent = getStructuredContent(body);
+
+    expect(structuredContent).toMatchObject({
+      schemaVersion: 'product_page.v1',
+      correctionStatus: 'fixture_commerce_handoff',
+      product: {
+        sku: 'CIL250',
+        handle: 'cil250',
+        productUrl: 'https://commonlands.com/products/cil250',
+        availability: 'in_stock',
+      },
+      technicalSpecifications: {
+        eflMm: 6,
+        fNumber: 2.4,
+        imageCircleMm: 7.2,
+        maxFovDeg: 72,
+        resolution: { value: '5MP', source: 'fixture:dynamodb-audit' },
+      },
+      safety: {
+        datasheetAccess: 'gated',
+        liveConnectors: 'not_connected',
+      },
+    });
+    expect(JSON.stringify(structuredContent)).not.toMatch(/docsend/i);
+  });
+
+  it('rejects missing product page detail SKUs with a useful error', async () => {
+    const { body } = await rpc('tools/call', {
+      name: 'get_product_page_details',
+      arguments: { sku: 'NOPE' },
+    });
+
+    expect(body).toMatchObject({
+      jsonrpc: '2.0',
+      error: { code: -32004, message: 'Lens not found: NOPE' },
+    });
   });
 
   it('returns useful recommendation validation errors', async () => {

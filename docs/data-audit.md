@@ -1,6 +1,6 @@
 # Data Audit Plan
 
-The Worker does not yet connect to AWS, Shopify, Acumatica, or a database. Phase 1/2/3 catalog, FoV, and recommendation behavior is fixture-backed until the real data contracts below are confirmed.
+The Worker does not yet connect to AWS, Shopify, Acumatica, or a database. Phase 1/2/3/4 catalog, FoV, recommendation, and product-page detail behavior is fixture-backed until the real data contracts below are confirmed.
 
 ## Confirmed from planning/discovery
 
@@ -22,6 +22,7 @@ Capture 5-10 sanitized lens records and document:
 - Primary key and SKU/short-part-number field.
 - Lens optical fields: EFL, image circle, projection model, distortion coefficients, coefficient convention/sign/units, max FoV, F-number, mount.
 - Sensor fields needed for parity fixtures: active area, resolution, pixel size, and any calculator-specific clipping behavior.
+- Lens resolution is expected to come from the DynamoDB/AppSync optical catalog (`LensList.resolution` in the legacy schema), not Shopify enrichment; connector work must preserve that provenance in responses.
 - Recommendation fields: stock confidence, mount/form-factor suitability, MTF/resolution/CRA if reliable, distortion flags, application categories, and any fields that should influence ranking or be explicitly excluded.
 - Shopify join key and collision/missing-record behavior.
 - Mechanical drawing field format: public URL vs file reference.
@@ -40,6 +41,15 @@ Capture 5-10 sanitized lens records and document:
 3. Which Cloudflare environment owns `mcp.commonlands.com`?
 4. Should the launch endpoint support `/sse` for legacy clients, or only Streamable HTTP at `/mcp`?
 
+
+## Product detail audit requirements
+
+Before replacing Phase 4 fixtures with connector-backed data, confirm:
+
+- DynamoDB/AppSync lens `resolution` field format and allowed values (for example `5MP`, numeric megapixel strings, or newer structured values).
+- Whether public product price/availability should be fixture, Shopify read-only, hidden, or quantity-banded.
+- Exact Shopify metafield/file-reference source for mechanical drawings and whether every exposed URL can be validated as public and non-gated.
+- How missing Shopify handles, missing drawings, retired products, or SKU collisions should be represented.
 
 ## Recommendation audit requirements
 

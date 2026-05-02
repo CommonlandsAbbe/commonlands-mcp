@@ -11,6 +11,7 @@ export interface LensCatalogItem {
   fNumber: number;
   imageCircleMm: number;
   maxFovDeg: number;
+  resolution: string;
   projectionModel: 'projection_polynomial_theta_even_powers';
   coefficientCount: number;
   fixtureDistortion?: {
@@ -85,6 +86,7 @@ export const CATALOG_SNAPSHOT: CatalogSnapshot = {
       fNumber: 2.0,
       imageCircleMm: 6.6,
       maxFovDeg: 130,
+      resolution: '2MP',
       projectionModel: 'projection_polynomial_theta_even_powers',
       coefficientCount: 4,
       fixtureDistortion: { alpha: 1, beta: 0.02, notes: 'Placeholder wide-angle parity scaffold.' },
@@ -105,6 +107,7 @@ export const CATALOG_SNAPSHOT: CatalogSnapshot = {
       fNumber: 2.4,
       imageCircleMm: 7.2,
       maxFovDeg: 72,
+      resolution: '5MP',
       projectionModel: 'projection_polynomial_theta_even_powers',
       coefficientCount: 4,
       fixtureDistortion: { alpha: 1, beta: 0, notes: 'Rectilinear baseline until production coefficients are connected.' },
@@ -125,6 +128,7 @@ export const CATALOG_SNAPSHOT: CatalogSnapshot = {
       fNumber: 2.8,
       imageCircleMm: 8.0,
       maxFovDeg: 40,
+      resolution: '5MP',
       projectionModel: 'projection_polynomial_theta_even_powers',
       coefficientCount: 4,
       fixtureDistortion: { alpha: 1, beta: 0, notes: 'Rectilinear baseline until production coefficients are connected.' },
@@ -145,6 +149,7 @@ export const CATALOG_SNAPSHOT: CatalogSnapshot = {
       fNumber: 2.8,
       imageCircleMm: 4.5,
       maxFovDeg: 150,
+      resolution: '1.3MP',
       projectionModel: 'projection_polynomial_theta_even_powers',
       coefficientCount: 4,
       fixtureDistortion: { alpha: 1, beta: 0.05, notes: 'Placeholder fisheye/wide-angle parity scaffold.' },
@@ -165,6 +170,7 @@ export const CATALOG_SNAPSHOT: CatalogSnapshot = {
       fNumber: 1.8,
       imageCircleMm: 11.0,
       maxFovDeg: 24,
+      resolution: '12MP',
       projectionModel: 'projection_polynomial_theta_even_powers',
       coefficientCount: 4,
       fixtureDistortion: { alpha: 1, beta: 0, notes: 'Rectilinear baseline until production coefficients are connected.' },
