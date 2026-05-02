@@ -7,6 +7,15 @@ const env: Env = {
   GIT_SHA: 'abc123',
 };
 
+const shopifyReadonlyEnv: Env = {
+  ...env,
+  SHOPIFY_CLIENT_ID: 'client-id-test',
+  SHOPIFY_CLIENT_SECRET: 'client-secret-test',
+  SHOPIFY_SHOP_DOMAIN: 'commonlands-store.myshopify.com',
+  SHOPIFY_SCOPES:
+    'read_discovery,read_files,read_inventory,read_legal_policies,read_locations,read_marketing_integrated_campaigns,read_marketing_events,read_metaobject_definitions,read_metaobjects,read_online_store_navigation,read_online_store_pages,read_payment_terms,read_product_feeds,read_product_listings,read_products,read_shipping,read_content',
+};
+
 type JsonObject = Record<string, unknown>;
 
 interface ToolSummary {
@@ -102,20 +111,21 @@ interface ResourceSummary {
   uri: string;
 }
 
-async function fetchWorker(path: string, init?: RequestInit): Promise<Response> {
-  return worker.fetch(new Request(`https://mcp.commonlands.test${path}`, init), env);
+async function fetchWorker(path: string, init?: RequestInit, requestEnv: Env = env): Promise<Response> {
+  return worker.fetch(new Request(`https://mcp.commonlands.test${path}`, init), requestEnv);
 }
 
 async function rpc(
   method: string,
   params?: unknown,
   id: unknown = method,
+  requestEnv: Env = env,
 ): Promise<{ response: Response; body: JsonObject }> {
   const response = await fetchWorker('/mcp', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', id, method, params }),
-  });
+  }, requestEnv);
 
   const body = (await response.json()) as JsonObject;
   return { response, body };
@@ -186,6 +196,7 @@ describe('Commonlands MCP Worker', () => {
       'get_product_page_details',
       'get_catalog_snapshot_status',
       'get_shopify_ucp_readiness',
+      'get_shopify_readonly_config_status',
       'search_catalog',
       'lookup_catalog',
       'get_product',
@@ -293,6 +304,92 @@ describe('Commonlands MCP Worker', () => {
     });
     expect(structuredContent.differentiators).toContain('distortion-aware FoV and angular-resolution tools');
     expect(JSON.stringify(structuredContent)).not.toMatch(/docsend|shpat|shpss|xox|AKIA|signedUrl|accessToken/i);
+  });
+
+  it('reports sanitized Shopify read-only configuration status without exposing secrets', async () => {
+    const { body } = await rpc(
+      'tools/call',
+      { name: 'get_shopify_readonly_config_status', arguments: {} },
+      'shopify-readonly-status',
+      shopifyReadonlyEnv,
+    );
+    const structuredContent = getStructuredContent(body);
+
+    expect(structuredContent).toMatchObject({
+      schemaVersion: 'shopify.readonly_config_status.v1',
+      mode: 'read_only_configuration_check',
+      credentialModel: 'shopify_dev_dashboard_client_credentials',
+      configured: true,
+      bindings: {
+        clientId: 'present',
+        clientSecret: 'present',
+        shopDomain: 'present',
+        scopes: 'present',
+      },
+      shopDomain: {
+        configured: true,
+        normalizedDomain: 'commonlands-store.myshopify.com',
+        format: 'myshopify_domain',
+      },
+      safety: {
+        readOnly: true,
+        writesShopify: false,
+        createsCart: false,
+        createsCheckout: false,
+        readsCustomers: false,
+        readsOrders: false,
+        mutatesInventory: false,
+        touchesInventorySync: false,
+        exposesSecrets: false,
+      },
+    });
+    expect(structuredContent.scopes).toMatchObject({
+      deniedMutationScopes: [],
+      unapprovedScopes: [],
+      missingApprovedReadScopes: [],
+    });
+    expect(JSON.stringify(getResult(body))).not.toMatch(/client-secret-test|client-id-test|shpat|shpss|accessToken/i);
+  });
+
+  it('keeps Shopify read-only config incomplete and safe when bindings are missing', async () => {
+    const { body } = await rpc('tools/call', { name: 'get_shopify_readonly_config_status', arguments: {} });
+    const structuredContent = getStructuredContent(body);
+
+    expect(structuredContent).toMatchObject({
+      configured: false,
+      bindings: {
+        clientId: 'missing',
+        clientSecret: 'missing',
+        shopDomain: 'missing',
+        scopes: 'missing',
+      },
+      safety: {
+        readOnly: true,
+        writesShopify: false,
+        mutatesInventory: false,
+        exposesSecrets: false,
+      },
+    });
+    expect(structuredContent.nextRequired).toContain('Add SHOPIFY_CLIENT_SECRET as a Cloudflare secret.');
+  });
+
+  it('flags Shopify mutation scopes as unsafe for the read-only adapter', async () => {
+    const { body } = await rpc(
+      'tools/call',
+      { name: 'get_shopify_readonly_config_status', arguments: {} },
+      'shopify-readonly-status-mutation',
+      {
+        ...shopifyReadonlyEnv,
+        SHOPIFY_SCOPES: `${shopifyReadonlyEnv.SHOPIFY_SCOPES},write_products`,
+      },
+    );
+    const structuredContent = getStructuredContent(body);
+
+    expect(structuredContent).toMatchObject({
+      configured: false,
+      scopes: { deniedMutationScopes: ['write_products'] },
+      safety: { readOnly: false, writesShopify: false },
+    });
   });
 
   it('exposes Shopify/UCP readiness as a resource for launch planning', async () => {

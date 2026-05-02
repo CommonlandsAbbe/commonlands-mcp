@@ -15,6 +15,7 @@ import {
   recommendLensesForApplication,
   type LensRecommendation,
 } from './recommendations';
+import { getShopifyReadonlyStatus } from './shopify-readonly-status';
 import { getShopifyUcpReadiness } from './shopify-ucp-readiness';
 import {
   buildUcpDiscoveryProfile,
@@ -29,6 +30,10 @@ export interface Env {
   ENVIRONMENT?: string;
   VERSION?: string;
   GIT_SHA?: string;
+  SHOPIFY_CLIENT_ID?: string;
+  SHOPIFY_CLIENT_SECRET?: string;
+  SHOPIFY_SHOP_DOMAIN?: string;
+  SHOPIFY_SCOPES?: string;
 }
 
 interface JsonRpcRequest {
@@ -186,6 +191,17 @@ const TOOLS: ToolDefinition[] = [
     title: 'Get Shopify Storefront/UCP readiness',
     description:
       'Report connector-free Shopify Storefront MCP and UCP Catalog compatibility, launch blockers, and Commonlands engineering differentiators.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'get_shopify_readonly_config_status',
+    title: 'Get Shopify read-only config status',
+    description:
+      'Report sanitized Cloudflare Shopify binding presence, approved read scopes, and read-only safety flags without exposing secrets or calling Shopify.',
     inputSchema: {
       type: 'object',
       properties: {},
@@ -475,7 +491,7 @@ function resourceReadResponse(id: unknown, params: unknown): Response {
   return rpcError(id, { code: -32602, message: `Unknown resource: ${params.uri}` });
 }
 
-function toolCallResponse(id: unknown, params: unknown): Response {
+function toolCallResponse(id: unknown, params: unknown, env: Env): Response {
   if (!isRecord(params) || typeof params.name !== 'string') {
     return rpcError(id, { code: -32602, message: 'Invalid params: tool name is required' });
   }
@@ -608,6 +624,10 @@ function toolCallResponse(id: unknown, params: unknown): Response {
 
   if (params.name === 'get_shopify_ucp_readiness') {
     return toolResult(id, getShopifyUcpReadiness());
+  }
+
+  if (params.name === 'get_shopify_readonly_config_status') {
+    return toolResult(id, getShopifyReadonlyStatus(env));
   }
 
   if (params.name === 'search_catalog') {
@@ -807,7 +827,7 @@ function summarizeLens(lens: LensCatalogItem): Omit<LensCatalogItem, 'source' | 
   return summary;
 }
 
-async function handleMcp(request: Request): Promise<Response> {
+async function handleMcp(request: Request, env: Env): Promise<Response> {
   const contentType = request.headers.get('content-type') ?? '';
   if (!contentType.toLowerCase().includes('application/json')) {
     return json({ error: 'unsupported_media_type' }, { status: 415 });
@@ -828,7 +848,7 @@ async function handleMcp(request: Request): Promise<Response> {
 
   if (parsed.method === 'initialize') return initializeResponse(parsed.id);
   if (parsed.method === 'tools/list') return toolListResponse(parsed.id);
-  if (parsed.method === 'tools/call') return toolCallResponse(parsed.id, parsed.params);
+  if (parsed.method === 'tools/call') return toolCallResponse(parsed.id, parsed.params, env);
   if (parsed.method === 'resources/list') return resourceListResponse(parsed.id);
   if (parsed.method === 'resources/read') return resourceReadResponse(parsed.id, parsed.params);
 
@@ -856,7 +876,7 @@ export default {
 
     if (url.pathname === '/mcp') {
       if (request.method !== 'POST') return methodNotAllowed();
-      return handleMcp(request);
+      return handleMcp(request, env);
     }
 
     return json({ error: 'not_found' }, { status: 404 });
