@@ -9,6 +9,7 @@ The Worker is being built in PR-sized phases:
 - Phase 2 adds fixture-backed FoV calculation scaffolding with explicit parity warnings while real projection coefficients remain unconfirmed.
 - Phase 3 adds fixture-backed engineering recommendation tools for deterministic lens shortlists and tradeoff explanations.
 - Phase 4 adds fixture-backed product-page handoff details, including DynamoDB-sourced resolution metadata and gated datasheet policy.
+- Phase 5 adds fixture-backed joined snapshot status/validation contracts for future cache and connector work.
 - Later phases replace fixtures with a scheduled joined catalog snapshot and connector-backed enrichment behind tests.
 
 No live Shopify, Acumatica, or database behavior is implemented yet. No checkout, cart, inventory mutation, or write tool is implemented.
@@ -92,3 +93,15 @@ Phase 4 adds `get_product_page_details` as a safe commerce-handoff contract. It 
 - source provenance for optical and commerce fixture data.
 
 This phase still does not call Shopify, DynamoDB/AppSync, Acumatica, or any live connector at request time. It is the response contract that live adapters must satisfy later.
+
+
+## Phase 5 MCP surface
+
+Phase 5 adds `get_catalog_snapshot_status` and the resource `commonlands://catalog/snapshot-status`. The response is a connector-free cache-readiness contract with:
+
+- fixture snapshot counts for lenses, sensors, successful joins, missing optical records, missing commerce records, and unsafe URLs;
+- validation errors/warnings for duplicate SKUs, missing provenance, invalid sensor dimensions, unsafe product/drawing hosts, and gated-document leakage;
+- explicit source provenance for fixture optical and commerce data;
+- refresh metadata stating that live connectors are not connected.
+
+This creates the typed seam future AppSync/DynamoDB, Shopify, and cache refresh adapters must satisfy without adding live reads, secrets, or write paths.

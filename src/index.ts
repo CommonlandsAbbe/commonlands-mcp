@@ -14,6 +14,7 @@ import {
   recommendLensesForApplication,
   type LensRecommendation,
 } from './recommendations';
+import { getCatalogSnapshotStatus } from './snapshot-status';
 
 export interface Env {
   ENVIRONMENT?: string;
@@ -161,6 +162,17 @@ const TOOLS: ToolDefinition[] = [
     },
   },
   {
+    name: 'get_catalog_snapshot_status',
+    title: 'Get joined catalog snapshot status',
+    description:
+      'Return fixture-backed joined catalog counts, validation status, source provenance, and live connector readiness.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'recommend_lenses_for_application',
     title: 'Recommend lenses for an application',
     description:
@@ -194,6 +206,12 @@ const RESOURCES = [
     uri: 'commonlands://catalog/sensors',
     name: 'Commonlands sensor fixture catalog',
     description: 'Fixture-backed Phase 1 sensor catalog for optics-tool inputs.',
+    mimeType: 'application/json',
+  },
+  {
+    uri: 'commonlands://catalog/snapshot-status',
+    name: 'Commonlands joined catalog snapshot status',
+    description: 'Fixture-backed catalog validation, join counts, source provenance, and connector-readiness status.',
     mimeType: 'application/json',
   },
 ];
@@ -299,6 +317,18 @@ function resourceReadResponse(id: unknown, params: unknown): Response {
             generatedAt: CATALOG_SNAPSHOT.generatedAt,
             sensors: CATALOG_SNAPSHOT.sensors,
           }),
+        },
+      ],
+    });
+  }
+
+  if (params.uri === 'commonlands://catalog/snapshot-status') {
+    return rpcResult(id, {
+      contents: [
+        {
+          uri: params.uri,
+          mimeType: 'application/json',
+          text: JSON.stringify(getCatalogSnapshotStatus()),
         },
       ],
     });
@@ -432,6 +462,10 @@ function toolCallResponse(id: unknown, params: unknown): Response {
     }
 
     return toolResult(id, buildProductPageDetails(lens));
+  }
+
+  if (params.name === 'get_catalog_snapshot_status') {
+    return toolResult(id, getCatalogSnapshotStatus());
   }
 
   if (params.name === 'recommend_lenses_for_application') {

@@ -1,6 +1,6 @@
 # Data Audit Plan
 
-The Worker does not yet connect to AWS, Shopify, Acumatica, or a database. Phase 1/2/3/4 catalog, FoV, recommendation, and product-page detail behavior is fixture-backed until the real data contracts below are confirmed.
+The Worker does not yet connect to AWS, Shopify, Acumatica, or a database. Phase 1/2/3/4/5 catalog, FoV, recommendation, product-page detail, and snapshot-status behavior is fixture-backed until the real data contracts below are confirmed.
 
 ## Confirmed from planning/discovery
 
@@ -41,6 +41,17 @@ Capture 5-10 sanitized lens records and document:
 3. Which Cloudflare environment owns `mcp.commonlands.com`?
 4. Should the launch endpoint support `/sse` for legacy clients, or only Streamable HTTP at `/mcp`?
 
+
+## Joined snapshot audit requirements
+
+Before replacing Phase 5 fixture snapshot status with a connector-backed cache, confirm:
+
+- Snapshot storage target: Cloudflare KV, R2, Durable Object, or another cache layer.
+- Snapshot schema versioning and backward-compatibility policy for MCP responses.
+- Refresh trigger: scheduled only, protected manual endpoint, deployment-time build, or a combination.
+- Missing-join semantics for optical-only, commerce-only, retired, and duplicate SKU records.
+- Maximum acceptable stale age and how stale data should be represented to public MCP callers.
+- Validation failure behavior: keep last known good snapshot, serve partial results with warnings, or fail closed.
 
 ## Product detail audit requirements
 

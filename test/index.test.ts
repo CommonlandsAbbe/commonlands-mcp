@@ -22,6 +22,32 @@ interface LensSummary {
   projectionModel: string;
 }
 
+interface CatalogSnapshotStatus {
+  schemaVersion: string;
+  generatedAt: string;
+  counts: {
+    lenses: number;
+    sensors: number;
+    joins: number;
+    missingCommerce: number;
+    missingOptical: number;
+    unsafeUrls: number;
+  };
+  validation: {
+    ok: boolean;
+    errors: string[];
+    warnings: string[];
+  };
+  sources: {
+    optical: string;
+    commerce: string;
+  };
+  refresh: {
+    mode: string;
+    liveConnectors: string;
+  };
+}
+
 interface ResourceSummary {
   uri: string;
 }
@@ -108,6 +134,7 @@ describe('Commonlands MCP Worker', () => {
       'match_lenses_to_sensor',
       'compare_lenses',
       'get_product_page_details',
+      'get_catalog_snapshot_status',
       'recommend_lenses_for_application',
     ]);
     expect(tools[0]?.inputSchema.type).toBe('object');
@@ -171,6 +198,7 @@ describe('Commonlands MCP Worker', () => {
     const listedResult = getResult(listed.body);
     const resources = listedResult.resources as ResourceSummary[];
     expect(resources.map((resource) => resource.uri)).toContain('commonlands://catalog/lenses');
+    expect(resources.map((resource) => resource.uri)).toContain('commonlands://catalog/snapshot-status');
 
     const read = await rpc('resources/read', { uri: 'commonlands://catalog/lenses' });
     const readResult = getResult(read.body);
@@ -181,6 +209,48 @@ describe('Commonlands MCP Worker', () => {
     });
     const parsed = JSON.parse(contents[0]?.text as string) as { lenses: LensSummary[] };
     expect(parsed.lenses.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it('reports joined catalog snapshot status and validation without live connectors', async () => {
+    const { body } = await rpc('tools/call', { name: 'get_catalog_snapshot_status', arguments: {} });
+    const structuredContent = getStructuredContent(body) as unknown as CatalogSnapshotStatus;
+
+    expect(structuredContent).toMatchObject({
+      schemaVersion: 'catalog.snapshot_status.v1',
+      counts: {
+        lenses: 5,
+        sensors: 3,
+        joins: 5,
+        missingCommerce: 0,
+        missingOptical: 0,
+        unsafeUrls: 0,
+      },
+      validation: { ok: true, errors: [] },
+      sources: {
+        optical: 'fixture:dynamodb-audit',
+        commerce: 'fixture:shopify-products-sheet',
+      },
+      refresh: {
+        mode: 'fixture_static',
+        liveConnectors: 'not_connected',
+      },
+    });
+    expect(structuredContent.generatedAt).toBe('2026-05-01T00:00:00.000Z');
+    expect(JSON.stringify(structuredContent)).not.toMatch(/docsend|token|secret/i);
+  });
+
+  it('exposes snapshot status as a resource for agent planning', async () => {
+    const { body } = await rpc('resources/read', { uri: 'commonlands://catalog/snapshot-status' });
+    const result = getResult(body);
+    const contents = result.contents as Array<JsonObject>;
+    const parsed = JSON.parse(contents[0]?.text as string) as CatalogSnapshotStatus;
+
+    expect(contents[0]).toMatchObject({
+      uri: 'commonlands://catalog/snapshot-status',
+      mimeType: 'application/json',
+    });
+    expect(parsed.validation.ok).toBe(true);
+    expect(parsed.counts.joins).toBe(parsed.counts.lenses);
   });
 
 

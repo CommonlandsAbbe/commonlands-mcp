@@ -38,6 +38,12 @@ The repo is being built in PR-sized phases. Each phase must preserve the public 
    - Treats lens `resolution` as a DynamoDB/AppSync optical catalog field, not Shopify enrichment.
    - Results are explicitly labeled `fixture_commerce_handoff` until live read-only connectors are approved and configured.
 
+6. **Phase 5 — Fixture-backed joined snapshot status contract**
+   - Tool: `get_catalog_snapshot_status`.
+   - Resource: `commonlands://catalog/snapshot-status`.
+   - Reports snapshot counts, validation status, source provenance, and connector/cache readiness.
+   - Keeps future AppSync/DynamoDB, Shopify, and cache adapters behind a tested read-only contract.
+
 ## Still out of scope
 
 - Live AppSync/DynamoDB reads or scans.
