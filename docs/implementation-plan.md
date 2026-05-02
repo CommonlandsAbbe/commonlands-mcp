@@ -57,7 +57,7 @@ The repo is being built in PR-sized phases. Each phase must preserve the public 
    - Exposes UCP-shaped product/variant responses with Commonlands optical metadata, minor-unit USD fixture prices, public product URLs, and gated datasheet policy.
    - Unknown UCP identifiers return successful `not_found` messages instead of leaking internals.
    - Purchase handoff returns selected SKU, fixture variant ID, product URL, quantity, and explicit no-mutation transaction status; it does not create carts, checkout, orders, RFQs, or Shopify writes.
-   - This closes the connector-free gap versus external read-only optics MCP benchmarks while keeping the implementation fully Commonlands-owned and pointed toward Shopify-native commerce.
+   - This establishes a connector-free Commonlands catalog/search/handoff contract while keeping the implementation fully Commonlands-owned and pointed toward Shopify-native commerce.
 
 ## Still out of scope
 

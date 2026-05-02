@@ -89,8 +89,8 @@ Phase 7 exposes fixture-backed aliases only. Before replacing them with live Sho
 Cart, checkout, customer-account, order, and return tools require separate approval, OAuth/protected-customer-data review where relevant, and a write-safety design. They are intentionally absent from the public read-only MVP.
 
 
-## Competitive independence audit notes
+## Independence and Shopify integration notes
 
-External optics MCP research is benchmark-only. Commonlands must not depend on, copy, scrape, proxy, or train runtime behavior from competitor APIs, competitor data, competitor schemas, competitor endpoints, or competitor docs.
+Commonlands MCP is built from Commonlands-owned catalog, optics, and commerce contracts. Public MVP responses must remain provenance-rich, validated, deterministic, and safe for AI clients.
 
-Commonlands should beat external read-only optics MCP baselines by returning validated structured responses instead of raw upstream text, preserving source provenance on every optical/commerce field, exposing resources as well as tools, adding deterministic tests, and making the future transaction path Shopify-native instead of custom order/RFQ links. Live cart/checkout/customer/order behavior still requires explicit approval and separate write-safety design.
+Commonlands should win by returning structured optical/spec responses instead of raw text, preserving source provenance on every optical/commerce field, exposing resources as well as tools, adding deterministic tests, and making the future transaction path Shopify-native instead of custom order/RFQ links. Live cart/checkout/customer/order behavior still requires explicit approval and separate write-safety design.

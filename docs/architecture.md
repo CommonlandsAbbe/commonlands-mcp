@@ -131,7 +131,7 @@ Phase 7 exposes the safe read-only subset of the Shopify/UCP catalog direction a
 - `prepare_shopify_purchase_handoff` creates a read-only purchase handoff payload with SKU, quantity, fixture variant ID, product URL, product detail contract, and explicit transaction flags proving that no cart, checkout, order, RFQ, inventory mutation, or Shopify write occurred.
 - `GET /.well-known/ucp` returns a catalog-only discovery profile pointing at `/mcp`.
 
-This phase is Commonlands-native and independent: it does not depend on competitor APIs, competitor data, competitor schemas, scraped competitor content, or third-party optics MCP behavior. The benchmark is external, but the implementation source of truth is Commonlands optical catalog data plus Shopify-native commerce identifiers. Commonlands now has the contract seam for future Shopify cart/checkout integration without enabling live writes or pretending fixture IDs are production Shopify IDs.
+This phase is Commonlands-native and independent: the implementation source of truth is Commonlands optical catalog data plus Shopify-native commerce identifiers. Commonlands now has the contract seam for future Shopify cart/checkout integration without enabling live writes or pretending fixture IDs are production Shopify IDs.
 
 The aliases remain fixture-backed. Live launch still requires Shopify read-only product/variant IDs, price/availability freshness rules, validated public drawing sources, Cloudflare route confirmation, and explicit approval before any transactional tool is implemented. The target is full Shopify integration for commerce handoff and transaction flow, while preserving Commonlands as the optical/spec source of truth.
 
