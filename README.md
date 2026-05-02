@@ -1,6 +1,6 @@
 # Commonlands MCP
 
-Public read-only Commonlands MCP server on Cloudflare Workers for lens discovery, optics workflows, and safe commerce handoff.
+Public read-mostly Commonlands MCP server on Cloudflare Workers for lens discovery, optics workflows, safe commerce handoff, and explicitly scoped Shopify Cart UCP.
 
 ## Live endpoint
 
@@ -13,11 +13,12 @@ See [`docs/live-usage-and-integrations.md`](docs/live-usage-and-integrations.md)
 ## Current scope
 
 - `GET /healthz` returns deploy metadata.
-- `GET /.well-known/ucp` returns catalog discovery metadata.
+- `GET /.well-known/ucp` returns catalog + cart discovery metadata.
 - `POST /mcp` supports MCP JSON-RPC tools/resources for fixture-backed lens discovery, optics calculations, product details, recommendations, and safe purchase handoff planning.
 - Two credential-gated diagnostic tools can read Shopify Admin product/variant/metaobject summary data when approved read-only Shopify config is present: `read_shopify_products` and `read_shopify_metaobjects`.
+- Four explicitly scoped Cart UCP tools proxy Shopify-owned cart state when `SHOPIFY_CART_MCP_ENDPOINT` is configured: `create_cart`, `get_cart`, `update_cart`, and `cancel_cart`.
 - Fixture-backed catalog and purchase-handoff flows remain the default user-facing behavior until live catalog joins are validated.
-- No Shopify writes, Acumatica writes, database writes, cart/checkout/order/customer/inventory mutations, inventory sync changes, or secret exposure.
+- No Acumatica writes, database writes, checkout/order/customer/inventory mutations, inventory sync changes, Shopify catalog writes, or secret exposure.
 
 ## Local commands
 

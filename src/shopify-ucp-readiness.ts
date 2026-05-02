@@ -7,18 +7,18 @@ export interface ShopifyUcpReadiness {
   compatibilityTarget: {
     shopifyStorefrontMcp: 'storefront-mcp';
     ucpCatalogVersion: typeof UCP_VERSION;
-    referenceTools: ['search_catalog', 'lookup_catalog', 'get_product'];
+    referenceTools: ['search_catalog', 'lookup_catalog', 'get_product', 'create_cart', 'get_cart', 'update_cart', 'cancel_cart'];
     nonGoals: string[];
   };
   readiness: {
-    status: 'fixture_ready_connector_blocked';
+    status: 'catalog_fixture_ready_cart_proxy_configurable';
     liveConnectors: 'not_connected';
-    cartCheckout: 'intentionally_not_implemented_read_only_mvp';
+    cartCheckout: 'cart_ucp_proxy_enabled_checkout_not_enabled';
     customerAccounts: 'not_implemented_requires_oauth_and_protected_customer_data';
     policyFaqs: 'not_implemented_needs_approved_public_policy_source';
   };
   ucpCatalog: {
-    compatibleTools: ['search_catalog', 'lookup_catalog', 'get_product'];
+    compatibleTools: ['search_catalog', 'lookup_catalog', 'get_product', 'create_cart', 'get_cart', 'update_cart', 'cancel_cart'];
     productCount: number;
     variantCount: number;
     missingRequiredFields: string[];
@@ -44,28 +44,28 @@ export function getShopifyUcpReadiness(snapshot: CatalogSnapshot = CATALOG_SNAPS
     compatibilityTarget: {
       shopifyStorefrontMcp: 'storefront-mcp',
       ucpCatalogVersion: UCP_VERSION,
-      referenceTools: ['search_catalog', 'lookup_catalog', 'get_product'],
+      referenceTools: ['search_catalog', 'lookup_catalog', 'get_product', 'create_cart', 'get_cart', 'update_cart', 'cancel_cart'],
       nonGoals: [
-        'get_cart/update_cart are intentionally excluded from the public read-only MVP.',
+        'Checkout creation, checkout completion, payment, order, customer-account, discount, inventory-reservation, and inventory-sync tools remain excluded.',
         'Customer-account/order tools require OAuth and protected customer-data approval before any implementation.',
-        'Live Shopify Storefront/Admin API calls are blocked until read-only credentials, metafield keys, and rate-limit policy are approved.',
+        'Live catalog connectors remain separate from the Cart UCP proxy and require audited read-only enrichment before replacing fixture defaults.',
       ],
     },
     readiness: {
-      status: 'fixture_ready_connector_blocked',
+      status: 'catalog_fixture_ready_cart_proxy_configurable',
       liveConnectors: 'not_connected',
-      cartCheckout: 'intentionally_not_implemented_read_only_mvp',
+      cartCheckout: 'cart_ucp_proxy_enabled_checkout_not_enabled',
       customerAccounts: 'not_implemented_requires_oauth_and_protected_customer_data',
       policyFaqs: 'not_implemented_needs_approved_public_policy_source',
     },
     ucpCatalog: {
-      compatibleTools: ['search_catalog', 'lookup_catalog', 'get_product'],
+      compatibleTools: ['search_catalog', 'lookup_catalog', 'get_product', 'create_cart', 'get_cart', 'update_cart', 'cancel_cart'],
       productCount: products.length,
       variantCount: products.reduce((count, product) => count + product.variants.length, 0),
       missingRequiredFields: findMissingRequiredFields(products),
       sampleProduct,
       mappingNotes: [
-        'Existing Commonlands tools can map to UCP search_catalog, lookup_catalog, and get_product without adding write behavior.',
+        'Existing Commonlands catalog tools map to UCP search_catalog, lookup_catalog, and get_product without adding catalog write behavior.',
         'UCP prices are minor currency units; fixture priceUsd is converted to USD cents for compatibility samples.',
         'Catalog responses are session freshness contracts; live connector work must revalidate Shopify price and availability instead of caching search results indefinitely.',
         'Commonlands optical metadata belongs in UCP product/variant metadata so generic shopping agents retain engineering context.',
@@ -85,12 +85,12 @@ export function getShopifyUcpReadiness(snapshot: CatalogSnapshot = CATALOG_SNAPS
     ],
     launchBlockers: [
       'Confirm Shopify read-only API path, product IDs, variant IDs, handle mapping, and mechanical drawing metafield/file-reference source.',
-      'Confirm whether UCP catalog aliases should be exposed as first-class tool names in addition to Commonlands-native tools.',
+      'Confirm production Shopify Cart MCP endpoint binding and merchant-side availability before deploying Cart UCP tools live.',
       'Confirm Cloudflare route, /.well-known/ucp profile, and whether any legacy /sse compatibility endpoint is required.',
       'Confirm public policy/FAQ source if search_shop_policies_and_faqs parity is desired.',
     ],
     safeguards: [
-      'No Shopify writes, cart updates, checkout creation, customer-account access, order lookup, or protected customer data in this phase.',
+      'Cart UCP is the only approved Shopify mutation path; checkout creation, customer-account access, order lookup, inventory mutation, product writes, and protected customer data remain blocked.',
       'No direct gated-document URLs are emitted.',
       'No credentials, tokens, or signed URLs are stored in fixtures or responses.',
     ],
