@@ -51,10 +51,18 @@ The repo is being built in PR-sized phases. Each phase must preserve the public 
    - Documents why cart, checkout, customer-account, order, and write flows remain absent from the public MVP.
    - Provides UCP-shaped fixture product/variant samples with USD minor-unit prices and optical metadata, without live Shopify calls.
 
+8. **Phase 7 — Fixture-backed UCP catalog aliases and Shopify handoff seam**
+   - Tools: `search_catalog`, `lookup_catalog`, `get_product`, `prepare_shopify_purchase_handoff`.
+   - Endpoint: `GET /.well-known/ucp` advertises read-only catalog search/lookup capabilities and points clients at `/mcp`.
+   - Exposes UCP-shaped product/variant responses with Commonlands optical metadata, minor-unit USD fixture prices, public product URLs, and gated datasheet policy.
+   - Unknown UCP identifiers return successful `not_found` messages instead of leaking internals.
+   - Purchase handoff returns selected SKU, fixture variant ID, product URL, quantity, and explicit no-mutation transaction status; it does not create carts, checkout, orders, RFQs, or Shopify writes.
+   - This closes the connector-free gap versus Sunex's read-only MCP by making Commonlands more Shopify-native while preserving strict write gating.
+
 ## Still out of scope
 
 - Live AppSync/DynamoDB reads or scans.
-- Shopify API calls or writes.
+- Shopify API calls or writes. Fixture UCP aliases and purchase handoff are static contracts only.
 - Acumatica reads/writes.
 - Inventory, cart, checkout, RFQ, customer-account, or order mutation.
 - Direct DocSend URLs.

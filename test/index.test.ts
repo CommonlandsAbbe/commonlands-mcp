@@ -44,6 +44,23 @@ interface ShopifyUcpReadiness {
   differentiators: string[];
 }
 
+
+interface UcpCatalogResult {
+  schemaVersion: string;
+  ucp: { version: string; capability: string; transport: string };
+  catalog: { products: Array<Record<string, unknown>> };
+  messages: Array<{ type: string; code: string; text: string }>;
+}
+
+interface ShopifyPurchaseHandoff {
+  schemaVersion: string;
+  correctionStatus: string;
+  quantity: number;
+  product: { sku: string; productUrl: string; variantId: string };
+  transaction: { mode: string; cartCheckout: string; createsCart: boolean; requiresApprovalBeforeLiveMutation: boolean };
+  warnings: string[];
+}
+
 interface CatalogSnapshotStatus {
   schemaVersion: string;
   generatedAt: string;
@@ -158,6 +175,10 @@ describe('Commonlands MCP Worker', () => {
       'get_product_page_details',
       'get_catalog_snapshot_status',
       'get_shopify_ucp_readiness',
+      'search_catalog',
+      'lookup_catalog',
+      'get_product',
+      'prepare_shopify_purchase_handoff',
       'recommend_lenses_for_application',
     ]);
     expect(tools[0]?.inputSchema.type).toBe('object');
@@ -222,6 +243,7 @@ describe('Commonlands MCP Worker', () => {
     const resources = listedResult.resources as ResourceSummary[];
     expect(resources.map((resource) => resource.uri)).toContain('commonlands://catalog/lenses');
     expect(resources.map((resource) => resource.uri)).toContain('commonlands://catalog/snapshot-status');
+    expect(resources.map((resource) => resource.uri)).toContain('commonlands://compatibility/shopify-ucp');
 
     const read = await rpc('resources/read', { uri: 'commonlands://catalog/lenses' });
     const readResult = getResult(read.body);
@@ -565,4 +587,82 @@ describe('Commonlands MCP Worker', () => {
     expect(response.status).toBe(404);
     expect(body).toEqual({ error: 'not_found' });
   });
+
+  it('serves a UCP discovery profile that advertises catalog only', async () => {
+    const response = await fetchWorker('/.well-known/ucp');
+    const profile = await response.json() as Record<string, unknown>;
+
+    expect(response.status).toBe(200);
+    expect(profile).toMatchObject({
+      version: '2026-04-08',
+      transport: 'mcp',
+      endpoint: 'https://mcp.commonlands.test/mcp',
+      capabilities: ['dev.ucp.shopping.catalog.search', 'dev.ucp.shopping.catalog.lookup'],
+    });
+    expect(JSON.stringify(profile)).not.toMatch(/cart|checkout|order|customer/i);
+  });
+
+  it('exposes fixture-backed UCP catalog aliases without live Shopify connectors', async () => {
+    const search = await rpc('tools/call', {
+      name: 'search_catalog',
+      arguments: { catalog: { query: 'CIL250' }, meta: { 'ucp-agent': 'vitest' } },
+    });
+    const searchContent = getStructuredContent(search.body) as unknown as UcpCatalogResult;
+
+    expect(searchContent).toMatchObject({
+      schemaVersion: 'ucp.catalog.v1',
+      ucp: { version: '2026-04-08', capability: 'search_catalog', transport: 'mcp' },
+      messages: [],
+    });
+    expect(searchContent.catalog.products).toHaveLength(1);
+    expect(searchContent.catalog.products[0]).toMatchObject({
+      id: 'gid://commonlands/Product/CIL250',
+      handle: 'cil250',
+      variants: [{ id: 'gid://commonlands/ProductVariant/CIL250', sku: 'CIL250', price: { amount: 3400, currency: 'USD' } }],
+    });
+    expect(JSON.stringify(searchContent)).not.toMatch(/docsend|secret|shpat|signedUrl/i);
+
+    const lookup = await rpc('tools/call', {
+      name: 'lookup_catalog',
+      arguments: { catalog: { ids: ['gid://commonlands/Product/CIL250', 'NOPE'] } },
+    });
+    const lookupContent = getStructuredContent(lookup.body) as unknown as UcpCatalogResult;
+    expect(lookupContent.catalog.products).toHaveLength(1);
+    expect(lookupContent.messages).toContainEqual(expect.objectContaining({ type: 'info', code: 'not_found' }));
+
+    const detail = await rpc('tools/call', {
+      name: 'get_product',
+      arguments: { catalog: { id: 'gid://commonlands/ProductVariant/CIL250' } },
+    });
+    const detailContent = getStructuredContent(detail.body) as unknown as UcpCatalogResult;
+    expect(detailContent.catalog.products[0]).toMatchObject({ metadata: { sku: 'CIL250', opticalSource: 'fixture:dynamodb-audit' } });
+  });
+
+  it('prepares a Shopify-native purchase handoff without creating cart or checkout state', async () => {
+    const { body } = await rpc('tools/call', {
+      name: 'prepare_shopify_purchase_handoff',
+      arguments: { sku: 'CIL250', quantity: 3, sensorPartNumber: 'IMX477' },
+    });
+    const handoff = getStructuredContent(body) as unknown as ShopifyPurchaseHandoff;
+
+    expect(handoff).toMatchObject({
+      schemaVersion: 'shopify.purchase_handoff.v1',
+      correctionStatus: 'fixture_transaction_seam_no_mutation',
+      quantity: 3,
+      product: {
+        sku: 'CIL250',
+        productUrl: 'https://commonlands.com/products/cil250',
+        variantId: 'gid://commonlands/ProductVariant/CIL250',
+      },
+      transaction: {
+        mode: 'read_only_handoff',
+        cartCheckout: 'not_created',
+        createsCart: false,
+        requiresApprovalBeforeLiveMutation: true,
+      },
+    });
+    expect(handoff.warnings.join(' ')).toContain('No Shopify cart or checkout was created');
+    expect(JSON.stringify(handoff)).not.toMatch(/docsend|secret|shpat|signedUrl/i);
+  });
+
 });

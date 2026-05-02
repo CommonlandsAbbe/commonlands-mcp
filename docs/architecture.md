@@ -11,6 +11,7 @@ The Worker is being built in PR-sized phases:
 - Phase 4 adds fixture-backed product-page handoff details, including DynamoDB-sourced resolution metadata and gated datasheet policy.
 - Phase 5 adds fixture-backed joined snapshot status/validation contracts for future cache and connector work.
 - Phase 6 adds fixture-backed Shopify Storefront MCP / UCP Catalog compatibility readiness so Commonlands can interoperate with commerce agents without enabling write flows.
+- Phase 7 adds fixture-backed UCP catalog aliases, `/.well-known/ucp`, and a read-only Shopify purchase handoff seam so clients can discover products in Shopify-native shapes without creating transaction state.
 - Later phases replace fixtures with a scheduled joined catalog snapshot and connector-backed enrichment behind tests.
 
 No live Shopify, Acumatica, or database behavior is implemented yet. No checkout, cart, inventory mutation, customer-account, order-management, or write tool is implemented.
@@ -120,4 +121,17 @@ It reports:
 - launch blockers for Shopify read-only IDs/metafields, Cloudflare routing, optional UCP profile metadata, and `/sse` compatibility decisions;
 - why Commonlands should be better than generic storefront MCP for lens selection: FoV, angular resolution, sensor matching, engineering recommendations, and DynamoDB/AppSync optical provenance.
 
-This phase does not expose Shopify-native tool aliases yet. That is intentional: UCP aliases should only be advertised after Shopify product/variant identifiers, price/availability freshness rules, and profile endpoint requirements are confirmed.
+## Phase 7 MCP surface
+
+Phase 7 exposes the safe read-only subset of the Shopify/UCP catalog direction as fixture-backed contracts:
+
+- `search_catalog` maps a UCP-style `catalog.query` request to the joined Commonlands fixture catalog.
+- `lookup_catalog` resolves up to 10 fixture identifiers, including Commonlands GID-style product IDs, variant IDs, SKUs, handles, and product URLs.
+- `get_product` returns one UCP-shaped product with variants, USD minor-unit fixture prices, availability status, product URL, public mechanical drawing metadata, gated datasheet policy, and DynamoDB/AppSync optical provenance.
+- `prepare_shopify_purchase_handoff` creates a read-only purchase handoff payload with SKU, quantity, fixture variant ID, product URL, product detail contract, and explicit transaction flags proving that no cart, checkout, order, RFQ, inventory mutation, or Shopify write occurred.
+- `GET /.well-known/ucp` returns a catalog-only discovery profile pointing at `/mcp`.
+
+This phase is intentionally more Shopify-native than Sunex's public MCP while staying safer: Sunex exposes useful read-only optics/product tools and order/RFQ links, but no native cart/checkout flow. Commonlands now has the contract seam for future Shopify-native cart/checkout integration without enabling live writes or pretending fixture IDs are production Shopify IDs.
+
+The aliases remain fixture-backed. Live launch still requires Shopify read-only product/variant IDs, price/availability freshness rules, validated public drawing sources, Cloudflare route confirmation, and explicit approval before any transactional tool is implemented.
+
