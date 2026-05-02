@@ -8,6 +8,7 @@ import {
 } from './catalog';
 import { computeFov } from './optics';
 import { buildProductPageDetails } from './product-page';
+import { getPurchaseRouteOptions } from './purchase-routes';
 import {
   compareLenses,
   matchLensesToSensor,
@@ -268,6 +269,24 @@ const TOOLS: ToolDefinition[] = [
         quantity: { type: 'integer', minimum: 1, maximum: 999, default: 1 },
         sensorPartNumber: { type: 'string' },
         selectedVariantId: { type: 'string' },
+      },
+      required: ['sku'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'get_purchase_route_options',
+    title: 'Get purchase route options',
+    description:
+      'Return safe dual-channel purchase route options for AI agents and robotics engineers across Commonlands MCP and Shopify-native channels without mutating commerce state.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sku: { type: 'string' },
+        quantity: { type: 'integer', minimum: 1, maximum: 999, default: 1 },
+        sensorPartNumber: { type: 'string' },
+        buyerIntent: { type: 'string' },
+        agentType: { type: 'string' },
       },
       required: ['sku'],
       additionalProperties: false,
@@ -618,6 +637,14 @@ function toolCallResponse(id: unknown, params: unknown): Response {
   if (params.name === 'prepare_shopify_purchase_handoff') {
     try {
       return toolResult(id, prepareShopifyPurchaseHandoff(args));
+    } catch (error) {
+      return purchaseHandoffError(id, error);
+    }
+  }
+
+  if (params.name === 'get_purchase_route_options') {
+    try {
+      return toolResult(id, getPurchaseRouteOptions(args));
     } catch (error) {
       return purchaseHandoffError(id, error);
     }

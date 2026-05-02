@@ -12,9 +12,10 @@ The Worker is being built in PR-sized phases:
 - Phase 5 adds fixture-backed joined snapshot status/validation contracts for future cache and connector work.
 - Phase 6 adds fixture-backed Shopify Storefront MCP / UCP Catalog compatibility readiness so Commonlands can interoperate with commerce agents without enabling write flows.
 - Phase 7 adds fixture-backed UCP catalog aliases, `/.well-known/ucp`, and a read-only Shopify purchase handoff seam so clients can discover products in Shopify-native shapes without creating transaction state.
+- Phase 8 adds fixture-backed purchase-route options for AI agents and robotics engineers, showing the future Commonlands MCP purchase surface, Shopify-native checkout path, and engineering review path without mutating commerce state.
 - Later phases replace fixtures with a scheduled joined catalog snapshot and connector-backed enrichment behind tests.
 
-No live Shopify, Acumatica, or database behavior is implemented yet. No checkout, cart, inventory mutation, customer-account, order-management, or write tool is implemented.
+No live Shopify, Acumatica, or database behavior is implemented yet. No checkout, cart, inventory mutation, customer-account, order-management, RFQ, or write tool is implemented.
 
 ## Target endpoint
 
@@ -135,3 +136,16 @@ This phase is Commonlands-native and independent: the implementation source of t
 
 The aliases remain fixture-backed. Live launch still requires Shopify read-only product/variant IDs, price/availability freshness rules, validated public drawing sources, Cloudflare route confirmation, and explicit approval before any transactional tool is implemented. The target is full Shopify integration for commerce handoff and transaction flow, while preserving Commonlands as the optical/spec source of truth.
 
+
+
+## Phase 8 MCP surface
+
+Phase 8 adds `get_purchase_route_options` as a fixture-backed transaction-readiness contract for AI agents and robotics engineers. Given a selected SKU, optional quantity, sensor, buyer intent, and agent type, it returns:
+
+- product URL, fixture variant ID, fixture price/availability, and product detail context;
+- three route options: future Commonlands MCP dedicated purchase, future Shopify-native checkout, and engineering review request;
+- route-specific current safe actions and future tool names;
+- hard safety flags proving no cart, checkout, order, RFQ, customer record, inventory reservation, Shopify write, or Commonlands order write occurred;
+- launch prerequisites for approved Shopify Storefront credentials, live product/variant ID mapping, price/availability revalidation, idempotency/audit/rate-limit design, and customer-data policy review.
+
+The tool is not a checkout. It is the typed plan that lets agents preserve optical context and choose the right future purchase path while the public MVP stays read-only and fixture-backed.

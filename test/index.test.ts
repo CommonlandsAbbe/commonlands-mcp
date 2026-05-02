@@ -61,6 +61,17 @@ interface ShopifyPurchaseHandoff {
   warnings: string[];
 }
 
+interface PurchaseRouteOptions {
+  schemaVersion: string;
+  correctionStatus: string;
+  product: { sku: string; productUrl: string; variantId: string };
+  context: { buyerIntent: string; agentType?: string; sensorPartNumber?: string; quantity: number };
+  routes: Array<{ channel: string; status: string; recommendedFor: string[]; actions: Record<string, unknown> }>;
+  requiredBeforeLiveTransaction: string[];
+  transactionSafety: { createsCart: boolean; createsCheckout: boolean; writesShopify: boolean; writesCommonlandsOrder: boolean; requiresHumanApprovalBeforeMutation: boolean };
+  warnings: string[];
+}
+
 interface CatalogSnapshotStatus {
   schemaVersion: string;
   generatedAt: string;
@@ -179,6 +190,7 @@ describe('Commonlands MCP Worker', () => {
       'lookup_catalog',
       'get_product',
       'prepare_shopify_purchase_handoff',
+      'get_purchase_route_options',
       'recommend_lenses_for_application',
     ]);
     expect(tools[0]?.inputSchema.type).toBe('object');
@@ -636,6 +648,86 @@ describe('Commonlands MCP Worker', () => {
     });
     const detailContent = getStructuredContent(detail.body) as unknown as UcpCatalogResult;
     expect(detailContent.catalog.products[0]).toMatchObject({ metadata: { sku: 'CIL250', opticalSource: 'fixture:dynamodb-audit' } });
+  });
+
+
+
+  it('returns purchase route options for AI agents without mutating Shopify or Commonlands order state', async () => {
+    const { body } = await rpc('tools/call', {
+      name: 'get_purchase_route_options',
+      arguments: {
+        sku: 'CIL250',
+        quantity: 2,
+        sensorPartNumber: 'IMX477',
+        buyerIntent: 'robotics prototype build',
+        agentType: 'robotics_engineer_agent',
+      },
+    });
+    const options = getStructuredContent(body) as unknown as PurchaseRouteOptions;
+
+    expect(options).toMatchObject({
+      schemaVersion: 'commerce.purchase_routes.v1',
+      correctionStatus: 'fixture_dual_channel_transaction_plan_no_mutation',
+      product: {
+        sku: 'CIL250',
+        productUrl: 'https://commonlands.com/products/cil250',
+        variantId: 'gid://commonlands/ProductVariant/CIL250',
+      },
+      context: {
+        buyerIntent: 'robotics prototype build',
+        agentType: 'robotics_engineer_agent',
+        sensorPartNumber: 'IMX477',
+        quantity: 2,
+      },
+      transactionSafety: {
+        createsCart: false,
+        createsCheckout: false,
+        writesShopify: false,
+        writesCommonlandsOrder: false,
+        requiresHumanApprovalBeforeMutation: true,
+      },
+    });
+    expect(options.routes.map((route) => route.channel)).toEqual([
+      'commonlands_mcp_dedicated_purchase',
+      'shopify_native_checkout',
+      'engineering_review_request',
+    ]);
+    expect(options.routes[0]).toMatchObject({
+      status: 'planned_requires_approval_and_live_connectors',
+      actions: {
+        futureTool: 'create_commonlands_purchase_session',
+        currentSafeAction: 'prepare_shopify_purchase_handoff',
+      },
+    });
+    expect(options.routes[1]).toMatchObject({
+      status: 'planned_requires_shopify_storefront_cart',
+      actions: {
+        futureTool: 'create_shopify_cart_or_checkout',
+        currentSafeAction: 'open_product_url',
+      },
+    });
+    expect(options.requiredBeforeLiveTransaction).toContain('approved Shopify Storefront API cart/checkout credentials stored outside source control');
+    expect(JSON.stringify(options)).not.toMatch(/docsend|secret|shpat|signedUrl|accessToken/i);
+  });
+
+  it('rejects invalid purchase route option requests safely', async () => {
+    const missingSku = await rpc('tools/call', {
+      name: 'get_purchase_route_options',
+      arguments: { quantity: 1 },
+    });
+    expect(missingSku.body).toMatchObject({
+      jsonrpc: '2.0',
+      error: { code: -32602, message: 'Invalid params: sku is required' },
+    });
+
+    const unknownSku = await rpc('tools/call', {
+      name: 'get_purchase_route_options',
+      arguments: { sku: 'NOPE' },
+    });
+    expect(unknownSku.body).toMatchObject({
+      jsonrpc: '2.0',
+      error: { code: -32004, message: 'Lens not found: NOPE' },
+    });
   });
 
   it('prepares a Shopify-native purchase handoff without creating cart or checkout state', async () => {
