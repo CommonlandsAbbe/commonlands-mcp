@@ -7,11 +7,57 @@ const env: Env = {
   GIT_SHA: 'abc123',
 };
 
+type JsonObject = Record<string, unknown>;
+
+interface ToolSummary {
+  name: string;
+  inputSchema: JsonObject;
+}
+
+interface LensSummary {
+  sku: string;
+  productUrl: string;
+  mount: string;
+  eflMm: number;
+  projectionModel: string;
+}
+
+interface ResourceSummary {
+  uri: string;
+}
+
 async function fetchWorker(path: string, init?: RequestInit): Promise<Response> {
   return worker.fetch(new Request(`https://mcp.commonlands.test${path}`, init), env);
 }
 
-describe('Commonlands MCP Worker Phase 0', () => {
+async function rpc(
+  method: string,
+  params?: unknown,
+  id: unknown = method,
+): Promise<{ response: Response; body: JsonObject }> {
+  const response = await fetchWorker('/mcp', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id, method, params }),
+  });
+
+  const body = (await response.json()) as JsonObject;
+  return { response, body };
+}
+
+function getResult(body: JsonObject): JsonObject {
+  expect(body.error).toBeUndefined();
+  expect(body.result).toBeTypeOf('object');
+  return body.result as JsonObject;
+}
+
+function getStructuredContent(body: JsonObject): JsonObject {
+  const result = getResult(body);
+  expect(result.structuredContent).toBeTypeOf('object');
+  return result.structuredContent as JsonObject;
+}
+
+describe('Commonlands MCP Worker', () => {
   it('returns deploy metadata from /healthz', async () => {
     const response = await fetchWorker('/healthz');
     const body = await response.json();
@@ -27,21 +73,15 @@ describe('Commonlands MCP Worker Phase 0', () => {
   });
 
   it('supports MCP initialize smoke test', async () => {
-    const response = await fetchWorker('/mcp', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'initialize',
-        params: {
-          protocolVersion: '2024-11-05',
-          capabilities: {},
-          clientInfo: { name: 'vitest', version: '0.0.0' },
-        },
-      }),
-    });
-    const body = await response.json();
+    const { response, body } = await rpc(
+      'initialize',
+      {
+        protocolVersion: '2024-11-05',
+        capabilities: {},
+        clientInfo: { name: 'vitest', version: '0.0.0' },
+      },
+      1,
+    );
 
     expect(response.status).toBe(200);
     expect(body).toMatchObject({
@@ -55,19 +95,96 @@ describe('Commonlands MCP Worker Phase 0', () => {
     });
   });
 
-  it('returns JSON-RPC method-not-found for business tools in Phase 0', async () => {
-    const response = await fetchWorker('/mcp', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ jsonrpc: '2.0', id: 'tools', method: 'tools/list' }),
-    });
-    const body = await response.json();
+  it('lists Phase 1 catalog tools', async () => {
+    const { body } = await rpc('tools/list');
+    const result = getResult(body);
+    const tools = result.tools as ToolSummary[];
 
-    expect(response.status).toBe(200);
+    expect(tools.map((tool) => tool.name)).toEqual([
+      'search_lenses',
+      'get_lens_details',
+      'get_sensor_specs',
+    ]);
+    expect(tools[0]?.inputSchema.type).toBe('object');
+  });
+
+  it('searches joined catalog snapshot and returns safe product summaries', async () => {
+    const { body } = await rpc('tools/call', {
+      name: 'search_lenses',
+      arguments: { query: 'CIL078', limit: 3 },
+    });
+    const structuredContent = getStructuredContent(body);
+    const results = structuredContent.results as LensSummary[];
+
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({
+      sku: 'CIL078',
+      productUrl: 'https://commonlands.com/products/cil078',
+      mount: 'M12',
+      eflMm: 2.8,
+      projectionModel: 'projection_polynomial_theta_even_powers',
+    });
+    expect(JSON.stringify(getResult(body))).not.toContain('docsend');
+  });
+
+  it('returns lens details with validated mechanical drawing URL and no gated datasheet URL', async () => {
+    const { body } = await rpc('tools/call', {
+      name: 'get_lens_details',
+      arguments: { sku: 'CIL250' },
+    });
+    const structuredContent = getStructuredContent(body);
+    const lens = structuredContent.lens as JsonObject;
+
+    expect(lens).toMatchObject({
+      sku: 'CIL250',
+      handle: 'cil250',
+      mechanicalDrawingUrl: 'https://cdn.shopify.com/s/files/1/0624/5391/3805/files/CIL250.pdf',
+    });
+    expect(lens.datasheet).toEqual({
+      gated: true,
+      note: 'Datasheets are gated; use the product page for access instructions.',
+    });
+    expect(JSON.stringify(getResult(body))).not.toMatch(/docsend/i);
+  });
+
+  it('returns sensor specs by part number', async () => {
+    const { body } = await rpc('tools/call', {
+      name: 'get_sensor_specs',
+      arguments: { partNumber: 'IMX477' },
+    });
+    const structuredContent = getStructuredContent(body);
+
+    expect(structuredContent.sensor).toMatchObject({
+      partNumber: 'IMX477',
+      resolution: { widthPx: 4056, heightPx: 3040 },
+      activeAreaMm: { width: 6.287, height: 4.712 },
+    });
+  });
+
+  it('lists and reads catalog resources', async () => {
+    const listed = await rpc('resources/list');
+    const listedResult = getResult(listed.body);
+    const resources = listedResult.resources as ResourceSummary[];
+    expect(resources.map((resource) => resource.uri)).toContain('commonlands://catalog/lenses');
+
+    const read = await rpc('resources/read', { uri: 'commonlands://catalog/lenses' });
+    const readResult = getResult(read.body);
+    const contents = readResult.contents as Array<JsonObject>;
+    expect(contents[0]).toMatchObject({
+      uri: 'commonlands://catalog/lenses',
+      mimeType: 'application/json',
+    });
+    const parsed = JSON.parse(contents[0]?.text as string) as { lenses: LensSummary[] };
+    expect(parsed.lenses.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it('returns JSON-RPC errors for invalid tool calls without throwing', async () => {
+    const { body } = await rpc('tools/call', { name: 'missing_tool', arguments: {} });
+
     expect(body).toEqual({
       jsonrpc: '2.0',
-      id: 'tools',
-      error: { code: -32601, message: 'Method not found: tools/list' },
+      id: 'tools/call',
+      error: { code: -32601, message: 'Tool not found: missing_tool' },
     });
   });
 

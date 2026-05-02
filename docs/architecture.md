@@ -1,14 +1,14 @@
 # Commonlands MCP Architecture
 
-## Phase 0 scope
+## Current scope
 
-This repository starts with a minimal Cloudflare Worker that proves deployment and MCP connectivity only:
+The Worker is being built in PR-sized phases:
 
-- `GET /healthz` returns service metadata.
-- `POST /mcp` accepts JSON-RPC and supports `initialize` only.
-- All other MCP methods return `-32601 Method not found` until later phases implement read-only tools/resources.
+- Phase 0 proved deployment and MCP connectivity with `GET /healthz` and initialize-only `POST /mcp`.
+- Phase 1 adds fixture-backed read-only catalog tools/resources while real DynamoDB and Shopify credentials/schema are still unconfirmed.
+- Later phases replace fixtures with a scheduled joined catalog snapshot and add optics/recommendation/product-detail capabilities behind tests.
 
-No optics, product, inventory, checkout, Shopify, Acumatica, or database behavior is implemented in Phase 0.
+No live Shopify, Acumatica, or database behavior is implemented yet. No checkout, cart, inventory mutation, or write tool is implemented.
 
 ## Target endpoint
 
@@ -31,7 +31,7 @@ Cloudflare account, route, zone, and deployment environment are placeholders unt
 - No database writes.
 - No secrets in source control.
 - No direct DocSend URLs in fixtures, responses, logs, or docs.
-- No checkout/cart/write tools in Phase 0.
+- No checkout/cart/write tools in the public MVP.
 
 ## Deployment metadata
 
@@ -42,3 +42,14 @@ The Worker reads these non-secret vars:
 - `GIT_SHA`
 
 Secrets needed by later phases are documented in `docs/secrets.md` and must be configured through Cloudflare/environment secret storage, not committed.
+
+## Phase 1 MCP surface
+
+Phase 1 exposes these read-only methods from fixture-backed catalog data:
+
+- `tools/list`
+- `tools/call` for `search_lenses`, `get_lens_details`, and `get_sensor_specs`
+- `resources/list`
+- `resources/read` for `commonlands://catalog/lenses` and `commonlands://catalog/sensors`
+
+Responses include MCP-style `structuredContent` plus text content for tool calls. Lens responses intentionally return gated datasheet notes instead of direct DocSend URLs. Mechanical drawing URLs are limited to validated HTTPS Commonlands or Shopify CDN hosts.
