@@ -1,6 +1,7 @@
 import {
   assertSafePublicCatalogUrls,
   CATALOG_SNAPSHOT,
+  FIXTURE_NOT_PRODUCT_TRUTH_WARNING,
   getLensBySku,
   getSensorByPartNumber,
   searchLenses,
@@ -74,7 +75,7 @@ const TOOLS: ToolDefinition[] = [
     name: 'search_lenses',
     title: 'Search Commonlands lenses',
     description:
-      'Search the joined Commonlands lens catalog snapshot by SKU, title, mount, or lens type.',
+      'Search the fixture-backed Commonlands lens catalog snapshot by SKU, title, mount, or lens type. Use read_shopify_products for live purchasable product truth.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -87,7 +88,7 @@ const TOOLS: ToolDefinition[] = [
   {
     name: 'get_lens_details',
     title: 'Get lens details',
-    description: 'Return safe public product and optical metadata for one Commonlands lens SKU.',
+    description: 'Return fixture-backed public product and optical metadata for one Commonlands lens SKU. Use read_shopify_products for live product, price, availability, variant IDs, and metafields.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -114,7 +115,7 @@ const TOOLS: ToolDefinition[] = [
     name: 'compute_fov',
     title: 'Compute lens field of view',
     description:
-      'Compute fixture-backed FoV, scene size, and angular resolution for a Commonlands lens and sensor pair.',
+      'Compute fixture-backed FoV, scene size, and angular resolution for a Commonlands lens and sensor pair. Not live product truth; verify purchasable facts with read_shopify_products.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -134,7 +135,7 @@ const TOOLS: ToolDefinition[] = [
     name: 'match_lenses_to_sensor',
     title: 'Match lenses to a sensor',
     description:
-      'Rank fixture catalog lenses for one sensor using image-circle coverage, FoV target fit, and deterministic optical tradeoffs.',
+      'Rank fixture catalog lenses for one sensor using image-circle coverage, FoV target fit, and deterministic optical tradeoffs. Not live product truth; verify purchasable facts with read_shopify_products.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -151,7 +152,7 @@ const TOOLS: ToolDefinition[] = [
   {
     name: 'compare_lenses',
     title: 'Compare Commonlands lenses',
-    description: 'Compare selected lens SKUs on the same sensor with the same deterministic scoring model.',
+    description: 'Compare selected fixture-backed lens SKUs on the same sensor with the same deterministic scoring model. Not live product truth; verify purchasable facts with read_shopify_products.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -172,7 +173,7 @@ const TOOLS: ToolDefinition[] = [
     name: 'get_product_page_details',
     title: 'Get product page details',
     description:
-      'Return safe product-page handoff details for one lens, including DynamoDB-sourced optical specs and gated datasheet policy.',
+      'Return fixture-backed product-page handoff details for one lens, including DynamoDB-sourced optical specs and gated datasheet policy. Use read_shopify_products for live product URL, price, availability, variant IDs, and metafields.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -186,7 +187,7 @@ const TOOLS: ToolDefinition[] = [
     name: 'get_catalog_snapshot_status',
     title: 'Get joined catalog snapshot status',
     description:
-      'Return fixture-backed joined catalog counts, validation status, source provenance, and live connector readiness.',
+      'Return fixture-backed joined catalog counts, validation status, source provenance, live connector readiness, and non-authoritative product-truth warning.',
     inputSchema: {
       type: 'object',
       properties: {},
@@ -219,7 +220,7 @@ const TOOLS: ToolDefinition[] = [
     name: 'read_shopify_products',
     title: 'Read Shopify products',
     description:
-      'Read live Shopify Admin product, variant, metafield, media, and inventory summary data through approved read-only scopes. Never writes, creates carts/checkouts, reads customers/orders, or mutates inventory.',
+      'Use this for live purchasable product truth: product and variant IDs, SKUs, prices, inventory signals, product URLs, and metafields. Read-only; does not create carts, checkouts, orders, customers, inventory mutations, or Shopify writes. Fixture catalog tools are scaffold data only.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -772,6 +773,7 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
       results,
       count: results.length,
       source: 'fixture-backed joined catalog snapshot',
+      sourceWarning: FIXTURE_NOT_PRODUCT_TRUTH_WARNING,
     });
   }
 
@@ -789,6 +791,7 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
       schemaVersion: CATALOG_SNAPSHOT.schemaVersion,
       generatedAt: CATALOG_SNAPSHOT.generatedAt,
       lens,
+      sourceWarning: FIXTURE_NOT_PRODUCT_TRUTH_WARNING,
     });
   }
 
@@ -830,7 +833,10 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
     }
 
     const workingDistanceMm = typeof args.workingDistanceMm === 'number' ? args.workingDistanceMm : undefined;
-    return toolResult(id, computeFov(lens, sensor, workingDistanceMm));
+    return toolResult(id, {
+      ...computeFov(lens, sensor, workingDistanceMm),
+      sourceWarning: FIXTURE_NOT_PRODUCT_TRUTH_WARNING,
+    });
   }
 
   if (params.name === 'match_lenses_to_sensor') {
@@ -879,7 +885,10 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
       return rpcError(id, { code: -32004, message: `Lens not found: ${args.sku}` });
     }
 
-    return toolResult(id, buildProductPageDetails(lens));
+    return toolResult(id, {
+      ...buildProductPageDetails(lens),
+      sourceWarning: FIXTURE_NOT_PRODUCT_TRUTH_WARNING,
+    });
   }
 
   if (params.name === 'get_catalog_snapshot_status') {
@@ -912,7 +921,10 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
 
   if (params.name === 'search_catalog') {
     try {
-      return toolResult(id, searchCatalog(args));
+      return toolResult(id, {
+        ...searchCatalog(args),
+        sourceWarning: FIXTURE_NOT_PRODUCT_TRUTH_WARNING,
+      });
     } catch (error) {
       return ucpCatalogError(id, error);
     }
@@ -920,7 +932,10 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
 
   if (params.name === 'lookup_catalog') {
     try {
-      return toolResult(id, lookupCatalog(args));
+      return toolResult(id, {
+        ...lookupCatalog(args),
+        sourceWarning: FIXTURE_NOT_PRODUCT_TRUTH_WARNING,
+      });
     } catch (error) {
       return ucpCatalogError(id, error);
     }
@@ -928,7 +943,10 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
 
   if (params.name === 'get_product') {
     try {
-      return toolResult(id, getProduct(args));
+      return toolResult(id, {
+        ...getProduct(args),
+        sourceWarning: FIXTURE_NOT_PRODUCT_TRUTH_WARNING,
+      });
     } catch (error) {
       return ucpCatalogError(id, error);
     }
@@ -936,7 +954,10 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
 
   if (params.name === 'prepare_shopify_purchase_handoff') {
     try {
-      return toolResult(id, prepareShopifyPurchaseHandoff(args));
+      return toolResult(id, {
+        ...prepareShopifyPurchaseHandoff(args),
+        sourceWarning: FIXTURE_NOT_PRODUCT_TRUTH_WARNING,
+      });
     } catch (error) {
       return purchaseHandoffError(id, error);
     }
@@ -944,7 +965,10 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
 
   if (params.name === 'get_purchase_route_options') {
     try {
-      return toolResult(id, getPurchaseRouteOptions(args));
+      return toolResult(id, {
+        ...getPurchaseRouteOptions(args),
+        sourceWarning: FIXTURE_NOT_PRODUCT_TRUTH_WARNING,
+      });
     } catch (error) {
       return purchaseHandoffError(id, error);
     }
@@ -1030,8 +1054,9 @@ function recommendationToolResult(
     correctionStatus: 'fixture_recommendation_scaffold',
     sensor: { partNumber: sensorPartNumber.trim().toUpperCase() },
     recommendations,
+    sourceWarning: FIXTURE_NOT_PRODUCT_TRUTH_WARNING,
     assumptions: [
-      'Ranking is fixture-backed and excludes live Shopify stock, price breaks, MTF, CRA, and production coefficient parity until integrations are approved.',
+      'Ranking is fixture-backed and excludes live Shopify stock, price, availability, variant IDs, MTF, CRA, and production coefficient parity. Use read_shopify_products for live purchasable product truth before final SKU, cart, or checkout decisions.',
       'Scores are deterministic engineering heuristics for shortlist generation, not final optical design approval.',
     ],
   });

@@ -87,7 +87,7 @@ export interface ShopifyPurchaseHandoff {
     handle: string;
     productUrl: string;
     variantId: string;
-    selectedVariantIdSource: 'fixture_commonlands_gid' | 'caller_supplied_unverified_fixture';
+    selectedVariantIdSource: 'fixture_commonlands_gid_non_authoritative' | 'caller_supplied_unverified_not_product_truth';
     price: UcpPrice;
     availability: LensCatalogItem['availability'];
   };
@@ -233,7 +233,7 @@ export function prepareShopifyPurchaseHandoff(args: Record<string, unknown>): Sh
       handle: lens.handle,
       productUrl: lens.productUrl,
       variantId: selectedVariantId,
-      selectedVariantIdSource: selectedVariantId === fixtureVariantId ? 'fixture_commonlands_gid' : 'caller_supplied_unverified_fixture',
+      selectedVariantIdSource: selectedVariantId === fixtureVariantId ? 'fixture_commonlands_gid_non_authoritative' : 'caller_supplied_unverified_not_product_truth',
       price: toUsdMinorUnits(lens.priceUsd),
       availability: lens.availability,
     },
@@ -252,7 +252,8 @@ export function prepareShopifyPurchaseHandoff(args: Record<string, unknown>): Sh
     },
     warnings: [
       'No Shopify cart or checkout was created; this is a read-only handoff contract.',
-      'Variant IDs are fixture Commonlands IDs until Shopify read-only product/variant mapping is approved and connected.',
+      'Variant IDs are fixture Commonlands IDs and are not live Shopify ProductVariant IDs unless resolved through read_shopify_products.',
+      'Cart and checkout tools are exposed but safe-fail until SHOPIFY_CART_MCP_ENDPOINT and SHOPIFY_CHECKOUT_MCP_ENDPOINT are configured.',
       'Live price and availability must be revalidated by Shopify before any future transaction.',
     ],
     provenance: {

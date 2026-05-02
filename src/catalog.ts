@@ -1,3 +1,9 @@
+export const FIXTURE_NOT_PRODUCT_TRUTH_WARNING = {
+  severity: 'danger',
+  code: 'fixture_not_product_truth',
+  text: 'This result is fixture-backed scaffold data, not live purchasable product truth. Do not use it for final SKU recommendation, price, availability, Shopify IDs, variant IDs, exact product specs, or checkout/cart preparation. Use read_shopify_products for live Shopify product/variant/metafield data.',
+} as const;
+
 export interface LensCatalogItem {
   sku: string;
   title: string;

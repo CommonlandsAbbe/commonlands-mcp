@@ -15,10 +15,10 @@ See [`docs/live-usage-and-integrations.md`](docs/live-usage-and-integrations.md)
 - `GET /healthz` returns deploy metadata.
 - `GET /.well-known/ucp` returns catalog + cart/checkout discovery metadata.
 - `POST /mcp` supports MCP JSON-RPC tools/resources for fixture-backed lens discovery, optics calculations, product details, recommendations, and safe purchase handoff planning.
-- Two credential-gated diagnostic tools can read Shopify Admin product/variant/metaobject summary data when approved read-only Shopify config is present: `read_shopify_products` and `read_shopify_metaobjects`.
+- `read_shopify_products` is the live read-only Shopify product truth source for purchasable product URLs, Product/Variant GIDs, SKUs, prices, inventory signals, and metafields; `read_shopify_metaobjects` remains a supporting read-only diagnostic.
 - Four explicitly scoped Cart UCP tools proxy Shopify-owned cart state when `SHOPIFY_CART_MCP_ENDPOINT` is configured: `create_cart`, `get_cart`, `update_cart`, and `cancel_cart`.
 - Five explicitly scoped Checkout MCP tools proxy Shopify-owned checkout state when `SHOPIFY_CHECKOUT_MCP_ENDPOINT` is configured: `create_checkout`, `get_checkout`, `update_checkout`, `complete_checkout`, and `cancel_checkout`; `complete_checkout` requires Shopify checkout authentication plus verified name, email, phone, address, and card/payment authorization.
-- Fixture-backed catalog and purchase-handoff flows remain the default user-facing behavior until live catalog joins are validated.
+- Fixture-backed catalog, recommendation, and legacy purchase-handoff flows are scaffold/status helpers only; do not use them as final truth for SKU recommendations, price, availability, Shopify IDs, variant IDs, exact product specs, or cart/checkout preparation without `read_shopify_products`.
 - No Acumatica writes, database writes, direct payment handling, raw card data, customer-account access, inventory mutations, inventory sync changes, Shopify catalog writes, or secret exposure. Checkout completion is only via Shopify Checkout MCP after Shopify-authenticated payment/identity verification.
 
 ## Local commands

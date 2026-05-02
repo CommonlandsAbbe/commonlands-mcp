@@ -36,6 +36,15 @@ export interface ShopifyLiveReadResult {
     apiVersion: string;
     token: 'exchanged_and_redacted' | 'not_requested' | 'unavailable';
   };
+  source: {
+    mode: 'live_shopify_admin_graphql_readonly';
+    productTruth: boolean;
+    readOnly: true;
+    writesShopify: false;
+    includesProducts: boolean;
+    includesVariants: boolean;
+    includesMetafields: boolean;
+  };
   connector: {
     status: 'ok' | 'not_configured' | 'shopify_error' | 'invalid_request';
     source: 'live_shopify_admin_graphql' | 'not_connected';
@@ -57,7 +66,9 @@ export interface ShopifyLiveReadResult {
 }
 
 export interface ShopifyReadonlyProduct {
+  id: string;
   productId: string;
+  numericId?: string;
   handle: string;
   title: string;
   status?: string;
@@ -71,13 +82,16 @@ export interface ShopifyReadonlyProduct {
 }
 
 export interface ShopifyReadonlyVariant {
+  id: string;
   variantId: string;
+  numericId?: string;
   sku: string;
   title: string;
   price?: string;
   inventoryQuantity?: number;
   inventoryTracked?: boolean;
   inventoryItemId?: string;
+  storefrontCartPath?: string;
   metafields: ShopifyReadonlyMetafield[];
 }
 
@@ -220,6 +234,7 @@ export async function readShopifyProducts(env: ShopifyReadAdapterEnv, args: Shop
 
   return {
     ...base,
+    source: { ...base.source, includesMetafields: parsed.includeMetafields },
     connector: { status: 'ok', source: 'live_shopify_admin_graphql', messages: productsResponse.messages ?? [] },
     shopify: { ...base.shopify, token: 'exchanged_and_redacted' },
     products,
@@ -251,6 +266,7 @@ export async function readShopifyMetaobjects(env: ShopifyReadAdapterEnv, args: S
 
   return {
     ...base,
+    source: { ...base.source, includesMetafields: false },
     connector: { status: 'ok', source: 'live_shopify_admin_graphql', messages: [] },
     shopify: { ...base.shopify, token: 'exchanged_and_redacted' },
     metaobjects,
@@ -345,6 +361,15 @@ function baseResult(env: ShopifyReadAdapterEnv, query: ShopifyLiveReadResult['qu
     generatedAt: new Date().toISOString(),
     configured: status.configured,
     query,
+    source: {
+      mode: 'live_shopify_admin_graphql_readonly',
+      productTruth: query.kind === 'product_variants',
+      readOnly: true,
+      writesShopify: false,
+      includesProducts: query.kind === 'product_variants',
+      includesVariants: query.kind === 'product_variants',
+      includesMetafields: true,
+    },
     shopify: {
       shopDomainFormat: status.shopDomain.format,
       apiVersion: adminApiVersion(env),
@@ -378,6 +403,15 @@ function invalidRequestResult(kind: 'product_variants' | 'metaobjects', message:
     generatedAt: new Date().toISOString(),
     configured: false,
     query: { kind, limit: query.limit },
+    source: {
+      mode: 'live_shopify_admin_graphql_readonly',
+      productTruth: kind === 'product_variants',
+      readOnly: true,
+      writesShopify: false,
+      includesProducts: kind === 'product_variants',
+      includesVariants: kind === 'product_variants',
+      includesMetafields: true,
+    },
     shopify: { shopDomainFormat: 'invalid_or_missing', apiVersion: DEFAULT_ADMIN_API_VERSION, token: 'not_requested' },
     connector: { status: 'invalid_request', source: 'not_connected', messages: [message] },
     products: [],
@@ -548,16 +582,21 @@ function normalizeProductByHandle(product: ProductNode | null | undefined, inclu
 
 function normalizeVariants(nodes: ProductVariantNode[], includeMetafields: boolean): ShopifyReadonlyVariant[] {
   return nodes.map((variant) => {
+    const variantId = stringOrUndefined(variant.id) ?? '';
+    const numericId = numericIdFromGid(variantId);
     const normalizedVariant: ShopifyReadonlyVariant = {
-      variantId: stringOrUndefined(variant.id) ?? '',
+      id: variantId,
+      variantId,
       sku: stringOrUndefined(variant.sku) ?? '',
       title: stringOrUndefined(variant.title) ?? '',
       metafields: includeMetafields ? normalizeMetafields(variant.metafields?.nodes ?? []) : [],
     };
+    assignIfPresent(normalizedVariant, 'numericId', numericId);
     assignIfPresent(normalizedVariant, 'price', stringOrUndefined(variant.price));
     assignIfPresent(normalizedVariant, 'inventoryQuantity', typeof variant.inventoryQuantity === 'number' ? variant.inventoryQuantity : undefined);
     assignIfPresent(normalizedVariant, 'inventoryTracked', typeof variant.inventoryItem?.tracked === 'boolean' ? variant.inventoryItem.tracked : undefined);
     assignIfPresent(normalizedVariant, 'inventoryItemId', stringOrUndefined(variant.inventoryItem?.id));
+    assignIfPresent(normalizedVariant, 'storefrontCartPath', numericId ? `/cart/${numericId}:1` : undefined);
     return normalizedVariant;
   });
 }
@@ -579,19 +618,22 @@ function normalizeProducts(nodes: ProductVariantNode[], includeMetafields: boole
 }
 
 function buildProduct(productId: string, product: ProductNode | null | undefined, includeMetafields: boolean): ShopifyReadonlyProduct {
+  const handle = stringOrUndefined(product?.handle) ?? '';
   const normalized: ShopifyReadonlyProduct = {
+    id: productId,
     productId,
-    handle: stringOrUndefined(product?.handle) ?? '',
+    handle,
     title: stringOrUndefined(product?.title) ?? '',
     tags: Array.isArray(product?.tags) ? product.tags.filter((tag): tag is string => typeof tag === 'string') : [],
     metafields: includeMetafields ? normalizeMetafields(product?.metafields?.nodes ?? []) : [],
     media: normalizeMedia(product?.media?.nodes ?? []),
     variants: [],
   };
+  assignIfPresent(normalized, 'numericId', numericIdFromGid(productId));
   assignIfPresent(normalized, 'status', stringOrUndefined(product?.status));
   assignIfPresent(normalized, 'productType', stringOrUndefined(product?.productType));
   assignIfPresent(normalized, 'vendor', stringOrUndefined(product?.vendor));
-  assignIfPresent(normalized, 'productUrl', safePublicUrl(product?.onlineStoreUrl));
+  assignIfPresent(normalized, 'productUrl', safePublicUrl(product?.onlineStoreUrl) ?? (handle ? `https://commonlands.com/products/${handle}` : undefined));
   return normalized;
 }
 
@@ -680,6 +722,11 @@ function adminApiVersion(env: ShopifyReadAdapterEnv): string {
   const configured = env.SHOPIFY_ADMIN_API_VERSION?.trim();
   if (configured && /^\d{4}-\d{2}$/.test(configured)) return configured;
   return DEFAULT_ADMIN_API_VERSION;
+}
+
+function numericIdFromGid(value: string): string | undefined {
+  const match = value.match(/\/(\d+)$/);
+  return match?.[1];
 }
 
 function stringOrUndefined(value: unknown): string | undefined {

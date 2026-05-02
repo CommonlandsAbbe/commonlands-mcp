@@ -33,6 +33,7 @@ export interface PurchaseRouteOptions {
     handle: string;
     productUrl: string;
     variantId: string;
+    variantIdSource: 'fixture_non_authoritative';
     price: { amount: number; currency: 'USD' };
     availability: LensCatalogItem['availability'];
   };
@@ -103,6 +104,7 @@ export function getPurchaseRouteOptions(args: Record<string, unknown>): Purchase
       handle: lens.handle,
       productUrl: lens.productUrl,
       variantId: handoff.product.variantId,
+      variantIdSource: 'fixture_non_authoritative',
       price: handoff.product.price,
       availability: lens.availability,
     },
@@ -160,10 +162,10 @@ export function getPurchaseRouteOptions(args: Record<string, unknown>): Purchase
     ],
     productDetails: handoff.productDetails,
     requiredBeforeLiveTransaction: [
-      'approved Shopify Storefront API cart/checkout credentials stored outside source control',
-      'stable live Shopify product and variant ID mapping for every MCP SKU',
+      'configured SHOPIFY_CART_MCP_ENDPOINT or SHOPIFY_CHECKOUT_MCP_ENDPOINT; exposed tools safe-fail until configured',
+      'live Shopify ProductVariant GIDs resolved through read_shopify_products, not fixture Commonlands IDs',
       'price, availability, and inventory freshness revalidation at transaction time',
-      'explicit approval for any cart, checkout, order, customer, RFQ, or inventory mutation tool',
+      'explicit approval for any cart, checkout, order, customer, RFQ, or inventory mutation tool outside the approved Shopify Cart/Checkout MCP proxy paths',
       'idempotency keys, audit logging, rate limits, and rollback/failure semantics for transaction creation',
       'customer-data/OAuth policy review before any account, order-status, or protected customer data flow',
     ],
@@ -178,7 +180,8 @@ export function getPurchaseRouteOptions(args: Record<string, unknown>): Purchase
     },
     warnings: [
       'This response plans purchase routes only; it does not create a cart, checkout, order, RFQ, customer record, or inventory reservation.',
-      'Use Commonlands MCP tools for optics/spec selection and Shopify-native channels for future payment once approved connectors are live.',
+      'Use read_shopify_products to resolve live ProductVariant IDs before cart/checkout handoff; fixture variant IDs are not valid Shopify purchase IDs.',
+      'Cart/checkout tools are exposed but safe-fail until their Shopify MCP endpoints are configured; exposure does not mean readiness.',
       'Live price, availability, variant IDs, and inventory must be revalidated before any future transaction.',
     ],
     provenance: {
