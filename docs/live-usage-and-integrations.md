@@ -126,6 +126,32 @@ Current limitations:
 - No carts, checkouts, orders, RFQs, customer records, inventory reservations, or Shopify writes.
 - Datasheets remain gated; responses must not expose direct gated-document URLs.
 
+## Planned Shopify read-only access
+
+Commonlands is preparing a Shopify Dev Dashboard app for read-only catalog enrichment. The app uses the current Shopify client credential model, not the older custom-app token reveal flow.
+
+Approved read scopes for the planned integration:
+
+- `read_discovery`
+- `read_files`
+- `read_inventory`
+- `read_legal_policies`
+- `read_locations`
+- `read_marketing_integrated_campaigns`
+- `read_marketing_events`
+- `read_metaobject_definitions`
+- `read_metaobjects`
+- `read_online_store_navigation`
+- `read_online_store_pages`
+- `read_payment_terms`
+- `read_product_feeds`
+- `read_product_listings`
+- `read_products`
+- `read_shipping`
+- `read_content`
+
+These scopes remain read-only. They do not permit carts, checkouts, orders, customer records, inventory mutations, product writes, variant writes, collection writes, tag writes, or metafield writes.
+
 ## How to interpret results
 
 Agents and users should label output as fixture-backed when discussing price, availability, Shopify IDs, variant IDs, or catalog completeness.
