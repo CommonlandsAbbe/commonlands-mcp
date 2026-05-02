@@ -9,6 +9,7 @@ import {
 import { computeFov } from './optics';
 import { buildProductPageDetails } from './product-page';
 import { getPurchaseRouteOptions } from './purchase-routes';
+import { readShopifyMetaobjects, readShopifyProducts } from './shopify-read-adapter';
 import {
   compareLenses,
   matchLensesToSensor,
@@ -34,6 +35,7 @@ export interface Env {
   SHOPIFY_CLIENT_SECRET?: string;
   SHOPIFY_SHOP_DOMAIN?: string;
   SHOPIFY_SCOPES?: string;
+  SHOPIFY_ADMIN_API_VERSION?: string;
 }
 
 interface JsonRpcRequest {
@@ -205,6 +207,39 @@ const TOOLS: ToolDefinition[] = [
     inputSchema: {
       type: 'object',
       properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'read_shopify_products',
+    title: 'Read Shopify products',
+    description:
+      'Read live Shopify Admin product, variant, metafield, media, and inventory summary data through approved read-only scopes. Never writes, creates carts/checkouts, reads customers/orders, or mutates inventory.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sku: { type: 'string', description: 'Optional variant SKU, for example CIL250.' },
+        handle: { type: 'string', description: 'Optional Shopify product handle.' },
+        query: { type: 'string', description: 'Optional safe Shopify product/variant search text.' },
+        limit: { type: 'integer', minimum: 1, maximum: 25, default: 10 },
+        includeMetafields: { type: 'boolean', default: true },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'read_shopify_metaobjects',
+    title: 'Read Shopify metaobjects',
+    description:
+      'Read live Shopify Admin metaobjects by type, optionally filtered by handle, through approved read-only scopes. Returns redacted field previews only and never writes metaobjects or metafields.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        type: { type: 'string', description: 'Metaobject definition type.' },
+        handle: { type: 'string', description: 'Optional metaobject handle filter.' },
+        limit: { type: 'integer', minimum: 1, maximum: 25, default: 10 },
+      },
+      required: ['type'],
       additionalProperties: false,
     },
   },
@@ -491,7 +526,7 @@ function resourceReadResponse(id: unknown, params: unknown): Response {
   return rpcError(id, { code: -32602, message: `Unknown resource: ${params.uri}` });
 }
 
-function toolCallResponse(id: unknown, params: unknown, env: Env): Response {
+async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise<Response> {
   if (!isRecord(params) || typeof params.name !== 'string') {
     return rpcError(id, { code: -32602, message: 'Invalid params: tool name is required' });
   }
@@ -628,6 +663,14 @@ function toolCallResponse(id: unknown, params: unknown, env: Env): Response {
 
   if (params.name === 'get_shopify_readonly_config_status') {
     return toolResult(id, getShopifyReadonlyStatus(env));
+  }
+
+  if (params.name === 'read_shopify_products') {
+    return toolResult(id, await readShopifyProducts(env, args));
+  }
+
+  if (params.name === 'read_shopify_metaobjects') {
+    return toolResult(id, await readShopifyMetaobjects(env, args));
   }
 
   if (params.name === 'search_catalog') {
@@ -848,7 +891,7 @@ async function handleMcp(request: Request, env: Env): Promise<Response> {
 
   if (parsed.method === 'initialize') return initializeResponse(parsed.id);
   if (parsed.method === 'tools/list') return toolListResponse(parsed.id);
-  if (parsed.method === 'tools/call') return toolCallResponse(parsed.id, parsed.params, env);
+  if (parsed.method === 'tools/call') return await toolCallResponse(parsed.id, parsed.params, env);
   if (parsed.method === 'resources/list') return resourceListResponse(parsed.id);
   if (parsed.method === 'resources/read') return resourceReadResponse(parsed.id, parsed.params);
 

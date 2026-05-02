@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import worker, { type Env } from '../src/index';
 
 const env: Env = {
@@ -144,6 +144,12 @@ function getStructuredContent(body: JsonObject): JsonObject {
 }
 
 describe('Commonlands MCP Worker', () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
   it('returns deploy metadata from /healthz', async () => {
     const response = await fetchWorker('/healthz');
     const body = await response.json();
@@ -197,6 +203,8 @@ describe('Commonlands MCP Worker', () => {
       'get_catalog_snapshot_status',
       'get_shopify_ucp_readiness',
       'get_shopify_readonly_config_status',
+      'read_shopify_products',
+      'read_shopify_metaobjects',
       'search_catalog',
       'lookup_catalog',
       'get_product',
@@ -390,6 +398,314 @@ describe('Commonlands MCP Worker', () => {
       scopes: { deniedMutationScopes: ['write_products'] },
       safety: { readOnly: false, writesShopify: false },
     });
+  });
+
+  it('keeps live Shopify product reads safe when configuration is missing', async () => {
+    const { body } = await rpc('tools/call', {
+      name: 'read_shopify_products',
+      arguments: { sku: 'CIL250', limit: 1 },
+    });
+    const structuredContent = getStructuredContent(body);
+
+    expect(structuredContent).toMatchObject({
+      schemaVersion: 'shopify.live_read.v1',
+      mode: 'shopify_admin_graphql_read_only',
+      configured: false,
+      query: { kind: 'product_variants', sku: 'CIL250', limit: 1 },
+      connector: { status: 'not_configured', source: 'not_connected' },
+      products: [],
+      safety: {
+        readOnly: true,
+        writesShopify: false,
+        createsCart: false,
+        createsCheckout: false,
+        readsCustomers: false,
+        readsOrders: false,
+        mutatesInventory: false,
+        touchesInventorySync: false,
+        exposesSecrets: false,
+      },
+    });
+    expect(JSON.stringify(getResult(body))).not.toMatch(/client-secret-test|client-id-test|shpat|shpss|accessToken|Authorization|Bearer/i);
+  });
+
+  it('exchanges Shopify token and reads product variants without leaking credentials or mutating state', async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      calls.push(init ? { url, init } : { url });
+      if (url.endsWith('/admin/oauth/access_token')) {
+        return Response.json({ access_token: 'shpat_test_token_never_return', expires_in: 86400, scope: shopifyReadonlyEnv.SHOPIFY_SCOPES });
+      }
+      if (url.endsWith('/admin/api/2026-04/graphql.json')) {
+        const headers = new Headers(init?.headers);
+        expect(headers.get('x-shopify-access-token')).toBe('shpat_test_token_never_return');
+        expect(String(init?.body)).toContain('productVariants');
+        expect(String(init?.body)).not.toMatch(/mutation|customer|order/i);
+        return Response.json({
+          data: {
+            productVariants: {
+              nodes: [
+                {
+                  id: 'gid://shopify/ProductVariant/123',
+                  sku: 'CIL250',
+                  title: 'Default Title',
+                  price: '34.00',
+                  inventoryQuantity: 42,
+                  inventoryItem: { id: 'gid://shopify/InventoryItem/456', tracked: true },
+                  metafields: { nodes: [] },
+                  product: {
+                    id: 'gid://shopify/Product/789',
+                    handle: 'cil250',
+                    title: 'CIL250 M12 lens',
+                    status: 'ACTIVE',
+                    productType: 'Lens',
+                    vendor: 'Commonlands',
+                    tags: ['M12'],
+                    onlineStoreUrl: 'https://commonlands.com/products/cil250',
+                    metafields: {
+                      nodes: [
+                        {
+                          namespace: 'custom',
+                          key: 'mechanical_drawing',
+                          type: 'file_reference',
+                          value: 'gid://shopify/GenericFile/111',
+                          reference: { __typename: 'GenericFile', url: 'https://cdn.shopify.com/s/files/1/0624/5391/3805/files/CIL250.pdf' },
+                        },
+                      ],
+                    },
+                    media: {
+                      nodes: [
+                        {
+                          mediaContentType: 'IMAGE',
+                          alt: 'CIL250 lens',
+                          preview: { image: { url: 'https://cdn.shopify.com/s/files/1/0624/5391/3805/files/CIL250.png', altText: 'CIL250 lens' } },
+                        },
+                      ],
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        });
+      }
+      return new Response('unexpected fetch', { status: 500 });
+    }) as typeof fetch;
+
+    const { body } = await rpc(
+      'tools/call',
+      { name: 'read_shopify_products', arguments: { sku: 'CIL250', limit: 1 } },
+      'read-shopify-products',
+      shopifyReadonlyEnv,
+    );
+    const structuredContent = getStructuredContent(body);
+
+    expect(structuredContent).toMatchObject({
+      schemaVersion: 'shopify.live_read.v1',
+      configured: true,
+      query: { kind: 'product_variants', sku: 'CIL250', limit: 1 },
+      shopify: { shopDomainFormat: 'myshopify_domain', apiVersion: '2026-04', token: 'exchanged_and_redacted' },
+      connector: { status: 'ok', source: 'live_shopify_admin_graphql', messages: [] },
+      products: [
+        {
+          productId: 'gid://shopify/Product/789',
+          handle: 'cil250',
+          productUrl: 'https://commonlands.com/products/cil250',
+          variants: [
+            {
+              variantId: 'gid://shopify/ProductVariant/123',
+              sku: 'CIL250',
+              inventoryQuantity: 42,
+              inventoryTracked: true,
+            },
+          ],
+        },
+      ],
+      safety: { readOnly: true, writesShopify: false, mutatesInventory: false, exposesSecrets: false },
+    });
+    expect(calls.map((call) => call.url)).toEqual([
+      'https://commonlands-store.myshopify.com/admin/oauth/access_token',
+      'https://commonlands-store.myshopify.com/admin/api/2026-04/graphql.json',
+    ]);
+    expect(JSON.stringify(getResult(body))).not.toMatch(/shpat_test_token_never_return|client-secret-test|client-id-test|Authorization|Bearer/i);
+  });
+
+  it('reads Shopify products by handle through productByHandle without metafield connections', async () => {
+    const calls: Array<{ url: string; body?: string }> = [];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      calls.push({ url, body: String(init?.body ?? '') });
+      if (url.endsWith('/admin/oauth/access_token')) {
+        return Response.json({ access_token: 'shpat_handle_token_never_return', expires_in: 86400 });
+      }
+      if (url.endsWith('/admin/api/2026-04/graphql.json')) {
+        const body = String(init?.body);
+        expect(body).toContain('productByHandle');
+        expect(body).toContain('variants(first: $first)');
+        expect(body).not.toContain('metafields(first: 0)');
+        expect(body).not.toContain('product_handle');
+        expect(body).not.toMatch(/mutation|customer|order/i);
+        return Response.json({
+          data: {
+            productByHandle: {
+              id: 'gid://shopify/Product/789',
+              handle: 'cil250',
+              title: 'CIL250 M12 lens',
+              status: 'ACTIVE',
+              productType: 'Lens',
+              vendor: 'Commonlands',
+              tags: ['M12'],
+              onlineStoreUrl: 'https://commonlands.com/products/cil250',
+              media: { nodes: [] },
+              variants: {
+                nodes: [
+                  {
+                    id: 'gid://shopify/ProductVariant/123',
+                    sku: 'CIL250',
+                    title: 'Default Title',
+                    price: '34.00',
+                    inventoryQuantity: 42,
+                    inventoryItem: { id: 'gid://shopify/InventoryItem/456', tracked: true },
+                  },
+                ],
+              },
+            },
+          },
+        });
+      }
+      return new Response('unexpected fetch', { status: 500 });
+    }) as typeof fetch;
+
+    const { body } = await rpc(
+      'tools/call',
+      { name: 'read_shopify_products', arguments: { handle: 'cil250', limit: 1, includeMetafields: false } },
+      'read-shopify-products-by-handle',
+      { ...shopifyReadonlyEnv, SHOPIFY_CLIENT_ID: 'client-id-handle-test' },
+    );
+    const structuredContent = getStructuredContent(body);
+
+    expect(structuredContent).toMatchObject({
+      connector: { status: 'ok', source: 'live_shopify_admin_graphql' },
+      products: [
+        {
+          handle: 'cil250',
+          metafields: [],
+          variants: [{ sku: 'CIL250', metafields: [] }],
+        },
+      ],
+    });
+    expect(calls.map((call) => call.url)).toEqual([
+      'https://commonlands-store.myshopify.com/admin/oauth/access_token',
+      'https://commonlands-store.myshopify.com/admin/api/2026-04/graphql.json',
+    ]);
+    expect(JSON.stringify(getResult(body))).not.toMatch(/shpat_handle_token_never_return|client-secret-test|client-id-handle-test|Authorization|Bearer/i);
+  });
+
+  it('returns sanitized Shopify errors without throwing worker failures', async () => {
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      if (url.endsWith('/admin/oauth/access_token')) {
+        return Response.json({ access_token: 'shpat_error_token_never_return', expires_in: 86400 });
+      }
+      throw new Error('network down with client_secret=client-secret-test and shpat_error_token_never_return');
+    }) as typeof fetch;
+
+    const { response, body } = await rpc(
+      'tools/call',
+      { name: 'read_shopify_products', arguments: { sku: 'CIL250' } },
+      'shopify-error-safe',
+      { ...shopifyReadonlyEnv, SHOPIFY_CLIENT_ID: 'client-id-error-test' },
+    );
+    const structuredContent = getStructuredContent(body);
+
+    expect(response.status).toBe(200);
+    expect(structuredContent).toMatchObject({
+      connector: { status: 'shopify_error', source: 'not_connected' },
+      products: [],
+      safety: { readOnly: true, writesShopify: false, exposesSecrets: false },
+    });
+    expect(JSON.stringify(getResult(body))).not.toMatch(/shpat_error_token_never_return|client-secret-test|client-id-error-test|Authorization|Bearer/i);
+  });
+
+  it('reads Shopify metaobjects with field previews only', async () => {
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      if (url.endsWith('/admin/oauth/access_token')) {
+        return Response.json({ access_token: 'shpat_metaobject_token_never_return', expires_in: 86400, scope: shopifyReadonlyEnv.SHOPIFY_SCOPES });
+      }
+      if (url.endsWith('/admin/api/2026-04/graphql.json')) {
+        expect(String(init?.body)).toContain('metaobjects');
+        expect(String(init?.body)).not.toMatch(/mutation/i);
+        return Response.json({
+          data: {
+            metaobjects: {
+              nodes: [
+                {
+                  id: 'gid://shopify/Metaobject/1',
+                  type: 'lens_spec',
+                  handle: 'cil250',
+                  fields: [
+                    { key: 'sku', type: 'single_line_text_field', value: 'CIL250' },
+                    { key: 'private_note', type: 'multi_line_text_field', value: 'internal value that should be previewed only' },
+                  ],
+                },
+              ],
+            },
+          },
+        });
+      }
+      return new Response('unexpected fetch', { status: 500 });
+    }) as typeof fetch;
+
+    const { body } = await rpc(
+      'tools/call',
+      { name: 'read_shopify_metaobjects', arguments: { type: 'lens_spec', handle: 'cil250', limit: 5 } },
+      'read-shopify-metaobjects',
+      shopifyReadonlyEnv,
+    );
+    const structuredContent = getStructuredContent(body);
+
+    expect(structuredContent).toMatchObject({
+      schemaVersion: 'shopify.live_read.v1',
+      configured: true,
+      query: { kind: 'metaobjects', type: 'lens_spec', handle: 'cil250', limit: 5 },
+      connector: { status: 'ok', source: 'live_shopify_admin_graphql' },
+      metaobjects: [
+        {
+          id: 'gid://shopify/Metaobject/1',
+          type: 'lens_spec',
+          handle: 'cil250',
+          fields: [
+            { key: 'sku', type: 'single_line_text_field', valuePreview: 'CIL250' },
+            { key: 'private_note', type: 'multi_line_text_field', valuePreview: 'internal value that should be previewed only' },
+          ],
+        },
+      ],
+    });
+    expect(JSON.stringify(getResult(body))).not.toMatch(/shpat_metaobject_token_never_return|client-secret-test|client-id-test|Authorization|Bearer/i);
+  });
+
+  it('rejects unsafe Shopify read adapter params without calling Shopify', async () => {
+    let called = false;
+    globalThis.fetch = (async () => {
+      called = true;
+      return new Response('unexpected fetch', { status: 500 });
+    }) as typeof fetch;
+
+    const { body } = await rpc(
+      'tools/call',
+      { name: 'read_shopify_products', arguments: { sku: 'CIL250; mutation { productDelete }' } },
+      'unsafe-shopify-read',
+      shopifyReadonlyEnv,
+    );
+    const structuredContent = getStructuredContent(body);
+    expect(structuredContent).toMatchObject({
+      connector: { status: 'invalid_request' },
+      products: [],
+      safety: { readOnly: true, writesShopify: false },
+    });
+    expect(called).toBe(false);
   });
 
   it('exposes Shopify/UCP readiness as a resource for launch planning', async () => {

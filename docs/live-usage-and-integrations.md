@@ -2,7 +2,7 @@
 
 This guide is for agents and humans using the live public Commonlands MCP endpoint.
 
-The current service is intentionally public, read-only, and fixture-backed. It is useful for lens discovery, optical fit analysis, product lookup, and safe handoff to Commonlands-owned pages. It does not create carts, checkouts, orders, RFQs, customer records, or inventory reservations.
+The current service is intentionally public and read-only. Its user-facing catalog, optics, product lookup, and purchase-handoff flows remain fixture-backed by default. It also exposes credential-gated diagnostic Shopify Admin read tools for product/metaobject summary checks when approved read-only Shopify configuration is present. It does not create carts, checkouts, orders, RFQs, customer records, inventory reservations, Shopify writes, or inventory sync changes.
 
 ## Endpoint
 
@@ -60,6 +60,7 @@ Allowed:
 - Lens comparison.
 - Lens recommendations.
 - Snapshot/status inspection.
+- Credential-gated diagnostic Shopify Admin reads for product/variant/metaobject summaries.
 - Safe purchase-route planning that points users to pages or engineering review.
 
 Not allowed:
@@ -115,22 +116,23 @@ curl -s -X POST 'https://commonlands-mcp.erp-14c.workers.dev/mcp' -H 'content-ty
 
 ## Current limitations
 
-The current live Worker intentionally does not use live Shopify, DynamoDB, AppSync, Acumatica, or customer/account systems. It validates the agent interface, endpoint discovery, response contracts, catalog shape, optical workflow, and safe commerce handoff design.
+The fixture catalog remains the default user-facing source. The live Worker validates the agent interface, endpoint discovery, response contracts, catalog shape, optical workflow, safe commerce handoff design, and now a narrow live Shopify read-only diagnostic seam.
 
 Current limitations:
 
-- Fixture data only.
-- Fixture product/variant IDs, not verified production Shopify IDs.
-- Fixture price and availability, not live Shopify price/availability.
+- Catalog/search/recommendation/purchase-handoff flows still use fixture data.
+- Fixture catalog product/variant IDs, price, and availability are not guaranteed to match production Shopify.
+- Diagnostic Shopify reads are separate tools: `get_shopify_readonly_config_status`, `read_shopify_products`, and `read_shopify_metaobjects`.
+- Diagnostic Shopify reads require approved client credentials/scopes and may return `not_configured`, `missing_scope`, or sanitized Shopify errors if the production app/store cannot exchange a token.
 - No live DynamoDB/AppSync optical reads.
-- No carts, checkouts, orders, RFQs, customer records, inventory reservations, or Shopify writes.
+- No carts, checkouts, orders, RFQs, customer records, inventory reservations, inventory sync changes, or Shopify writes.
 - Datasheets remain gated; responses must not expose direct gated-document URLs.
 
-## Planned Shopify read-only access
+## Shopify read-only diagnostic access
 
-Commonlands is preparing a Shopify Dev Dashboard app for read-only catalog enrichment. The app uses the current Shopify client credential model, not the older custom-app token reveal flow.
+Commonlands has a Shopify Dev Dashboard app path for read-only catalog diagnostics. The app uses the current Shopify client credential model, not the older custom-app token reveal flow. These tools are for controlled verification and future enrichment work; they do not silently replace fixture-backed catalog results.
 
-Approved read scopes for the planned integration:
+Approved read scopes for the diagnostic integration:
 
 - `read_discovery`
 - `read_files`
@@ -152,20 +154,28 @@ Approved read scopes for the planned integration:
 
 These scopes remain read-only. They do not permit carts, checkouts, orders, customer records, inventory mutations, product writes, variant writes, collection writes, tag writes, or metafield writes.
 
+Diagnostic tools:
+
+- `get_shopify_readonly_config_status` reports sanitized config/scope readiness only; it never returns secret values.
+- `read_shopify_products` reads product, variant, selected public metafield/media URL, price, and inventory summary fields through Shopify Admin GraphQL. SKU search is the safest path; handle-only lookup uses Shopify `productByHandle`.
+- `read_shopify_metaobjects` reads metaobjects by type and optional handle, returning redacted field previews only.
+
+All diagnostic results include read-only safety flags and redact tokens/client credentials. Use them to validate connector readiness, not to make final public stock/price claims until the joined catalog snapshot is audited.
+
 ## How to interpret results
 
-Agents and users should label output as fixture-backed when discussing price, availability, Shopify IDs, variant IDs, or catalog completeness.
+Agents and users should label default catalog output as fixture-backed when discussing price, availability, Shopify IDs, variant IDs, or catalog completeness. If a diagnostic Shopify read tool was used, say that explicitly and preserve uncertainty until the joined catalog snapshot is audited.
 
 Good phrasing:
 
 - `The MCP fixture catalog includes CIL078 as a candidate.`
 - `Use the returned product URL as the next step; this MCP server did not create a checkout.`
-- `Price and availability are not live yet.`
+- `Price and availability from the default catalog are fixture-backed unless a diagnostic Shopify read result is explicitly cited.`
 
 Bad phrasing:
 
 - `This item is definitely in stock.`
-- `The live Shopify price is...`
+- `The live Shopify price is final/guaranteed...`
 - `I created a checkout/cart/RFQ for you.`
 
 ## Future custom domain note

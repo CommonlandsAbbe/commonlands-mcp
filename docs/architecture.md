@@ -13,9 +13,10 @@ The Worker is being built in PR-sized phases:
 - Phase 6 adds fixture-backed Shopify Storefront MCP / UCP Catalog compatibility readiness so Commonlands can interoperate with commerce agents without enabling write flows.
 - Phase 7 adds fixture-backed UCP catalog aliases, `/.well-known/ucp`, and a read-only Shopify purchase handoff seam so clients can discover products in Shopify-native shapes without creating transaction state.
 - Phase 8 adds fixture-backed purchase-route options for AI agents and robotics engineers, showing the future Commonlands MCP purchase surface, Shopify-native checkout path, and engineering review path without mutating commerce state.
+- Phase 9 adds credential-gated diagnostic Shopify Admin GraphQL read tools for product/variant/metaobject summary verification while leaving fixture-backed catalog and purchase-handoff flows unchanged.
 - Later phases replace fixtures with a scheduled joined catalog snapshot and connector-backed enrichment behind tests.
 
-No live Shopify, Acumatica, or database behavior is implemented yet. No checkout, cart, inventory mutation, customer-account, order-management, RFQ, or write tool is implemented.
+No live Acumatica or database behavior is implemented yet. Shopify behavior is limited to explicit diagnostic read-only tools. No checkout, cart, inventory mutation, inventory sync change, customer-account, order-management, RFQ, or write tool is implemented.
 
 ## Target endpoint
 
@@ -39,6 +40,7 @@ Keep the Workers.dev endpoint live for now. Do not move `commonlands.com` DNS to
 - No secrets in source control.
 - No direct DocSend URLs in fixtures, responses, logs, or docs.
 - No checkout/cart/customer-account/order/write tools in the public MVP.
+- Live Shopify reads must remain diagnostic and read-only until audited joined snapshots are ready.
 
 ## Deployment metadata
 
@@ -149,3 +151,12 @@ Phase 8 adds `get_purchase_route_options` as a fixture-backed transaction-readin
 - launch prerequisites for approved Shopify Storefront credentials, live product/variant ID mapping, price/availability revalidation, idempotency/audit/rate-limit design, and customer-data policy review.
 
 The tool is not a checkout. It is the typed plan that lets agents preserve optical context and choose the right future purchase path while the public MVP stays read-only and fixture-backed.
+
+## Phase 9 MCP surface
+
+Phase 9 adds narrow live Shopify Admin GraphQL diagnostic reads behind the existing sanitized Shopify read-only config checks:
+
+- `read_shopify_products` reads product, variant, selected public metafield/media URL, price, and inventory summary fields by SKU/search or handle-only lookup. SKU/search uses `productVariants`; handle-only lookup uses Shopify `productByHandle` instead of an undocumented `product_handle` variant filter.
+- `read_shopify_metaobjects` reads metaobjects by type and optional handle, returning redacted field previews only.
+
+These tools do not replace fixture-backed catalog, recommendation, UCP, or purchase-handoff flows. They return `schemaVersion: shopify.live_read.v1`, sanitized connector/token state, explicit read-only safety flags, and empty results on missing config/scope/token/API errors. Tokens, client secrets, client IDs, authorization headers, carts, checkouts, customers, orders, RFQs, inventory mutations, product writes, metafield writes, metaobject writes, file writes, Acumatica writes, database writes, and inventory sync changes remain out of scope.
