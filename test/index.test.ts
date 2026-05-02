@@ -105,6 +105,9 @@ describe('Commonlands MCP Worker', () => {
       'get_lens_details',
       'get_sensor_specs',
       'compute_fov',
+      'match_lenses_to_sensor',
+      'compare_lenses',
+      'recommend_lenses_for_application',
     ]);
     expect(tools[0]?.inputSchema.type).toBe('object');
   });
@@ -261,6 +264,95 @@ describe('Commonlands MCP Worker', () => {
     expect(invalidDistance.body).toMatchObject({
       jsonrpc: '2.0',
       error: { code: -32602, message: 'Invalid params: workingDistanceMm must be positive when provided' },
+    });
+  });
+
+
+  it('matches lenses to a sensor with deterministic ranked tradeoffs', async () => {
+    const { body } = await rpc('tools/call', {
+      name: 'match_lenses_to_sensor',
+      arguments: { sensorPartNumber: 'IMX477', desiredHorizontalFovDeg: 50, maxResults: 3 },
+    });
+    const structuredContent = getStructuredContent(body);
+    const recommendations = structuredContent.recommendations as Array<JsonObject>;
+
+    expect(structuredContent).toMatchObject({
+      schemaVersion: 'recommendations.v1',
+      correctionStatus: 'fixture_recommendation_scaffold',
+      sensor: { partNumber: 'IMX477' },
+    });
+    expect(recommendations).toHaveLength(3);
+    expect(recommendations[0]).toMatchObject({
+      rank: 1,
+      lens: { sku: 'CIL250' },
+      fit: 'good',
+    });
+    expect(recommendations[0]?.tradeoffs).toContain('Horizontal FoV is within 5° of target.');
+    expect(JSON.stringify(structuredContent)).not.toMatch(/docsend/i);
+  });
+
+  it('compares selected lenses and ranks full image-circle coverage above clipped candidates when FoV is otherwise close', async () => {
+    const { body } = await rpc('tools/call', {
+      name: 'compare_lenses',
+      arguments: { lensSkus: ['CIL078', 'CIL250', 'CIL121'], sensorPartNumber: 'IMX477' },
+    });
+    const structuredContent = getStructuredContent(body);
+    const recommendations = structuredContent.recommendations as Array<JsonObject>;
+
+    expect((recommendations[0]?.lens as JsonObject).sku).toBe('CIL121');
+    expect(recommendations.map((item) => (item.lens as JsonObject).sku)).toContain('CIL078');
+    expect(recommendations.map((item) => (item.lens as JsonObject).sku)).toContain('CIL250');
+    expect(recommendations[0]).toMatchObject({
+      rank: 1,
+      lens: { sku: 'CIL121' },
+      imageCircle: { clipped: false },
+    });
+    expect(recommendations.find((item) => (item.lens as JsonObject).sku === 'CIL078')).toMatchObject({
+      lens: { sku: 'CIL078' },
+      imageCircle: { clipped: true },
+    });
+  });
+
+  it('recommends lenses for application preferences without requiring live stock data', async () => {
+    const { body } = await rpc('tools/call', {
+      name: 'recommend_lenses_for_application',
+      arguments: {
+        sensorPartNumber: 'IMX477',
+        application: 'embedded robotics navigation',
+        desiredHorizontalFovDeg: 100,
+        preferLowDistortion: true,
+        requireInStock: true,
+        maxResults: 2,
+      },
+    });
+    const structuredContent = getStructuredContent(body);
+    const recommendations = structuredContent.recommendations as Array<JsonObject>;
+
+    expect(recommendations).toHaveLength(2);
+    expect(recommendations[0]).toMatchObject({ lens: { mount: 'M12' } });
+    expect((recommendations[0]?.tradeoffs as string[]).join(' ')).toMatch(/M12 form factor/i);
+    expect(structuredContent.assumptions).toContain(
+      'Ranking is fixture-backed and excludes live Shopify stock, price breaks, MTF, CRA, and production coefficient parity until integrations are approved.',
+    );
+  });
+
+  it('returns useful recommendation validation errors', async () => {
+    const missingSensor = await rpc('tools/call', {
+      name: 'match_lenses_to_sensor',
+      arguments: { sensorPartNumber: 'NOPE' },
+    });
+    expect(missingSensor.body).toMatchObject({
+      jsonrpc: '2.0',
+      error: { code: -32004, message: 'Sensor not found: NOPE' },
+    });
+
+    const invalidCompare = await rpc('tools/call', {
+      name: 'compare_lenses',
+      arguments: { lensSkus: [], sensorPartNumber: 'IMX477' },
+    });
+    expect(invalidCompare.body).toMatchObject({
+      jsonrpc: '2.0',
+      error: { code: -32602, message: 'Invalid params: lensSkus must include 1-10 SKUs' },
     });
   });
 
