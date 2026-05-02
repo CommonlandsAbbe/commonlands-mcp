@@ -19,9 +19,9 @@ No live Shopify, Acumatica, or database behavior is implemented yet. No checkout
 
 ## Target endpoint
 
-Production target: `https://mcp.commonlands.com/mcp`.
+Current live endpoint: `https://commonlands-mcp.erp-14c.workers.dev/mcp`.
 
-Cloudflare account, route, zone, and deployment environment are placeholders until confirmed by Max/Abbe.
+Keep the Workers.dev endpoint live for now. Do not move `commonlands.com` DNS to Cloudflare just to attach `mcp.commonlands.com`. The future clean custom-domain path is Cloudflare Business custom hostname/proxy setup.
 
 ## Source-of-truth model for later phases
 

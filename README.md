@@ -1,12 +1,21 @@
 # Commonlands MCP
 
-Phase 0 foundation for a read-only Commonlands MCP server on Cloudflare Workers.
+Public read-only Commonlands MCP server on Cloudflare Workers for lens discovery, optics workflows, and safe commerce handoff.
 
-## Phase 0 scope
+## Live endpoint
+
+- MCP endpoint: `https://commonlands-mcp.erp-14c.workers.dev/mcp`
+- UCP discovery: `https://commonlands-mcp.erp-14c.workers.dev/.well-known/ucp`
+- Health check: `https://commonlands-mcp.erp-14c.workers.dev/healthz`
+
+See [`docs/live-usage-and-integrations.md`](docs/live-usage-and-integrations.md) for recommended end-user/agent usage and smoke tests.
+
+## Current scope
 
 - `GET /healthz` returns deploy metadata.
-- `POST /mcp` supports an initialize-only JSON-RPC smoke test.
-- No optics/business tools, Shopify writes, Acumatica writes, database writes, or production credentials.
+- `GET /.well-known/ucp` returns catalog discovery metadata.
+- `POST /mcp` supports MCP JSON-RPC tools/resources for fixture-backed lens discovery, optics calculations, product details, recommendations, and safe purchase handoff planning.
+- No live Shopify writes, Acumatica writes, database writes, cart/checkout/order/customer/inventory mutations, or production credentials.
 
 ## Local commands
 
