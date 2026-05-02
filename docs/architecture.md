@@ -14,9 +14,10 @@ The Worker is being built in PR-sized phases:
 - Phase 7 adds fixture-backed UCP catalog aliases, `/.well-known/ucp`, and a read-only Shopify purchase handoff seam so clients can discover products in Shopify-native shapes without creating transaction state.
 - Phase 8 adds fixture-backed purchase-route options for AI agents and robotics engineers, showing the future Commonlands MCP purchase surface, Shopify-native checkout path, and engineering review path without mutating commerce state.
 - Phase 9 adds credential-gated diagnostic Shopify Admin GraphQL read tools for product/variant/metaobject summary verification while leaving fixture-backed catalog and purchase-handoff flows unchanged.
+- Phase 10 adds an explicitly scoped Shopify Cart UCP proxy for create/get/update/cancel cart state while keeping checkout, payment, order, customer, inventory, and catalog writes blocked.
 - Later phases replace fixtures with a scheduled joined catalog snapshot and connector-backed enrichment behind tests.
 
-No live Acumatica or database behavior is implemented yet. Shopify behavior is limited to explicit diagnostic read-only tools. No checkout, cart, inventory mutation, inventory sync change, customer-account, order-management, RFQ, or write tool is implemented.
+No live Acumatica or database behavior is implemented yet. Shopify behavior is limited to explicit diagnostic read-only tools plus the separately approved Shopify Cart UCP proxy. No checkout, payment completion, order, customer-account, RFQ, inventory mutation, inventory sync change, or catalog write tool is implemented.
 
 ## Target endpoint
 
@@ -30,16 +31,16 @@ Keep the Workers.dev endpoint live for now. Do not move `commonlands.com` DNS to
 - Shopify is enrichment/commerce only: handles, URLs, variants, price, availability, and public mechanical drawing links.
 - Datasheets stay gated through product-page/DocSend flow; the MCP must not emit direct DocSend URLs.
 - Acumatica is not part of the MCP write path. No direct Acumatica writes are permitted.
-- All future tools must stay read-only until an explicit approval and auth model exists.
+- Future tools must stay read-only unless they have explicit approval, a narrow auth/config model, and tests proving the mutation boundary.
 
 ## Safety boundaries
 
-- No Shopify writes.
+- No Shopify catalog writes.
 - No Acumatica writes.
 - No database writes.
 - No secrets in source control.
 - No direct DocSend URLs in fixtures, responses, logs, or docs.
-- No checkout/cart/customer-account/order/write tools in the public MVP.
+- Cart UCP is the only approved Shopify mutation surface; no checkout/customer-account/order/write tools outside that cart boundary.
 - Live Shopify reads must remain diagnostic and read-only until audited joined snapshots are ready.
 
 ## Deployment metadata
@@ -114,13 +115,13 @@ This creates the typed seam future AppSync/DynamoDB, Shopify, and cache refresh 
 
 ## Phase 6 MCP surface
 
-Phase 6 adds `get_shopify_ucp_readiness` and the resource `commonlands://compatibility/shopify-ucp`. The response is a connector-free launch planning contract for Shopify Storefront MCP and UCP Catalog compatibility.
+Phase 6 adds `get_shopify_ucp_readiness` and the resource `commonlands://compatibility/shopify-ucp`. The response is a launch planning contract for Shopify Storefront MCP, UCP Catalog compatibility, and the later approved Cart UCP surface.
 
 It reports:
 
-- the safe read-only UCP catalog target tools Commonlands can map toward: `search_catalog`, `lookup_catalog`, and `get_product`;
+- the safe UCP catalog target tools Commonlands can map toward: `search_catalog`, `lookup_catalog`, and `get_product`, plus explicit Cart UCP tool names when configured;
 - a UCP-shaped fixture sample with product IDs, variant IDs, URLs, categories, USD minor-unit prices, availability, and optical metadata;
-- explicit non-goals for Shopify cart, checkout, customer-account, order, and write flows;
+- explicit non-goals for Shopify checkout, customer-account, order, inventory, and catalog write flows;
 - launch blockers for Shopify read-only IDs/metafields, Cloudflare routing, optional UCP profile metadata, and `/sse` compatibility decisions;
 - why Commonlands should be better than generic storefront MCP for lens selection: FoV, angular resolution, sensor matching, engineering recommendations, and DynamoDB/AppSync optical provenance.
 
@@ -132,7 +133,7 @@ Phase 7 exposes the safe read-only subset of the Shopify/UCP catalog direction a
 - `lookup_catalog` resolves up to 10 fixture identifiers, including Commonlands GID-style product IDs, variant IDs, SKUs, handles, and product URLs.
 - `get_product` returns one UCP-shaped product with variants, USD minor-unit fixture prices, availability status, product URL, public mechanical drawing metadata, gated datasheet policy, and DynamoDB/AppSync optical provenance.
 - `prepare_shopify_purchase_handoff` creates a read-only purchase handoff payload with SKU, quantity, fixture variant ID, product URL, product detail contract, and explicit transaction flags proving that no cart, checkout, order, RFQ, inventory mutation, or Shopify write occurred.
-- `GET /.well-known/ucp` returns a catalog-only discovery profile pointing at `/mcp`.
+- `GET /.well-known/ucp` returns a catalog + cart discovery profile pointing at `/mcp`.
 
 This phase is Commonlands-native and independent: the implementation source of truth is Commonlands optical catalog data plus Shopify-native commerce identifiers. Commonlands now has the contract seam for future Shopify cart/checkout integration without enabling live writes or pretending fixture IDs are production Shopify IDs.
 
@@ -160,3 +161,17 @@ Phase 9 adds narrow live Shopify Admin GraphQL diagnostic reads behind the exist
 - `read_shopify_metaobjects` reads metaobjects by type and optional handle, returning redacted field previews only.
 
 These tools do not replace fixture-backed catalog, recommendation, UCP, or purchase-handoff flows. They return `schemaVersion: shopify.live_read.v1`, sanitized connector/token state, explicit read-only safety flags, and empty results on missing config/scope/token/API errors. Tokens, client secrets, client IDs, authorization headers, carts, checkouts, customers, orders, RFQs, inventory mutations, product writes, metafield writes, metaobject writes, file writes, Acumatica writes, database writes, and inventory sync changes remain out of scope.
+
+
+## Phase 10 MCP surface
+
+Phase 10 adds a narrow Shopify Cart UCP proxy:
+
+- `create_cart` forwards validated line items to Shopify Cart MCP and returns the Shopify-owned cart payload, including `cart.id`, totals/messages, `continue_url`, and `expires_at` when Shopify provides them.
+- `get_cart` refreshes a Shopify-owned cart by `cart.id`.
+- `update_cart` replaces full cart state using Cart MCP PUT semantics; callers must send the complete desired `line_items`/context.
+- `cancel_cart` cancels a Shopify-owned cart by `cart.id` and requires `meta["idempotency-key"]` UUID for retry safety.
+
+Commonlands MCP does not store cart state in a database, KV namespace, Durable Object, cookie, or session memory. Shopify Cart MCP owns cart persistence and mutation. Agents must retain `cart.id` and/or `continue_url` across sessions; if both are lost, Commonlands MCP cannot reliably recover the prior cart.
+
+The Cart UCP proxy validates request shape and safety boundaries before forwarding. It rejects customer/buyer fields, non-ProductVariant IDs, invalid cart IDs, and cancel requests without an idempotency key. Checkout creation, checkout completion, payment, order creation, customer records, discounts, inventory reservation/mutation, product writes, metafield writes, Acumatica writes, database writes, and inventory sync changes remain out of scope.

@@ -9,6 +9,7 @@ import {
 import { computeFov } from './optics';
 import { buildProductPageDetails } from './product-page';
 import { getPurchaseRouteOptions } from './purchase-routes';
+import { callShopifyCartUcp, type CartOperation } from './shopify-cart-ucp';
 import { readShopifyMetaobjects, readShopifyProducts } from './shopify-read-adapter';
 import {
   compareLenses,
@@ -36,6 +37,8 @@ export interface Env {
   SHOPIFY_SHOP_DOMAIN?: string;
   SHOPIFY_SCOPES?: string;
   SHOPIFY_ADMIN_API_VERSION?: string;
+  SHOPIFY_CART_MCP_ENDPOINT?: string;
+  SHOPIFY_UCP_AGENT_PROFILE?: string;
 }
 
 interface JsonRpcRequest {
@@ -240,6 +243,103 @@ const TOOLS: ToolDefinition[] = [
         limit: { type: 'integer', minimum: 1, maximum: 25, default: 10 },
       },
       required: ['type'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'create_cart',
+    title: 'Create Shopify Cart UCP cart',
+    description:
+      'Create a Shopify-owned UCP cart for selected variant line items. Commonlands MCP is a stateless proxy: cart state is stored and mutated by Shopify Cart MCP, not in the Worker.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        meta: { type: 'object', description: 'Optional UCP metadata. ucp-agent.profile is filled from server config when omitted.' },
+        cart: {
+          type: 'object',
+          properties: {
+            line_items: {
+              type: 'array',
+              minItems: 1,
+              maxItems: 25,
+              items: {
+                type: 'object',
+                properties: {
+                  quantity: { type: 'integer', minimum: 1, maximum: 999 },
+                  item: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'], additionalProperties: false },
+                },
+                required: ['quantity', 'item'],
+                additionalProperties: false,
+              },
+            },
+            context: { type: 'object' },
+            signals: { type: 'object' },
+          },
+          required: ['line_items'],
+          additionalProperties: false,
+        },
+      },
+      required: ['cart'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'get_cart',
+    title: 'Get Shopify Cart UCP cart',
+    description: 'Retrieve a Shopify-owned UCP cart by cart id. Cart persistence comes from Shopify; agents must retain cart id or continue_url across sessions.',
+    inputSchema: {
+      type: 'object',
+      properties: { meta: { type: 'object' }, id: { type: 'string', description: 'Shopify Cart gid.' } },
+      required: ['id'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'update_cart',
+    title: 'Update Shopify Cart UCP cart',
+    description:
+      'Replace a Shopify-owned UCP cart full state using Cart MCP PUT semantics. Send the complete desired line_items/context state every time.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        meta: { type: 'object' },
+        id: { type: 'string' },
+        cart: {
+          type: 'object',
+          properties: {
+            line_items: {
+              type: 'array',
+              minItems: 1,
+              maxItems: 25,
+              items: {
+                type: 'object',
+                properties: {
+                  quantity: { type: 'integer', minimum: 1, maximum: 999 },
+                  item: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'], additionalProperties: false },
+                },
+                required: ['quantity', 'item'],
+                additionalProperties: false,
+              },
+            },
+            context: { type: 'object' },
+            signals: { type: 'object' },
+          },
+          required: ['line_items'],
+          additionalProperties: false,
+        },
+      },
+      required: ['id', 'cart'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'cancel_cart',
+    title: 'Cancel Shopify Cart UCP cart',
+    description: 'Cancel a Shopify-owned UCP cart by id. Requires meta["idempotency-key"] UUID for retry safety.',
+    inputSchema: {
+      type: 'object',
+      properties: { meta: { type: 'object' }, id: { type: 'string' } },
+      required: ['id', 'meta'],
       additionalProperties: false,
     },
   },
@@ -673,6 +773,10 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
     return toolResult(id, await readShopifyMetaobjects(env, args));
   }
 
+  if (isCartTool(params.name)) {
+    return toolResult(id, await callShopifyCartUcp(env, params.name, args));
+  }
+
   if (params.name === 'search_catalog') {
     try {
       return toolResult(id, searchCatalog(args));
@@ -741,6 +845,10 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
   }
 
   return rpcError(id, { code: -32601, message: `Tool not found: ${params.name}` });
+}
+
+function isCartTool(name: unknown): name is CartOperation {
+  return name === 'create_cart' || name === 'get_cart' || name === 'update_cart' || name === 'cancel_cart';
 }
 
 function toolResult(id: unknown, structuredContent: unknown): Response {

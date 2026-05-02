@@ -31,17 +31,31 @@ Rules:
 - Prefer least-privilege staging credentials first.
 - Do not log request signatures, tokens, or raw credential material.
 
-### Shopify
+### Shopify Admin diagnostic reads
 
-- `SHOPIFY_STORE_DOMAIN`
-- `SHOPIFY_STOREFRONT_TOKEN`
-- `SHOPIFY_ADMIN_READ_TOKEN` if Admin read access is approved
+- `SHOPIFY_CLIENT_ID`
+- `SHOPIFY_CLIENT_SECRET`
+- `SHOPIFY_SHOP_DOMAIN`
+- `SHOPIFY_SCOPES`
+- `SHOPIFY_ADMIN_API_VERSION` optional; defaults in code when omitted
 
 Rules:
 
-- Read-only access only.
-- No product, variant, inventory, metafield, collection, cart, checkout, or customer writes.
-- Admin read token must be scoped narrowly and stored only in secret storage.
+- Admin API access remains read-only.
+- No product, variant, inventory, metafield, collection, checkout, order, customer, or catalog writes.
+- Client secret/token material must be scoped narrowly and stored only in secret storage.
+
+### Shopify Cart UCP
+
+- `SHOPIFY_CART_MCP_ENDPOINT` non-secret HTTPS merchant Cart MCP endpoint, normally `https://commonlands.com/api/ucp/mcp` when available.
+- `SHOPIFY_UCP_AGENT_PROFILE` optional non-secret profile URL; defaults to the live Commonlands UCP discovery URL.
+
+Rules:
+
+- Cart UCP is the only approved Shopify mutation surface in this MCP.
+- Cart state is stored and mutated by Shopify Cart MCP; Commonlands Worker remains stateless and stores no cart database/session/customer record.
+- No Checkout MCP, payment completion, order creation, customer records, discounts, inventory reservation/mutation, inventory sync changes, product writes, metafield writes, or catalog writes.
+- Do not log returned credentials, signed URLs, or authorization material if Shopify Cart MCP ever adds authenticated transport.
 
 ### Cloudflare
 
