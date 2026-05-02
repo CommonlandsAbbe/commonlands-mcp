@@ -22,6 +22,11 @@ const shopifyCartEnv: Env = {
   SHOPIFY_UCP_AGENT_PROFILE: 'https://commonlands-mcp.erp-14c.workers.dev/.well-known/ucp',
 };
 
+const shopifyCheckoutEnv: Env = {
+  ...shopifyCartEnv,
+  SHOPIFY_CHECKOUT_MCP_ENDPOINT: 'https://commonlands.com/api/ucp/mcp',
+};
+
 type JsonObject = Record<string, unknown>;
 
 interface ToolSummary {
@@ -215,6 +220,11 @@ describe('Commonlands MCP Worker', () => {
       'get_cart',
       'update_cart',
       'cancel_cart',
+      'create_checkout',
+      'get_checkout',
+      'update_checkout',
+      'complete_checkout',
+      'cancel_checkout',
       'search_catalog',
       'lookup_catalog',
       'get_product',
@@ -308,13 +318,13 @@ describe('Commonlands MCP Worker', () => {
         ucpCatalogVersion: '2026-04-08',
       },
       readiness: {
-        status: 'catalog_fixture_ready_cart_proxy_configurable',
+        status: 'catalog_fixture_ready_cart_checkout_proxy_configurable',
         liveConnectors: 'not_connected',
-        cartCheckout: 'cart_ucp_proxy_enabled_checkout_not_enabled',
+        cartCheckout: 'cart_and_checkout_mcp_proxy_enabled_authenticated_completion',
         customerAccounts: 'not_implemented_requires_oauth_and_protected_customer_data',
       },
       ucpCatalog: {
-        compatibleTools: ['search_catalog', 'lookup_catalog', 'get_product', 'create_cart', 'get_cart', 'update_cart', 'cancel_cart'],
+        compatibleTools: ['search_catalog', 'lookup_catalog', 'get_product', 'create_cart', 'get_cart', 'update_cart', 'cancel_cart', 'create_checkout', 'get_checkout', 'update_checkout', 'complete_checkout', 'cancel_checkout'],
         missingRequiredFields: [],
         productCount: 5,
         variantCount: 5,
@@ -1003,6 +1013,304 @@ describe('Commonlands MCP Worker', () => {
     expect(called).toBe(false);
   });
 
+
+  it('keeps Shopify Checkout MCP safe when configuration is missing', async () => {
+    const { body } = await rpc('tools/call', {
+      name: 'create_checkout',
+      arguments: { checkout: { cart_id: 'gid://shopify/Cart/cart_abc123' } },
+    });
+    const structuredContent = getStructuredContent(body);
+
+    expect(structuredContent).toMatchObject({
+      schemaVersion: 'commonlands.checkout_mcp.v1',
+      mode: 'shopify_checkout_mcp_proxy',
+      configured: false,
+      operation: 'create_checkout',
+      persistence: {
+        storedIn: 'shopify_checkout_mcp',
+        mutatedBy: 'shopify_checkout_mcp_tools',
+        commonlandsWorkerState: 'stateless_proxy_no_checkout_storage',
+        resumeAcrossAgentSessions: 'caller_must_retain_checkout_id_or_checkout_url',
+        expiryAuthority: 'shopify_checkout_ttl_expires_at',
+      },
+      connector: { status: 'not_configured', source: 'not_connected' },
+      checkout: null,
+      safety: {
+        createsCheckout: true,
+        completesCheckout: false,
+        createsOrder: false,
+        capturesPayment: false,
+        readsCustomers: false,
+        createsCustomer: false,
+        mutatesInventory: false,
+        touchesInventorySync: false,
+        writesCatalog: false,
+        exposesSecrets: false,
+      },
+    });
+    expect(JSON.stringify(getResult(body))).not.toMatch(/shpat|shpss|accessToken|Authorization|Bearer/i);
+  });
+
+  it('proxies create_checkout to Shopify Checkout MCP without payment or order completion', async () => {
+    const calls: Array<{ url: string; body: string }> = [];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      const body = String(init?.body ?? '');
+      calls.push({ url, body });
+      expect(url).toBe('https://commonlands.com/api/ucp/mcp');
+      expect(body).toContain('create_checkout');
+      expect(body).toContain('gid://shopify/Cart/cart_abc123');
+      expect(body).not.toMatch(/complete_checkout|payment|order|customer|inventory|mutation/i);
+      const payload = JSON.parse(body) as { params: { arguments: { meta: Record<string, unknown>; checkout: Record<string, unknown> } } };
+      expect(payload.params.arguments.meta).toMatchObject({
+        'ucp-agent': { profile: 'https://commonlands-mcp.erp-14c.workers.dev/.well-known/ucp' },
+      });
+      expect(payload.params.arguments.checkout).toEqual({
+        cart_id: 'gid://shopify/Cart/cart_abc123',
+        context: { address_country: 'US', address_region: 'CA', postal_code: '92101' },
+      });
+      return Response.json({
+        jsonrpc: '2.0',
+        id: 'commonlands-checkout-mcp',
+        result: {
+          structuredContent: {
+            checkout: {
+              id: 'gid://shopify/Checkout/chk_abc123',
+              checkout_url: 'https://commonlands.com/checkouts/cn/chk_abc123',
+              status: 'open',
+              accessToken: 'shpat_should_not_leak',
+              totals: [{ type: 'subtotal', amount: 6800, display_text: 'Subtotal' }],
+              expires_at: '2026-05-08T15:17:07Z',
+            },
+          },
+        },
+      });
+    }) as typeof fetch;
+
+    const { body } = await rpc('tools/call', {
+      name: 'create_checkout',
+      arguments: {
+        checkout: {
+          cart_id: 'gid://shopify/Cart/cart_abc123',
+          context: { address_country: 'US', address_region: 'CA', postal_code: '92101' },
+        },
+      },
+    }, 'create-checkout', shopifyCheckoutEnv);
+    const structuredContent = getStructuredContent(body);
+
+    expect(structuredContent).toMatchObject({
+      configured: true,
+      operation: 'create_checkout',
+      connector: { status: 'ok', source: 'shopify_checkout_mcp', endpointHost: 'commonlands.com', messages: [] },
+      checkout: { id: 'gid://shopify/Checkout/chk_abc123', checkout_url: 'https://commonlands.com/checkouts/cn/chk_abc123' },
+      persistence: { resumeAcrossAgentSessions: 'caller_must_retain_checkout_id_or_checkout_url' },
+      safety: { createsCheckout: true, completesCheckout: false, createsOrder: false, capturesPayment: false, mutatesInventory: false, exposesSecrets: false },
+    });
+    expect(calls).toHaveLength(1);
+    expect(JSON.stringify(getResult(body))).not.toMatch(/shpat|shpss|accessToken|Authorization|Bearer/i);
+  });
+
+  it('proxies get_checkout, update_checkout, and cancel_checkout with Shopify-owned checkout persistence', async () => {
+    const toolNames: string[] = [];
+    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as { params: { name: string; arguments: Record<string, unknown> } };
+      toolNames.push(body.params.name);
+      if (body.params.name === 'update_checkout') {
+        expect(body.params.arguments).toMatchObject({
+          id: 'gid://shopify/Checkout/chk_abc123',
+          checkout: { line_items: [{ quantity: 2, item: { id: 'gid://shopify/ProductVariant/12345678901' } }] },
+        });
+      }
+      if (body.params.name === 'cancel_checkout') {
+        expect(body.params.arguments.meta).toMatchObject({ 'idempotency-key': '660e8400-e29b-41d4-a716-446655440002' });
+      }
+      return Response.json({
+        result: {
+          structuredContent: {
+            checkout: {
+              id: body.params.arguments.id ?? 'gid://shopify/Checkout/chk_abc123',
+              checkout_url: 'https://commonlands.com/checkouts/cn/chk_abc123',
+              messages: body.params.name === 'cancel_checkout' ? [{ type: 'info', code: 'checkout_canceled', content: 'Checkout canceled' }] : [],
+            },
+          },
+        },
+      });
+    }) as typeof fetch;
+
+    const get = await rpc('tools/call', { name: 'get_checkout', arguments: { id: 'gid://shopify/Checkout/chk_abc123' } }, 'get-checkout', shopifyCheckoutEnv);
+    const update = await rpc('tools/call', {
+      name: 'update_checkout',
+      arguments: {
+        id: 'gid://shopify/Checkout/chk_abc123',
+        checkout: { line_items: [{ quantity: 2, item: { id: 'gid://shopify/ProductVariant/12345678901' } }] },
+      },
+    }, 'update-checkout', shopifyCheckoutEnv);
+    const cancel = await rpc('tools/call', {
+      name: 'cancel_checkout',
+      arguments: {
+        id: 'gid://shopify/Checkout/chk_abc123',
+        meta: { 'idempotency-key': '660e8400-e29b-41d4-a716-446655440002' },
+      },
+    }, 'cancel-checkout', shopifyCheckoutEnv);
+
+    expect(toolNames).toEqual(['get_checkout', 'update_checkout', 'cancel_checkout']);
+    expect(getStructuredContent(get.body)).toMatchObject({ operation: 'get_checkout', safety: { createsCheckout: false, updatesCheckout: false } });
+    expect(getStructuredContent(update.body)).toMatchObject({ operation: 'update_checkout', safety: { updatesCheckout: true, completesCheckout: false } });
+    expect(getStructuredContent(cancel.body)).toMatchObject({ operation: 'cancel_checkout', safety: { cancelsCheckout: true, createsOrder: false } });
+  });
+
+
+  it('proxies complete_checkout only after Shopify checkout authentication verifies buyer and payment details', async () => {
+    const calls: Array<{ body: string }> = [];
+    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+      const body = String(init?.body ?? '');
+      calls.push({ body });
+      const payload = JSON.parse(body) as { params: { name: string; arguments: Record<string, unknown> } };
+      expect(payload.params.name).toBe('complete_checkout');
+      expect(payload.params.arguments).toMatchObject({
+        id: 'gid://shopify/Checkout/chk_abc123',
+        meta: { 'idempotency-key': '660e8400-e29b-41d4-a716-446655440003' },
+        authentication: {
+          method: 'shopify_checkout_authenticated',
+          buyerVerified: true,
+          paymentAuthorized: true,
+          nameVerified: true,
+          emailVerified: true,
+          phoneVerified: true,
+          addressVerified: true,
+          cardAuthorized: true,
+          authenticatedAt: '2026-05-02T20:15:00.000Z',
+        },
+      });
+      expect(body).not.toMatch(/card_number|4111|cvv|cvc|customer/i);
+      return Response.json({
+        result: {
+          structuredContent: {
+            checkout: {
+              id: 'gid://shopify/Checkout/chk_abc123',
+              status: 'completed',
+              order: { id: 'gid://shopify/Order/ord_123' },
+              authorization: 'Bearer should_not_leak',
+            },
+          },
+        },
+      });
+    }) as typeof fetch;
+
+    const { body } = await rpc('tools/call', {
+      name: 'complete_checkout',
+      arguments: {
+        id: 'gid://shopify/Checkout/chk_abc123',
+        meta: { 'idempotency-key': '660e8400-e29b-41d4-a716-446655440003' },
+        authentication: {
+          method: 'shopify_checkout_authenticated',
+          buyerVerified: true,
+          paymentAuthorized: true,
+          nameVerified: true,
+          emailVerified: true,
+          phoneVerified: true,
+          addressVerified: true,
+          cardAuthorized: true,
+          authenticatedAt: '2026-05-02T20:15:00.000Z',
+        },
+      },
+    }, 'complete-checkout', shopifyCheckoutEnv);
+
+    expect(getStructuredContent(body)).toMatchObject({
+      operation: 'complete_checkout',
+      connector: { status: 'ok', source: 'shopify_checkout_mcp' },
+      checkout: { id: 'gid://shopify/Checkout/chk_abc123', status: 'completed', order: { id: 'gid://shopify/Order/ord_123' } },
+      safety: {
+        completesCheckout: true,
+        createsOrder: true,
+        capturesPayment: true,
+        readsCustomers: false,
+        createsCustomer: false,
+        mutatesInventory: false,
+        writesCatalog: false,
+        exposesSecrets: false,
+      },
+    });
+    expect(calls).toHaveLength(1);
+    expect(JSON.stringify(getResult(body))).not.toMatch(/shpat|shpss|accessToken|Authorization|Bearer/i);
+  });
+
+  it('rejects unsafe Checkout MCP requests before calling Shopify', async () => {
+    let called = false;
+    globalThis.fetch = (async () => {
+      called = true;
+      return new Response('unexpected fetch', { status: 500 });
+    }) as typeof fetch;
+
+    const withBuyer = await rpc('tools/call', {
+      name: 'create_checkout',
+      arguments: { checkout: { cart_id: 'gid://shopify/Cart/cart_abc123', buyer: { email: 'buyer@example.com' } } },
+    }, 'unsafe-checkout-buyer', shopifyCheckoutEnv);
+    expect(getStructuredContent(withBuyer.body)).toMatchObject({
+      connector: { status: 'invalid_request', messages: ['Invalid params: buyer/customer/payment/address fields are not enabled for Commonlands Checkout MCP'] },
+      safety: { readsCustomers: false, createsCustomer: false, completesCheckout: false, createsOrder: false },
+    });
+
+    const withPayment = await rpc('tools/call', {
+      name: 'create_checkout',
+      arguments: { checkout: { cart_id: 'gid://shopify/Cart/cart_abc123', payment: { token: 'tok_123' } } },
+    }, 'unsafe-checkout-payment', shopifyCheckoutEnv);
+    expect(getStructuredContent(withPayment.body)).toMatchObject({ connector: { status: 'invalid_request' } });
+
+    const withDiscount = await rpc('tools/call', {
+      name: 'create_checkout',
+      arguments: { checkout: { cart_id: 'gid://shopify/Cart/cart_abc123', discount_codes: ['FREE'] } },
+    }, 'unsafe-checkout-discount', shopifyCheckoutEnv);
+    expect(getStructuredContent(withDiscount.body)).toMatchObject({
+      connector: { status: 'invalid_request', messages: ['Invalid params: discount and gift-card fields are not enabled for Commonlands Checkout MCP'] },
+    });
+
+    const badCompleteMissingAuth = await rpc('tools/call', {
+      name: 'complete_checkout',
+      arguments: {
+        id: 'gid://shopify/Checkout/chk_abc123',
+        meta: { 'idempotency-key': '660e8400-e29b-41d4-a716-446655440004' },
+      },
+    }, 'unsafe-checkout-complete-missing-auth', shopifyCheckoutEnv);
+    expect(getStructuredContent(badCompleteMissingAuth.body)).toMatchObject({
+      connector: { status: 'invalid_request', messages: ['Invalid params: complete_checkout.authentication is required'] },
+      safety: { completesCheckout: true, capturesPayment: true, readsCustomers: false },
+    });
+
+    const badCompleteRawCard = await rpc('tools/call', {
+      name: 'complete_checkout',
+      arguments: {
+        id: 'gid://shopify/Checkout/chk_abc123',
+        meta: { 'idempotency-key': '660e8400-e29b-41d4-a716-446655440004' },
+        authentication: {
+          method: 'shopify_checkout_authenticated',
+          buyerVerified: true,
+          paymentAuthorized: true,
+          nameVerified: true,
+          emailVerified: true,
+          phoneVerified: true,
+          addressVerified: true,
+          cardAuthorized: true,
+          authenticatedAt: '2026-05-02T20:15:00.000Z',
+          card_number: '4111111111111111',
+        },
+      },
+    }, 'unsafe-checkout-complete-raw-card', shopifyCheckoutEnv);
+    expect(getStructuredContent(badCompleteRawCard.body)).toMatchObject({
+      connector: { status: 'invalid_request', messages: ['Invalid params: complete_checkout.authentication only accepts Shopify verification flags, not payment or buyer data'] },
+    });
+
+    const badCancel = await rpc('tools/call', {
+      name: 'cancel_checkout',
+      arguments: { id: 'gid://shopify/Checkout/chk_abc123' },
+    }, 'unsafe-checkout-cancel', shopifyCheckoutEnv);
+    expect(getStructuredContent(badCancel.body)).toMatchObject({
+      connector: { status: 'invalid_request', messages: ['Invalid params: cancel_checkout requires meta["idempotency-key"] for retry safety'] },
+    });
+
+    expect(called).toBe(false);
+  });
+
   it('exposes Shopify/UCP readiness as a resource for launch planning', async () => {
     const listed = await rpc('resources/list');
     const listedResult = getResult(listed.body);
@@ -1018,7 +1326,7 @@ describe('Commonlands MCP Worker', () => {
       uri: 'commonlands://compatibility/shopify-ucp',
       mimeType: 'application/json',
     });
-    expect(parsed.ucpCatalog.compatibleTools).toEqual(['search_catalog', 'lookup_catalog', 'get_product', 'create_cart', 'get_cart', 'update_cart', 'cancel_cart']);
+    expect(parsed.ucpCatalog.compatibleTools).toEqual(['search_catalog', 'lookup_catalog', 'get_product', 'create_cart', 'get_cart', 'update_cart', 'cancel_cart', 'create_checkout', 'get_checkout', 'update_checkout', 'complete_checkout', 'cancel_checkout']);
     expect(parsed.readiness.liveConnectors).toBe('not_connected');
   });
 
@@ -1321,10 +1629,11 @@ describe('Commonlands MCP Worker', () => {
         'dev.ucp.shopping.catalog.search',
         'dev.ucp.shopping.catalog.lookup',
         'dev.ucp.shopping.cart',
+        'dev.ucp.shopping.checkout',
       ],
     });
     expect(profile).toMatchObject({
-      metadata: { cartPersistence: 'shopify_owned_cart_id_resume', cartBoundary: 'cart_ucp_enabled_no_checkout' },
+      metadata: { cartPersistence: 'shopify_owned_cart_checkout_id_resume', cartBoundary: 'cart_and_checkout_mcp_enabled_authenticated_completion' },
     });
     expect(JSON.stringify(profile)).not.toMatch(/order|customer/i);
   });

@@ -10,6 +10,7 @@ import { computeFov } from './optics';
 import { buildProductPageDetails } from './product-page';
 import { getPurchaseRouteOptions } from './purchase-routes';
 import { callShopifyCartUcp, type CartOperation } from './shopify-cart-ucp';
+import { callShopifyCheckoutMcp, type CheckoutOperation } from './shopify-checkout-mcp';
 import { readShopifyMetaobjects, readShopifyProducts } from './shopify-read-adapter';
 import {
   compareLenses,
@@ -38,6 +39,7 @@ export interface Env {
   SHOPIFY_SCOPES?: string;
   SHOPIFY_ADMIN_API_VERSION?: string;
   SHOPIFY_CART_MCP_ENDPOINT?: string;
+  SHOPIFY_CHECKOUT_MCP_ENDPOINT?: string;
   SHOPIFY_UCP_AGENT_PROFILE?: string;
 }
 
@@ -336,6 +338,133 @@ const TOOLS: ToolDefinition[] = [
     name: 'cancel_cart',
     title: 'Cancel Shopify Cart UCP cart',
     description: 'Cancel a Shopify-owned UCP cart by id. Requires meta["idempotency-key"] UUID for retry safety.',
+    inputSchema: {
+      type: 'object',
+      properties: { meta: { type: 'object' }, id: { type: 'string' } },
+      required: ['id', 'meta'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'create_checkout',
+    title: 'Create Shopify Checkout MCP checkout',
+    description:
+      'Create a Shopify-owned checkout from a selected cart or explicit variant line items. Commonlands MCP is a stateless proxy: checkout state is stored and mutated by Shopify Checkout MCP, not in the Worker. Authentication and payment authorization are deferred until complete_checkout.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        meta: { type: 'object', description: 'Optional UCP metadata. ucp-agent.profile is filled from server config when omitted.' },
+        checkout: {
+          type: 'object',
+          properties: {
+            cart_id: { type: 'string', description: 'Optional Shopify Cart gid to convert/hand off into checkout.' },
+            line_items: {
+              type: 'array',
+              minItems: 1,
+              maxItems: 25,
+              items: {
+                type: 'object',
+                properties: {
+                  quantity: { type: 'integer', minimum: 1, maximum: 999 },
+                  item: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'], additionalProperties: false },
+                },
+                required: ['quantity', 'item'],
+                additionalProperties: false,
+              },
+            },
+            context: { type: 'object' },
+          },
+          additionalProperties: false,
+        },
+      },
+      required: ['checkout'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'get_checkout',
+    title: 'Get Shopify Checkout MCP checkout',
+    description: 'Retrieve a Shopify-owned checkout by checkout id. Checkout persistence comes from Shopify; agents must retain checkout id or checkout_url across sessions.',
+    inputSchema: {
+      type: 'object',
+      properties: { meta: { type: 'object' }, id: { type: 'string', description: 'Shopify Checkout gid.' } },
+      required: ['id'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'update_checkout',
+    title: 'Update Shopify Checkout MCP checkout',
+    description:
+      'Replace allowed Shopify-owned checkout line item/context state. Does not accept raw payment credentials, discount/gift card, or order fields; buyer/address verification is completed through Shopify checkout authentication.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        meta: { type: 'object' },
+        id: { type: 'string' },
+        checkout: {
+          type: 'object',
+          properties: {
+            cart_id: { type: 'string' },
+            line_items: {
+              type: 'array',
+              minItems: 1,
+              maxItems: 25,
+              items: {
+                type: 'object',
+                properties: {
+                  quantity: { type: 'integer', minimum: 1, maximum: 999 },
+                  item: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'], additionalProperties: false },
+                },
+                required: ['quantity', 'item'],
+                additionalProperties: false,
+              },
+            },
+            context: { type: 'object' },
+          },
+          additionalProperties: false,
+        },
+      },
+      required: ['id', 'checkout'],
+      additionalProperties: false,
+    },
+  },
+
+  {
+    name: 'complete_checkout',
+    title: 'Complete Shopify Checkout MCP checkout',
+    description:
+      'Complete a Shopify-owned checkout only after Shopify-hosted checkout authentication verifies buyer name, email, phone, address, and card/payment authorization. Requires meta["idempotency-key"] UUID. Commonlands never accepts raw card numbers, CVV, payment credentials, customer records, or direct order writes.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        meta: { type: 'object', description: 'Required UCP metadata including idempotency-key UUID. ucp-agent.profile is filled from server config when omitted.' },
+        id: { type: 'string', description: 'Shopify Checkout gid.' },
+        authentication: {
+          type: 'object',
+          properties: {
+            method: { type: 'string', enum: ['shopify_checkout_authenticated'] },
+            buyerVerified: { type: 'boolean', const: true },
+            paymentAuthorized: { type: 'boolean', const: true },
+            nameVerified: { type: 'boolean', const: true },
+            emailVerified: { type: 'boolean', const: true },
+            phoneVerified: { type: 'boolean', const: true },
+            addressVerified: { type: 'boolean', const: true },
+            cardAuthorized: { type: 'boolean', const: true },
+            authenticatedAt: { type: 'string', description: 'ISO timestamp from the authenticated Shopify checkout phase.' },
+          },
+          required: ['method', 'buyerVerified', 'paymentAuthorized', 'nameVerified', 'emailVerified', 'phoneVerified', 'addressVerified', 'cardAuthorized', 'authenticatedAt'],
+          additionalProperties: false,
+        },
+      },
+      required: ['id', 'meta', 'authentication'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'cancel_checkout',
+    title: 'Cancel Shopify Checkout MCP checkout',
+    description: 'Cancel a Shopify-owned checkout by id. Requires meta["idempotency-key"] UUID for retry safety. Does not refund, void payment, or cancel an order.',
     inputSchema: {
       type: 'object',
       properties: { meta: { type: 'object' }, id: { type: 'string' } },
@@ -777,6 +906,10 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
     return toolResult(id, await callShopifyCartUcp(env, params.name, args));
   }
 
+  if (isCheckoutTool(params.name)) {
+    return toolResult(id, await callShopifyCheckoutMcp(env, params.name, args));
+  }
+
   if (params.name === 'search_catalog') {
     try {
       return toolResult(id, searchCatalog(args));
@@ -849,6 +982,10 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
 
 function isCartTool(name: unknown): name is CartOperation {
   return name === 'create_cart' || name === 'get_cart' || name === 'update_cart' || name === 'cancel_cart';
+}
+
+function isCheckoutTool(name: unknown): name is CheckoutOperation {
+  return name === 'create_checkout' || name === 'get_checkout' || name === 'update_checkout' || name === 'complete_checkout' || name === 'cancel_checkout';
 }
 
 function toolResult(id: unknown, structuredContent: unknown): Response {
