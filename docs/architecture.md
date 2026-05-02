@@ -7,7 +7,8 @@ The Worker is being built in PR-sized phases:
 - Phase 0 proved deployment and MCP connectivity with `GET /healthz` and initialize-only `POST /mcp`.
 - Phase 1 adds fixture-backed read-only catalog tools/resources while real DynamoDB and Shopify credentials/schema are still unconfirmed.
 - Phase 2 adds fixture-backed FoV calculation scaffolding with explicit parity warnings while real projection coefficients remain unconfirmed.
-- Later phases replace fixtures with a scheduled joined catalog snapshot and add recommendation/product-detail capabilities behind tests.
+- Phase 3 adds fixture-backed engineering recommendation tools for deterministic lens shortlists and tradeoff explanations.
+- Later phases replace fixtures with a scheduled joined catalog snapshot and add product-detail/inventory enrichment behind tests.
 
 No live Shopify, Acumatica, or database behavior is implemented yet. No checkout, cart, inventory mutation, or write tool is implemented.
 
@@ -66,3 +67,14 @@ Phase 2 adds `compute_fov` as a fixture-backed optics contract. It accepts `lens
 - projection model, coefficient count, assumptions, warnings, and calculation model version.
 
 The calculation is intentionally labeled `fixture_parity_scaffold`. It follows the confirmed legacy pattern at a contract level, but production coefficient convention/sign/units must be connected and tested before launch claims.
+
+
+## Phase 3 MCP surface
+
+Phase 3 adds deterministic, fixture-backed recommendation tools:
+
+- `match_lenses_to_sensor` ranks catalog lenses for one sensor, optional horizontal FoV target, optional working distance, mount filter, and max result count.
+- `compare_lenses` ranks a caller-supplied SKU list on the same sensor using the same scoring model.
+- `recommend_lenses_for_application` applies lightweight application preferences such as embedded robotics/M12 preference, machine-vision/C-mount preference, low-distortion preference, and fixture stock preference.
+
+Recommendation responses include `schemaVersion: recommendations.v1`, `correctionStatus: fixture_recommendation_scaffold`, ranked lens summaries, FoV/image-circle/angular-resolution outputs, tradeoffs, warnings, and explicit assumptions. The ranking is a deterministic shortlist helper, not final optical design approval. It intentionally excludes live Shopify stock, price breaks, MTF, CRA, and production coefficient parity until the real integrations and audited fields are available.

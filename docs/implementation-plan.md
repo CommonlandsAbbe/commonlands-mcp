@@ -26,6 +26,12 @@ The repo is being built in PR-sized phases. Each phase must preserve the public 
    - Clips sensor active area by image circle, computes FoV from EFL, caps by max FoV, and reports angular resolution as pixels/degree.
    - Results are explicitly labeled `fixture_parity_scaffold` until real coefficient conventions and production parity fixtures are confirmed.
 
+4. **Phase 3 — Fixture-backed recommendation engine**
+   - Tools: `match_lenses_to_sensor`, `compare_lenses`, `recommend_lenses_for_application`.
+   - Uses deterministic scoring over fixture catalog + FoV outputs.
+   - Explains image-circle coverage, FoV target fit, mount/application preferences, availability uncertainty, and wide-angle/distortion tradeoffs.
+   - Results are explicitly labeled `fixture_recommendation_scaffold` until production ranking inputs are audited.
+
 ## Still out of scope
 
 - Live AppSync/DynamoDB reads or scans.

@@ -7,6 +7,12 @@ import {
   type LensCatalogItem,
 } from './catalog';
 import { computeFov } from './optics';
+import {
+  compareLenses,
+  matchLensesToSensor,
+  recommendLensesForApplication,
+  type LensRecommendation,
+} from './recommendations';
 
 export interface Env {
   ENVIRONMENT?: string;
@@ -101,6 +107,65 @@ const TOOLS: ToolDefinition[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: 'match_lenses_to_sensor',
+    title: 'Match lenses to a sensor',
+    description:
+      'Rank fixture catalog lenses for one sensor using image-circle coverage, FoV target fit, and deterministic optical tradeoffs.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sensorPartNumber: { type: 'string', description: 'Sensor part number, for example IMX477.' },
+        desiredHorizontalFovDeg: { type: 'number', exclusiveMinimum: 0 },
+        workingDistanceMm: { type: 'number', exclusiveMinimum: 0 },
+        mount: { type: 'string', description: 'Optional mount filter, for example M12 or C-mount.' },
+        maxResults: { type: 'integer', minimum: 1, maximum: 10, default: 5 },
+      },
+      required: ['sensorPartNumber'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'compare_lenses',
+    title: 'Compare Commonlands lenses',
+    description: 'Compare selected lens SKUs on the same sensor with the same deterministic scoring model.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        lensSkus: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 10,
+          items: { type: 'string' },
+        },
+        sensorPartNumber: { type: 'string', description: 'Sensor part number, for example IMX477.' },
+        workingDistanceMm: { type: 'number', exclusiveMinimum: 0 },
+      },
+      required: ['lensSkus', 'sensorPartNumber'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'recommend_lenses_for_application',
+    title: 'Recommend lenses for an application',
+    description:
+      'Rank fixture catalog lenses for an application note such as embedded robotics or machine-vision inspection.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sensorPartNumber: { type: 'string', description: 'Sensor part number, for example IMX477.' },
+        application: { type: 'string' },
+        desiredHorizontalFovDeg: { type: 'number', exclusiveMinimum: 0 },
+        workingDistanceMm: { type: 'number', exclusiveMinimum: 0 },
+        mount: { type: 'string' },
+        preferLowDistortion: { type: 'boolean', default: false },
+        requireInStock: { type: 'boolean', default: false },
+        maxResults: { type: 'integer', minimum: 1, maximum: 10, default: 5 },
+      },
+      required: ['sensorPartNumber'],
+      additionalProperties: false,
+    },
+  },
 ];
 
 const RESOURCES = [
@@ -175,7 +240,7 @@ function initializeResponse(id: unknown): Response {
     },
     serverInfo: SERVER_INFO,
     instructions:
-      'Commonlands MCP Phase 1 read-only catalog endpoint. Catalog data is fixture-backed until live DDB/Shopify adapters are configured.',
+      'Commonlands MCP read-only catalog and optics endpoint. Catalog, FoV, and recommendations are fixture-backed until live DDB/Shopify adapters are configured.',
   });
 }
 
@@ -288,15 +353,8 @@ function toolCallResponse(id: unknown, params: unknown): Response {
     if (typeof args.sensorPartNumber !== 'string') {
       return rpcError(id, { code: -32602, message: 'Invalid params: sensorPartNumber is required' });
     }
-    if (
-      args.workingDistanceMm !== undefined &&
-      (typeof args.workingDistanceMm !== 'number' || !Number.isFinite(args.workingDistanceMm) || args.workingDistanceMm <= 0)
-    ) {
-      return rpcError(id, {
-        code: -32602,
-        message: 'Invalid params: workingDistanceMm must be positive when provided',
-      });
-    }
+    const distanceError = validateOptionalPositiveNumber(args.workingDistanceMm, 'workingDistanceMm');
+    if (distanceError) return rpcError(id, distanceError);
 
     const lens = getLensBySku(args.lensSku);
     if (!lens) {
@@ -308,9 +366,72 @@ function toolCallResponse(id: unknown, params: unknown): Response {
       return rpcError(id, { code: -32004, message: `Sensor not found: ${args.sensorPartNumber}` });
     }
 
-    return toolResult(id, computeFov(lens, sensor, args.workingDistanceMm));
+    const workingDistanceMm = typeof args.workingDistanceMm === 'number' ? args.workingDistanceMm : undefined;
+    return toolResult(id, computeFov(lens, sensor, workingDistanceMm));
   }
 
+  if (params.name === 'match_lenses_to_sensor') {
+    const validation = validateRecommendationArgs(args);
+    if (validation) return rpcError(id, validation);
+
+    const input = buildRecommendationInput(args);
+    try {
+      const recommendations = matchLensesToSensor(input);
+      return recommendationToolResult(id, input.sensorPartNumber, recommendations);
+    } catch (error) {
+      return recommendationError(id, error);
+    }
+  }
+
+  if (params.name === 'compare_lenses') {
+    if (!Array.isArray(args.lensSkus) || args.lensSkus.length < 1 || args.lensSkus.length > 10 || args.lensSkus.some((sku) => typeof sku !== 'string' || sku.trim() === '')) {
+      return rpcError(id, { code: -32602, message: 'Invalid params: lensSkus must include 1-10 SKUs' });
+    }
+    if (typeof args.sensorPartNumber !== 'string') {
+      return rpcError(id, { code: -32602, message: 'Invalid params: sensorPartNumber is required' });
+    }
+    const distanceError = validateOptionalPositiveNumber(args.workingDistanceMm, 'workingDistanceMm');
+    if (distanceError) return rpcError(id, distanceError);
+
+    const input = {
+      lensSkus: args.lensSkus as string[],
+      sensorPartNumber: args.sensorPartNumber,
+      ...(typeof args.workingDistanceMm === 'number' ? { workingDistanceMm: args.workingDistanceMm } : {}),
+    };
+    try {
+      const recommendations = compareLenses(input);
+      return recommendationToolResult(id, input.sensorPartNumber, recommendations);
+    } catch (error) {
+      return recommendationError(id, error);
+    }
+  }
+
+  if (params.name === 'recommend_lenses_for_application') {
+    const validation = validateRecommendationArgs(args);
+    if (validation) return rpcError(id, validation);
+    if (args.application !== undefined && typeof args.application !== 'string') {
+      return rpcError(id, { code: -32602, message: 'Invalid params: application must be a string when provided' });
+    }
+    if (args.preferLowDistortion !== undefined && typeof args.preferLowDistortion !== 'boolean') {
+      return rpcError(id, { code: -32602, message: 'Invalid params: preferLowDistortion must be boolean when provided' });
+    }
+    if (args.requireInStock !== undefined && typeof args.requireInStock !== 'boolean') {
+      return rpcError(id, { code: -32602, message: 'Invalid params: requireInStock must be boolean when provided' });
+    }
+
+    const input = {
+      ...buildRecommendationInput(args),
+      ...(typeof args.application === 'string' ? { application: args.application } : {}),
+      ...(typeof args.preferLowDistortion === 'boolean' ? { preferLowDistortion: args.preferLowDistortion } : {}),
+      ...(typeof args.requireInStock === 'boolean' ? { requireInStock: args.requireInStock } : {}),
+    };
+    try {
+      const recommendations = recommendLensesForApplication(input);
+      return recommendationToolResult(id, input.sensorPartNumber, recommendations);
+    } catch (error) {
+      return recommendationError(id, error);
+    }
+  }
 
   return rpcError(id, { code: -32601, message: `Tool not found: ${params.name}` });
 }
@@ -325,6 +446,75 @@ function toolResult(id: unknown, structuredContent: unknown): Response {
       },
     ],
   });
+}
+
+
+function buildRecommendationInput(args: Record<string, unknown>): {
+  sensorPartNumber: string;
+  desiredHorizontalFovDeg?: number;
+  workingDistanceMm?: number;
+  mount?: string;
+  maxResults?: number;
+} {
+  if (typeof args.sensorPartNumber !== 'string') {
+    throw new Error('Invalid params: sensorPartNumber is required');
+  }
+  return {
+    sensorPartNumber: args.sensorPartNumber,
+    ...(typeof args.desiredHorizontalFovDeg === 'number' ? { desiredHorizontalFovDeg: args.desiredHorizontalFovDeg } : {}),
+    ...(typeof args.workingDistanceMm === 'number' ? { workingDistanceMm: args.workingDistanceMm } : {}),
+    ...(typeof args.mount === 'string' ? { mount: args.mount } : {}),
+    ...(typeof args.maxResults === 'number' ? { maxResults: args.maxResults } : {}),
+  };
+}
+
+function recommendationToolResult(
+  id: unknown,
+  sensorPartNumber: string,
+  recommendations: LensRecommendation[],
+): Response {
+  return toolResult(id, {
+    schemaVersion: 'recommendations.v1',
+    correctionStatus: 'fixture_recommendation_scaffold',
+    sensor: { partNumber: sensorPartNumber.trim().toUpperCase() },
+    recommendations,
+    assumptions: [
+      'Ranking is fixture-backed and excludes live Shopify stock, price breaks, MTF, CRA, and production coefficient parity until integrations are approved.',
+      'Scores are deterministic engineering heuristics for shortlist generation, not final optical design approval.',
+    ],
+  });
+}
+
+function validateRecommendationArgs(args: Record<string, unknown>): JsonRpcError | undefined {
+  if (typeof args.sensorPartNumber !== 'string') {
+    return { code: -32602, message: 'Invalid params: sensorPartNumber is required' };
+  }
+  const desiredError = validateOptionalPositiveNumber(args.desiredHorizontalFovDeg, 'desiredHorizontalFovDeg');
+  if (desiredError) return desiredError;
+  const distanceError = validateOptionalPositiveNumber(args.workingDistanceMm, 'workingDistanceMm');
+  if (distanceError) return distanceError;
+  if (args.maxResults !== undefined && (typeof args.maxResults !== 'number' || !Number.isFinite(args.maxResults) || args.maxResults < 1 || args.maxResults > 10)) {
+    return { code: -32602, message: 'Invalid params: maxResults must be between 1 and 10 when provided' };
+  }
+  if (args.mount !== undefined && typeof args.mount !== 'string') {
+    return { code: -32602, message: 'Invalid params: mount must be a string when provided' };
+  }
+  return undefined;
+}
+
+function validateOptionalPositiveNumber(value: unknown, field: string): JsonRpcError | undefined {
+  if (value !== undefined && (typeof value !== 'number' || !Number.isFinite(value) || value <= 0)) {
+    return { code: -32602, message: `Invalid params: ${field} must be positive when provided` };
+  }
+  return undefined;
+}
+
+function recommendationError(id: unknown, error: unknown): Response {
+  const message = error instanceof Error ? error.message : 'Recommendation failed';
+  if (message.startsWith('Sensor not found:') || message.startsWith('Lens not found:')) {
+    return rpcError(id, { code: -32004, message });
+  }
+  return rpcError(id, { code: -32603, message: 'Internal recommendation error' });
 }
 
 function summarizeLens(lens: LensCatalogItem): Omit<LensCatalogItem, 'source'> {

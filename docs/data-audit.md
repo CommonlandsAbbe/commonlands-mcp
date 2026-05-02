@@ -1,6 +1,6 @@
 # Data Audit Plan
 
-The Worker does not yet connect to AWS, Shopify, Acumatica, or a database. Phase 1/2 catalog and FoV behavior is fixture-backed until the real data contracts below are confirmed.
+The Worker does not yet connect to AWS, Shopify, Acumatica, or a database. Phase 1/2/3 catalog, FoV, and recommendation behavior is fixture-backed until the real data contracts below are confirmed.
 
 ## Confirmed from planning/discovery
 
@@ -22,6 +22,7 @@ Capture 5-10 sanitized lens records and document:
 - Primary key and SKU/short-part-number field.
 - Lens optical fields: EFL, image circle, projection model, distortion coefficients, coefficient convention/sign/units, max FoV, F-number, mount.
 - Sensor fields needed for parity fixtures: active area, resolution, pixel size, and any calculator-specific clipping behavior.
+- Recommendation fields: stock confidence, mount/form-factor suitability, MTF/resolution/CRA if reliable, distortion flags, application categories, and any fields that should influence ranking or be explicitly excluded.
 - Shopify join key and collision/missing-record behavior.
 - Mechanical drawing field format: public URL vs file reference.
 - Any fields that are private, gated, deprecated, or unsafe to expose.
@@ -38,3 +39,14 @@ Capture 5-10 sanitized lens records and document:
 2. What are the exact production/staging table names and schemas?
 3. Which Cloudflare environment owns `mcp.commonlands.com`?
 4. Should the launch endpoint support `/sse` for legacy clients, or only Streamable HTTP at `/mcp`?
+
+
+## Recommendation audit requirements
+
+Before replacing Phase 3 fixture ranking with production ranking, confirm:
+
+- Whether stock should be binary in-stock/out-of-stock, quantity bands, or hidden entirely for public MCP callers.
+- Whether MTF, CRA, distortion, and resolution values are complete enough for ranking or should remain informational only.
+- Which application categories Commonlands wants to expose publicly (embedded robotics, machine vision inspection, Raspberry Pi/student, harsh environment, etc.).
+- Whether price should influence ranking or stay out of engineering recommendations.
+- What launch tolerance is acceptable for “recommended” vs. “conditional” candidates.
