@@ -44,11 +44,18 @@ The repo is being built in PR-sized phases. Each phase must preserve the public 
    - Reports snapshot counts, validation status, source provenance, and connector/cache readiness.
    - Keeps future AppSync/DynamoDB, Shopify, and cache adapters behind a tested read-only contract.
 
+7. **Phase 6 — Fixture-backed Shopify/UCP compatibility readiness**
+   - Tool: `get_shopify_ucp_readiness`.
+   - Resource: `commonlands://compatibility/shopify-ucp`.
+   - Maps existing Commonlands catalog/product-detail surfaces toward safe read-only Shopify Storefront MCP and UCP Catalog concepts.
+   - Documents why cart, checkout, customer-account, order, and write flows remain absent from the public MVP.
+   - Provides UCP-shaped fixture product/variant samples with USD minor-unit prices and optical metadata, without live Shopify calls.
+
 ## Still out of scope
 
 - Live AppSync/DynamoDB reads or scans.
 - Shopify API calls or writes.
 - Acumatica reads/writes.
-- Inventory, cart, checkout, RFQ, or order mutation.
+- Inventory, cart, checkout, RFQ, customer-account, or order mutation.
 - Direct DocSend URLs.
 - Production secrets in source control.

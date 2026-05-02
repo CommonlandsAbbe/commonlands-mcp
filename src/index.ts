@@ -14,6 +14,7 @@ import {
   recommendLensesForApplication,
   type LensRecommendation,
 } from './recommendations';
+import { getShopifyUcpReadiness } from './shopify-ucp-readiness';
 import { getCatalogSnapshotStatus } from './snapshot-status';
 
 export interface Env {
@@ -173,6 +174,17 @@ const TOOLS: ToolDefinition[] = [
     },
   },
   {
+    name: 'get_shopify_ucp_readiness',
+    title: 'Get Shopify Storefront/UCP readiness',
+    description:
+      'Report connector-free Shopify Storefront MCP and UCP Catalog compatibility, launch blockers, and Commonlands engineering differentiators.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'recommend_lenses_for_application',
     title: 'Recommend lenses for an application',
     description:
@@ -212,6 +224,12 @@ const RESOURCES = [
     uri: 'commonlands://catalog/snapshot-status',
     name: 'Commonlands joined catalog snapshot status',
     description: 'Fixture-backed catalog validation, join counts, source provenance, and connector-readiness status.',
+    mimeType: 'application/json',
+  },
+  {
+    uri: 'commonlands://compatibility/shopify-ucp',
+    name: 'Commonlands Shopify Storefront/UCP readiness',
+    description: 'Fixture-backed compatibility report for Shopify Storefront MCP and UCP Catalog launch planning.',
     mimeType: 'application/json',
   },
 ];
@@ -329,6 +347,18 @@ function resourceReadResponse(id: unknown, params: unknown): Response {
           uri: params.uri,
           mimeType: 'application/json',
           text: JSON.stringify(getCatalogSnapshotStatus()),
+        },
+      ],
+    });
+  }
+
+  if (params.uri === 'commonlands://compatibility/shopify-ucp') {
+    return rpcResult(id, {
+      contents: [
+        {
+          uri: params.uri,
+          mimeType: 'application/json',
+          text: JSON.stringify(getShopifyUcpReadiness()),
         },
       ],
     });
@@ -466,6 +496,10 @@ function toolCallResponse(id: unknown, params: unknown): Response {
 
   if (params.name === 'get_catalog_snapshot_status') {
     return toolResult(id, getCatalogSnapshotStatus());
+  }
+
+  if (params.name === 'get_shopify_ucp_readiness') {
+    return toolResult(id, getShopifyUcpReadiness());
   }
 
   if (params.name === 'recommend_lenses_for_application') {

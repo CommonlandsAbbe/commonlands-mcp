@@ -22,6 +22,28 @@ interface LensSummary {
   projectionModel: string;
 }
 
+interface ShopifyUcpReadiness {
+  schemaVersion: string;
+  generatedAt: string;
+  compatibilityTarget: {
+    shopifyStorefrontMcp: string;
+    ucpCatalogVersion: string;
+  };
+  readiness: {
+    status: string;
+    liveConnectors: string;
+    cartCheckout: string;
+    customerAccounts: string;
+  };
+  ucpCatalog: {
+    compatibleTools: string[];
+    missingRequiredFields: string[];
+    productCount: number;
+    variantCount: number;
+  };
+  differentiators: string[];
+}
+
 interface CatalogSnapshotStatus {
   schemaVersion: string;
   generatedAt: string;
@@ -135,6 +157,7 @@ describe('Commonlands MCP Worker', () => {
       'compare_lenses',
       'get_product_page_details',
       'get_catalog_snapshot_status',
+      'get_shopify_ucp_readiness',
       'recommend_lenses_for_application',
     ]);
     expect(tools[0]?.inputSchema.type).toBe('object');
@@ -209,6 +232,52 @@ describe('Commonlands MCP Worker', () => {
     });
     const parsed = JSON.parse(contents[0]?.text as string) as { lenses: LensSummary[] };
     expect(parsed.lenses.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it('reports Shopify Storefront/UCP compatibility readiness without live connectors', async () => {
+    const { body } = await rpc('tools/call', { name: 'get_shopify_ucp_readiness', arguments: {} });
+    const structuredContent = getStructuredContent(body) as unknown as ShopifyUcpReadiness;
+
+    expect(structuredContent).toMatchObject({
+      schemaVersion: 'shopify.ucp_readiness.v1',
+      compatibilityTarget: {
+        shopifyStorefrontMcp: 'storefront-mcp',
+        ucpCatalogVersion: '2026-04-08',
+      },
+      readiness: {
+        status: 'fixture_ready_connector_blocked',
+        liveConnectors: 'not_connected',
+        cartCheckout: 'intentionally_not_implemented_read_only_mvp',
+        customerAccounts: 'not_implemented_requires_oauth_and_protected_customer_data',
+      },
+      ucpCatalog: {
+        compatibleTools: ['search_catalog', 'lookup_catalog', 'get_product'],
+        missingRequiredFields: [],
+        productCount: 5,
+        variantCount: 5,
+      },
+    });
+    expect(structuredContent.differentiators).toContain('distortion-aware FoV and angular-resolution tools');
+    expect(JSON.stringify(structuredContent)).not.toMatch(/docsend|shpat|shpss|xox|AKIA|signedUrl|accessToken/i);
+  });
+
+  it('exposes Shopify/UCP readiness as a resource for launch planning', async () => {
+    const listed = await rpc('resources/list');
+    const listedResult = getResult(listed.body);
+    const resources = listedResult.resources as ResourceSummary[];
+    expect(resources.map((resource) => resource.uri)).toContain('commonlands://compatibility/shopify-ucp');
+
+    const { body } = await rpc('resources/read', { uri: 'commonlands://compatibility/shopify-ucp' });
+    const result = getResult(body);
+    const contents = result.contents as Array<JsonObject>;
+    const parsed = JSON.parse(contents[0]?.text as string) as ShopifyUcpReadiness;
+
+    expect(contents[0]).toMatchObject({
+      uri: 'commonlands://compatibility/shopify-ucp',
+      mimeType: 'application/json',
+    });
+    expect(parsed.ucpCatalog.compatibleTools).toEqual(['search_catalog', 'lookup_catalog', 'get_product']);
+    expect(parsed.readiness.liveConnectors).toBe('not_connected');
   });
 
   it('reports joined catalog snapshot status and validation without live connectors', async () => {
