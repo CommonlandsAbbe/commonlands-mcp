@@ -162,6 +162,160 @@ Diagnostic tools:
 
 All diagnostic results include read-only safety flags and redact tokens/client credentials. Use them to validate connector readiness, not to make final public stock/price claims until the joined catalog snapshot is audited.
 
+## Shopify product read syntax and metafield guide
+
+Use the credential-gated `read_shopify_products` tool when an agent needs current Shopify product, variant, metafield, media, price, or inventory-summary data. This is a read-only diagnostic/enrichment path; it does not change the fixture-backed catalog tools and must not be used to create carts, checkouts, orders, customers, inventory changes, or Shopify writes.
+
+### Tool arguments
+
+`read_shopify_products` accepts one of these lookup styles:
+
+- `sku`: Commonlands short part number such as `CIL250`. The tool first tries Shopify's exact `sku:` variant search. If Shopify returns zero results and no explicit `query` was supplied, it retries once as safe text search so short part numbers, MPNs, and product metafields can resolve. The fallback is broader than exact SKU lookup, so preserve the connector message when explaining the result.
+- `handle`: exact Shopify product handle such as `telephoto-25mm-m12-lens-cil250`. Handle lookup uses Shopify `productByHandle` and is the cleanest way to jump from a known product page slug to the live Shopify product.
+- `query`: safe Shopify product/variant search text such as `CIL250` or `M12`. Use this for broad discovery, but do not treat a broad query as an exact product match without checking returned handles/SKUs/metafields.
+- `limit`: `1` to `25`, default `10`.
+- `includeMetafields`: default `true`. Set `false` only when a client needs a lighter response. When true, the adapter currently reads up to the first 100 product metafields and first 100 variant metafields per Shopify connection.
+
+Example JSON-RPC call for a short part number:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "cil250",
+  "method": "tools/call",
+  "params": {
+    "name": "read_shopify_products",
+    "arguments": { "sku": "CIL250", "limit": 1 }
+  }
+}
+```
+
+Example JSON-RPC call for a product handle:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "cil250-handle",
+  "method": "tools/call",
+  "params": {
+    "name": "read_shopify_products",
+    "arguments": { "handle": "telephoto-25mm-m12-lens-cil250", "limit": 1 }
+  }
+}
+```
+
+### Navigating to the product page from a handle
+
+A returned Shopify product `handle` is the product page slug. Build the customer-facing page URL as:
+
+```text
+https://commonlands.com/products/{handle}
+```
+
+For example:
+
+```text
+handle: telephoto-25mm-m12-lens-cil250
+product page: https://commonlands.com/products/telephoto-25mm-m12-lens-cil250
+```
+
+Prefer the returned `productUrl` when present because it is already normalized and allowlisted. If `productUrl` is missing, use the handle pattern above and still treat the URL as a human handoff, not a checkout/cart operation.
+
+### Product information priority order
+
+When multiple fields overlap, agents should rank product facts in this order:
+
+1. **Core Shopify product fields:** `title`, `handle`, `productUrl`, `productType`, `vendor`, `tags`, and product media. The product title and description are pulled directly from Shopify product information, so use these as the primary merchandising/customer-facing wording.
+2. **Variant fields:** variant `sku`, variant title, price, and inventory summary fields. Use these for orderable variant identity and diagnostic availability context, but do not make final stock guarantees until the joined catalog snapshot is audited.
+3. **Commonlands `custom.*` product metafields:** optical specs, compatibility content, engineering assets, product-page sections, and short part number. These are the main structured product enrichment fields.
+4. **Shopping-channel metafields:** `mm-google-shopping.*`, `mc-facebook.*`, and `msft_bingads.*`. Use mostly for MPN/category/status hints or ad/feed diagnostics, not primary engineering truth.
+5. **SEO/review/app metafields:** `global.title_tag`, `global.description_tag`, `product_seo.*`, `booster_apps_seo.*`, `opinew_metafields.*`, and similar app-owned fields. These are secondary display/SEO/review artifacts.
+6. **Metaobjects:** use only when explicitly needed. Commonlands currently relies much more on product metafields than metaobjects.
+
+If a metafield conflicts with a core Shopify product title/description, keep the Shopify product title/description as the displayed product copy and mention the metafield as supporting structured data.
+
+### Commonlands product metafields currently exposed
+
+`read_shopify_products` returns product and variant metafields as objects with:
+
+- `namespace`
+- `key`
+- `type`
+- `valuePreview` when Shopify stores a scalar/string value
+- `reference` when Shopify returns a file, image, or metaobject reference
+
+Important Commonlands product metafields include:
+
+| Metafield | Purpose / interpretation |
+| --- | --- |
+| `custom.short_partnumber` | Commonlands short part number, e.g. `CIL250`. Use for exact human-recognizable lens identity. |
+| `custom.product_group_id` / `custom.group_id` | Product family/grouping identifiers. Useful for grouping mechanical or optical variants. |
+| `custom.headline_description` | Short product-page headline/subtitle. Secondary to Shopify title, useful as a concise description. |
+| `custom.docsend_page` | Spec/document link when present and approved for customer-facing use. Treat as a page/link handoff, not as a secret or credential. |
+| `custom.efl` | Effective focal length. Usually numeric millimeters. |
+| `custom.f_number` | F-number list, e.g. `["2.0"]`. Use for aperture/F# summaries. |
+| `custom.field_of_view` | Human-readable FoV claim, often tied to a sensor/image-circle context, e.g. `20° @ 8.8mm`. Use as display/spec text, not as a substitute for server-side FoV calculations. |
+| `custom.distortion` | Public distortion summary such as `<3%`. Do not infer or expose private distortion coefficients from this. |
+| `custom.image_circle` | Image circle coverage text, e.g. `9.4mm`. |
+| `custom.compatible_resolution` | Human-readable resolution compatibility. |
+| `custom.ir_cut_off_filter` | Variant/filter nomenclature text, including filtered and NIR/no-filter part-number variants. |
+| `custom.construction` | Construction summary such as `All-Glass`. |
+| `custom.weight` | Product weight display text. |
+| `custom.mechanical_drawing` | Mechanical drawing asset URL when present. Prefer allowlisted/public URLs returned in references or value previews. |
+| `custom.mechanical_drawing_alt_text` | Alt text for the mechanical drawing. |
+| `custom.3d_model` | 3D model URL when present. |
+| `custom.mechanical_variants_title` | Titles/labels for mechanical variant sections. |
+| `custom.mechanical_variant_description` | Description of mechanical variant details. |
+| `custom.features_titles` / `custom.features_description` | Product-page feature blocks. Keep list order aligned by index when possible. |
+| `custom.compatibility_company_list` | Compatibility vendor/camera labels, often markdown-style links. |
+| `custom.compatibility_table_result` | Compatibility result values aligned with the company/list entries. |
+| `custom.compatibility_table_result_url` / `custom.compatibility_table_urls` | Compatibility source URLs. |
+| `custom.product_long_description` | Rich-text product description. Product title/description still have priority for primary display copy. |
+| `custom.faq_questions` / `custom.faq_answers` | FAQ content. Keep question/answer list order aligned by index. |
+| `custom.related_collection` | Shopify collection reference. Use as relationship metadata only unless resolved separately. |
+| `custom.date_modified` | Product content/spec modification date. |
+
+Common variant/feed metafields include:
+
+| Metafield | Purpose / interpretation |
+| --- | --- |
+| `mm-google-shopping.mpn` | Manufacturer part number / short part-number hint. Useful when exact Shopify SKU search misses but text search finds a product. |
+| `mm-google-shopping.condition` | Feed condition such as `new`. |
+| `mm-google-shopping.google_product_category` | Google product category ID. |
+| `mm-google-shopping.custom_label_0` / `custom_label_1` | Feed labels such as lens category. |
+| `mc-facebook.google_product_category` | Facebook/Meta catalog category. |
+| `msft_bingads.product_status` / `import_status` | Microsoft feed status diagnostics. |
+| `global.title_tag` / `global.description_tag` | SEO title/description. Secondary to product title/description. |
+| `global.Product`, `global.Product Id`, `global.ProductTypes` | Legacy/import identifiers seen on some products. Use only as diagnostics unless reconciled. |
+| `opinew_metafields.*` | Reviews app artifacts. Do not treat as engineering specs. |
+
+### Part-number nomenclature notes
+
+Commonlands short part numbers such as `CIL250` identify the lens family/optical SKU. Extended part numbers encode mechanical and optical/filter variants.
+
+Interpret suffixes conservatively:
+
+- `-F#.#` means the F-number/aperture. Example: `-F2.0` means F/2.0.
+- `-M12A650` means M12 threaded, mechanical version `A`, with `650` indicating the IR-cut filter cutoff wavelength in nanometers.
+- `-M12ANIR` means M12 threaded, mechanical version `A`, with `NIR` indicating no IR-cut filter on the lens.
+
+Example from `custom.ir_cut_off_filter`:
+
+```text
+P/N With: CIL250-F2.0-M12A650; P/N Without: CIL250-F2.0-M12ANIR
+```
+
+Interpretation:
+
+- `CIL250`: short part number / lens family.
+- `F2.0`: F/2.0 aperture.
+- `M12`: M12 threaded mount/mechanics.
+- `A`: mechanical version A.
+- `650`: 650 nm IR-cut filter cutoff wavelength.
+- `NIR`: no filter on the lens.
+
+Do not expose private distortion coefficients or ask customer agents to calculate distortion-aware FoV/angular resolution from metafields. Server-side optics tools should perform those calculations and return only final computed values, warnings, provenance, and safe status metadata.
+
 ## How to interpret results
 
 Agents and users should label default catalog output as fixture-backed when discussing price, availability, Shopify IDs, variant IDs, or catalog completeness. If a diagnostic Shopify read tool was used, say that explicitly and preserve uncertainty until the joined catalog snapshot is audited.
