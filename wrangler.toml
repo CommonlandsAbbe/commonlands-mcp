@@ -1,0 +1,9 @@
+name = "commonlands-mcp"
+main = "src/index.ts"
+compatibility_date = "2026-05-01"
+workers_dev = true
+
+[vars]
+ENVIRONMENT = "local"
+VERSION = "0.1.0"
+GIT_SHA = "local"
