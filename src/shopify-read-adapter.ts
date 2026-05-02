@@ -775,7 +775,7 @@ function metafieldFragment(includeMetafields: boolean): string {
   }
   return `
     fragment VariantMetafields on ProductVariant {
-      metafields(first: 20) {
+      metafields(first: 100) {
         nodes {
           namespace
           key
@@ -791,7 +791,7 @@ function metafieldFragment(includeMetafields: boolean): string {
       }
     }
     fragment ProductMetafields on Product {
-      metafields(first: 20) {
+      metafields(first: 100) {
         nodes {
           namespace
           key
