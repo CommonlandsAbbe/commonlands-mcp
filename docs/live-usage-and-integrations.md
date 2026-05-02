@@ -1,30 +1,93 @@
-# Live MCP usage and integration guide
+# Live MCP end-user usage guide
 
-## Recommended live usage today
+This guide is for agents and humans using the live public Commonlands MCP endpoint.
 
-Use the public Workers.dev endpoint until Commonlands is ready to pay for the Cloudflare Business custom-hostname/proxy path.
+The current service is intentionally public, read-only, and fixture-backed. It is useful for lens discovery, optical fit analysis, product lookup, and safe handoff to Commonlands-owned pages. It does not create carts, checkouts, orders, RFQs, customer records, or inventory reservations.
+
+## Endpoint
+
+Use the Workers.dev endpoint until Commonlands chooses the Cloudflare Business custom-hostname/proxy path.
 
 - MCP endpoint: `https://commonlands-mcp.erp-14c.workers.dev/mcp`
 - UCP discovery profile: `https://commonlands-mcp.erp-14c.workers.dev/.well-known/ucp`
 - Health check: `https://commonlands-mcp.erp-14c.workers.dev/healthz`
-- Current mode: public, read-only, fixture-backed.
 
-Do not move `commonlands.com` DNS to Cloudflare just to get `mcp.commonlands.com`. The safe current launch path is Workers.dev. The future clean custom-domain path is a Cloudflare Business plan custom hostname/proxy setup.
+Do not move `commonlands.com` DNS to Cloudflare just to get `mcp.commonlands.com`. The safe current launch path is Workers.dev.
+
+## Recommended end-user usage method
+
+Use the server as a remote HTTP MCP endpoint.
+
+Recommended flow:
+
+1. Connect the agent/client to `https://commonlands-mcp.erp-14c.workers.dev/mcp` as a remote MCP server.
+2. If the client supports UCP discovery, point it at `https://commonlands-mcp.erp-14c.workers.dev/.well-known/ucp`.
+3. Ask the agent lens-selection questions in normal language.
+4. Let the agent call MCP tools for catalog search, product lookup, FoV calculation, comparison, recommendation, and purchase-route planning.
+5. Treat returned product links and engineering-review routes as handoff destinations, not as transactions.
+
+Good prompts:
+
+- `Find M12 lenses for a 1/2.8 inch sensor around 80 degrees horizontal FoV.`
+- `Compare CIL078 and CIL250 for a robotics camera application.`
+- `Recommend Commonlands lenses for low-distortion machine vision on a 1/1.8 inch sensor.`
+- `Find the Commonlands product page for CIL078 and tell me what information is still fixture-backed.`
+- `What is the safest purchase route for two CIL078 lenses for prototype evaluation?`
 
 ## What agents should do
 
 Agents should treat this MCP server as an engineering/catalog intelligence endpoint, not a commerce mutation endpoint.
 
-Recommended flow:
+Recommended tool flow:
 
-1. Call `tools/list` to discover the available tools.
+1. Call `tools/list` to discover available tools.
 2. Use `search_catalog` for broad lens discovery.
 3. Use `get_product` or `lookup_catalog` for exact SKU/product resolution.
 4. Use `compute_fov`, `match_lenses_to_sensor`, `compare_lenses`, or `recommend_lenses_for_application` for optical fit and tradeoff analysis.
-5. Use `prepare_shopify_purchase_handoff` or `get_purchase_route_options` only to prepare a safe product/page handoff. These tools do not create a cart, checkout, order, RFQ, customer record, or inventory reservation.
+5. Use `prepare_shopify_purchase_handoff` or `get_purchase_route_options` only to prepare a safe product/page handoff.
 6. Send the buyer to the returned Commonlands product URL or engineering review path for human-visible next steps.
 
+## Current safe boundaries
+
+The live Worker must remain read-only.
+
+Allowed:
+
+- Catalog search.
+- Product lookup.
+- Sensor lookup.
+- FoV and optical calculations.
+- Lens comparison.
+- Lens recommendations.
+- Snapshot/status inspection.
+- Safe purchase-route planning that points users to pages or engineering review.
+
+Not allowed:
+
+- Cart creation or cart updates.
+- Checkout creation.
+- Orders.
+- RFQs.
+- Customer/account access.
+- Inventory reservations or inventory writes.
+- Shopify product, variant, collection, tag, or metafield writes.
+- Acumatica writes.
+- Database writes or live scans.
+- Direct gated-document URLs.
+
 ## Copy-paste smoke tests
+
+Health check:
+
+```bash
+curl -s 'https://commonlands-mcp.erp-14c.workers.dev/healthz' | python3 -m json.tool
+```
+
+Discovery profile:
+
+```bash
+curl -s 'https://commonlands-mcp.erp-14c.workers.dev/.well-known/ucp' | python3 -m json.tool
+```
 
 List available tools:
 
@@ -52,7 +115,7 @@ curl -s -X POST 'https://commonlands-mcp.erp-14c.workers.dev/mcp' -H 'content-ty
 
 ## Current limitations
 
-The current live Worker intentionally does not use live Shopify, DynamoDB, AppSync, Acumatica, or customer/account systems. It is useful for validating the agent interface, endpoint discovery, response contracts, catalog shape, optical workflow, and safe commerce handoff design.
+The current live Worker intentionally does not use live Shopify, DynamoDB, AppSync, Acumatica, or customer/account systems. It validates the agent interface, endpoint discovery, response contracts, catalog shape, optical workflow, and safe commerce handoff design.
 
 Current limitations:
 
@@ -63,124 +126,21 @@ Current limitations:
 - No carts, checkouts, orders, RFQs, customer records, inventory reservations, or Shopify writes.
 - Datasheets remain gated; responses must not expose direct gated-document URLs.
 
-## Shopify integration path
+## How to interpret results
 
-Goal: replace fixture commerce enrichment with live, read-only Shopify data while keeping Commonlands optical data as the source of truth.
+Agents and users should label output as fixture-backed when discussing price, availability, Shopify IDs, variant IDs, or catalog completeness.
 
-### Required Shopify decisions and access
+Good phrasing:
 
-Max or the Shopify admin owner must create/approve a read-only access path. Do not use broad write-capable credentials.
+- `The MCP fixture catalog includes CIL078 as a candidate.`
+- `Use the returned product URL as the next step; this MCP server did not create a checkout.`
+- `Price and availability are not live yet.`
 
-Required decisions:
+Bad phrasing:
 
-- Store domain: currently expected to be `commonlands.myshopify.com`.
-- Product identifier strategy: SKU, handle, Shopify product ID, Shopify variant ID, or a maintained mapping table.
-- Variant mapping rule for lens SKUs.
-- Approved metafield namespaces/keys for mechanical drawings and any public lens metadata mirrored into Shopify.
-- Price and availability freshness rule.
-- Whether Storefront API alone is enough, or whether Admin API read scopes are needed for product/variant/metafield coverage.
-
-### Preferred credentials
-
-Start with read-only Shopify access only:
-
-- `SHOPIFY_STORE_DOMAIN`
-- `SHOPIFY_STOREFRONT_TOKEN` if Storefront API is enough.
-- `SHOPIFY_ADMIN_READ_TOKEN` only if Admin API read access is approved and required for product/variant/metafield data.
-
-Store credentials in Cloudflare Worker secrets or 1Password references for deployment automation. Never commit values to source control, PR text, screenshots, logs, fixtures, or tests.
-
-### Safe implementation sequence
-
-1. Build a Shopify read adapter that supports only product/variant/metafield reads.
-2. Add tests proving there are no mutation operations, no cart/checkout creation, no inventory writes, and no customer/order access.
-3. Map Shopify records into the existing commerce fixture contract: handle, product URL, variant ID, price, availability, public drawing URL.
-4. Validate URLs so only approved `commonlands.com` and Shopify CDN hosts appear in responses.
-5. Keep live Shopify calls out of request-time MCP tools at first. Prefer a scheduled snapshot refresh that writes a joined static/cache artifact for the Worker to read.
-6. Run dry-run/parity checks comparing fixture output to live Shopify-mapped output.
-7. Open a PR with verification output and an access-scope note.
-8. Deploy after review.
-
-### Shopify non-goals until explicit approval
-
-Do not add these without explicit approval and a separate design:
-
-- Cart creation or cart updates.
-- Checkout creation.
-- Orders.
-- Customer accounts or protected customer data.
-- Inventory mutations.
-- Product, variant, collection, tag, or metafield writes.
-- RFQ/customer-record creation.
-
-## DynamoDB/AppSync integration path
-
-Goal: replace fixture optical data with live Commonlands optical/spec truth from the legacy lens calculator data source while preserving the same public MCP response contracts.
-
-### Required AWS decisions and access
-
-Required inputs:
-
-- AWS account/region.
-- Whether the approved path is AppSync GraphQL or direct DynamoDB read.
-- AppSync endpoint and schema/query names, or DynamoDB table/index names and key shapes.
-- Field mapping for SKU, mount, EFL, F-number, image circle, max FoV, projection model, distortion coefficients, resolution, sensor dimensions, and source provenance.
-- Staging vs production read source.
-- Snapshot refresh cadence and owner.
-
-Known legacy context to preserve during mapping:
-
-- Legacy calculator stack used Vue2 + Amplify/AppSync.
-- Lens data source was DynamoDB table `dynamoLensList`.
-- FoV logic depended on alpha/beta/EFL/image circle/max FoV and distortion/projection coefficients.
-
-### Preferred credentials
-
-Use least-privilege read-only access only:
-
-- `AWS_REGION`
-- `APPSYNC_GRAPHQL_ENDPOINT` plus approved read token or SigV4 credential path, or
-- `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` restricted to the exact DynamoDB read actions and resources required.
-
-The IAM policy must not include writes such as `PutItem`, `UpdateItem`, `DeleteItem`, `BatchWriteItem`, or broad table scans unless explicitly approved for a bounded offline audit.
-
-### Safe implementation sequence
-
-1. Document the exact schema/table and field mappings before coding.
-2. Build an optical read adapter behind the current fixture contract.
-3. Add parity fixtures from production exports, not live scans.
-4. Test FoV and recommendation outputs against known legacy calculator examples.
-5. Validate response safety: no secrets, no internal-only fields, no direct gated-document URLs.
-6. Prefer scheduled snapshot generation over request-time DynamoDB/AppSync reads for the public Worker.
-7. Join optical snapshot + Shopify commerce snapshot by SKU/handle/variant mapping.
-8. Expose snapshot freshness and source provenance through `get_catalog_snapshot_status`.
-9. Open a PR with parity proof and verification output.
-
-## Recommended production architecture
-
-Use a two-stage read-only architecture:
-
-1. Scheduled refresh job reads approved sources:
-   - DynamoDB/AppSync for optical/spec truth.
-   - Shopify read-only APIs for commerce enrichment.
-2. Refresh job validates and writes a static joined catalog snapshot.
-3. Public MCP Worker reads only the validated snapshot at request time.
-
-This is safer than making the public MCP Worker call Shopify and DynamoDB live for every agent request. It reduces secret exposure, avoids rate-limit surprises, gives deterministic responses, and makes validation failures visible before data reaches agents.
-
-## Minimum launch checklist for useful live data
-
-Before calling the data useful beyond fixtures:
-
-- Shopify read-only credentials approved and stored outside source control.
-- Shopify product/variant/metafield mapping confirmed for lens SKUs.
-- DynamoDB/AppSync read source approved and field mapping documented.
-- Production optics export or parity examples available.
-- Snapshot join validates SKUs, URLs, prices, availability, optical specs, and provenance.
-- Tests prove no write/mutation paths exist.
-- `npm run verify` passes.
-- Worker deploy smoke tests pass on Workers.dev.
-- `get_catalog_snapshot_status` reports live/snapshot provenance and freshness.
+- `This item is definitely in stock.`
+- `The live Shopify price is...`
+- `I created a checkout/cart/RFQ for you.`
 
 ## Future custom domain note
 

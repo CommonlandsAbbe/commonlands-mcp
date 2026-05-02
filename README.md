@@ -8,7 +8,7 @@ Public read-only Commonlands MCP server on Cloudflare Workers for lens discovery
 - UCP discovery: `https://commonlands-mcp.erp-14c.workers.dev/.well-known/ucp`
 - Health check: `https://commonlands-mcp.erp-14c.workers.dev/healthz`
 
-See [`docs/live-usage-and-integrations.md`](docs/live-usage-and-integrations.md) for recommended agent usage, smoke tests, and the Shopify/DynamoDB integration path.
+See [`docs/live-usage-and-integrations.md`](docs/live-usage-and-integrations.md) for recommended end-user/agent usage and smoke tests.
 
 ## Current scope
 
