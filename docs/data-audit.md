@@ -1,6 +1,6 @@
 # Data Audit Plan
 
-Phase 0 does not connect to AWS, Shopify, Acumatica, or a database. This document records what must be confirmed before Phase 1 uses real data.
+The Worker does not yet connect to AWS, Shopify, Acumatica, or a database. Phase 1 catalog behavior is fixture-backed until the real data contracts below are confirmed.
 
 ## Confirmed from planning/discovery
 
@@ -14,7 +14,7 @@ Phase 0 does not connect to AWS, Shopify, Acumatica, or a database. This documen
   - mechanical drawing URL
 - Mechanical drawing links inspected in the planning sample were Shopify CDN links; DocSend links are separate and must remain gated.
 
-## Required real-data audit before Phase 1
+## Required real-data audit before replacing fixtures
 
 Capture 5-10 sanitized lens records and document:
 
