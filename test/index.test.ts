@@ -104,6 +104,7 @@ describe('Commonlands MCP Worker', () => {
       'search_lenses',
       'get_lens_details',
       'get_sensor_specs',
+      'compute_fov',
     ]);
     expect(tools[0]?.inputSchema.type).toBe('object');
   });
@@ -176,6 +177,91 @@ describe('Commonlands MCP Worker', () => {
     });
     const parsed = JSON.parse(contents[0]?.text as string) as { lenses: LensSummary[] };
     expect(parsed.lenses.length).toBeGreaterThanOrEqual(5);
+  });
+
+
+  it('computes fixture-backed distortion-aware FoV and angular resolution', async () => {
+    const { body } = await rpc('tools/call', {
+      name: 'compute_fov',
+      arguments: { lensSku: 'CIL250', sensorPartNumber: 'IMX477', workingDistanceMm: 1000 },
+    });
+    const structuredContent = getStructuredContent(body);
+
+    expect(structuredContent).toMatchObject({
+      schemaVersion: 'optics.fov.v1',
+      modelVersion: 'fixture-polynomial-fov-0.1.0',
+      correctionStatus: 'fixture_parity_scaffold',
+      lens: { sku: 'CIL250', projectionModel: 'projection_polynomial_theta_even_powers' },
+      sensor: { partNumber: 'IMX477' },
+      imageCircle: { clipped: true, usedWidthMm: 5.761, usedHeightMm: 4.318 },
+      fov: {
+        horizontalDeg: 51.3,
+        verticalDeg: 39.6,
+        diagonalDeg: 61.9,
+        sceneWidthMm: 960.4,
+        sceneHeightMm: 720,
+      },
+      angularResolution: {
+        horizontalPxPerDeg: 79.1,
+        verticalPxPerDeg: 76.8,
+      },
+    });
+    expect(structuredContent.assumptions).toContain(
+      'Uses fixture coefficients until real AppSync/DynamoDB projection data is connected.',
+    );
+    expect((structuredContent.warnings as string[]).join(' ')).toMatch(/image circle/i);
+  });
+
+  it('reports image-circle clipping for sensors larger than lens coverage', async () => {
+    const { body } = await rpc('tools/call', {
+      name: 'compute_fov',
+      arguments: { lensSku: 'CIL051', sensorPartNumber: 'IMX477', workingDistanceMm: 500 },
+    });
+    const structuredContent = getStructuredContent(body);
+
+    expect(structuredContent).toMatchObject({
+      lens: { sku: 'CIL051' },
+      sensor: { partNumber: 'IMX477' },
+      imageCircle: { clipped: true, usedDiagonalMm: 4.5 },
+      fov: { diagonalDeg: 102.7 },
+    });
+    expect((structuredContent.warnings as string[]).join(' ')).toMatch(/image circle/i);
+  });
+
+  it('caps FoV when the raw diagonal exceeds lens max FoV', async () => {
+    const { body } = await rpc('tools/call', {
+      name: 'compute_fov',
+      arguments: { lensSku: 'CIL121', sensorPartNumber: 'IMX477' },
+    });
+    const structuredContent = getStructuredContent(body);
+
+    expect(structuredContent).toMatchObject({
+      lens: { sku: 'CIL121' },
+      sensor: { partNumber: 'IMX477' },
+      imageCircle: { clipped: false, usedDiagonalMm: 7.857 },
+      fov: { horizontalDeg: 19.3, verticalDeg: 14.6, diagonalDeg: 24 },
+    });
+    expect((structuredContent.warnings as string[]).join(' ')).toMatch(/maximum field/i);
+  });
+
+  it('rejects invalid FoV params without throwing', async () => {
+    const missingLens = await rpc('tools/call', {
+      name: 'compute_fov',
+      arguments: { lensSku: 'NOPE', sensorPartNumber: 'IMX477' },
+    });
+    expect(missingLens.body).toMatchObject({
+      jsonrpc: '2.0',
+      error: { code: -32004, message: 'Lens not found: NOPE' },
+    });
+
+    const invalidDistance = await rpc('tools/call', {
+      name: 'compute_fov',
+      arguments: { lensSku: 'CIL250', sensorPartNumber: 'IMX477', workingDistanceMm: -1 },
+    });
+    expect(invalidDistance.body).toMatchObject({
+      jsonrpc: '2.0',
+      error: { code: -32602, message: 'Invalid params: workingDistanceMm must be positive when provided' },
+    });
   });
 
   it('returns JSON-RPC errors for invalid tool calls without throwing', async () => {

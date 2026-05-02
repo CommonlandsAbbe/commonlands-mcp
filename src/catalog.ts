@@ -13,6 +13,11 @@ export interface LensCatalogItem {
   maxFovDeg: number;
   projectionModel: 'projection_polynomial_theta_even_powers';
   coefficientCount: number;
+  fixtureDistortion?: {
+    alpha: number;
+    beta: number;
+    notes: string;
+  };
   mechanicalDrawingUrl?: string;
   datasheet: {
     gated: true;
@@ -82,6 +87,7 @@ export const CATALOG_SNAPSHOT: CatalogSnapshot = {
       maxFovDeg: 130,
       projectionModel: 'projection_polynomial_theta_even_powers',
       coefficientCount: 4,
+      fixtureDistortion: { alpha: 1, beta: 0.02, notes: 'Placeholder wide-angle parity scaffold.' },
       mechanicalDrawingUrl: 'https://cdn.shopify.com/s/files/1/0624/5391/3805/files/CIL078.pdf',
       datasheet: GATED_DATASHEET,
       source: SOURCE,
@@ -101,6 +107,7 @@ export const CATALOG_SNAPSHOT: CatalogSnapshot = {
       maxFovDeg: 72,
       projectionModel: 'projection_polynomial_theta_even_powers',
       coefficientCount: 4,
+      fixtureDistortion: { alpha: 1, beta: 0, notes: 'Rectilinear baseline until production coefficients are connected.' },
       mechanicalDrawingUrl: 'https://cdn.shopify.com/s/files/1/0624/5391/3805/files/CIL250.pdf',
       datasheet: GATED_DATASHEET,
       source: SOURCE,
@@ -120,6 +127,7 @@ export const CATALOG_SNAPSHOT: CatalogSnapshot = {
       maxFovDeg: 40,
       projectionModel: 'projection_polynomial_theta_even_powers',
       coefficientCount: 4,
+      fixtureDistortion: { alpha: 1, beta: 0, notes: 'Rectilinear baseline until production coefficients are connected.' },
       mechanicalDrawingUrl: 'https://cdn.shopify.com/s/files/1/0624/5391/3805/files/CIL350.pdf',
       datasheet: GATED_DATASHEET,
       source: SOURCE,
@@ -139,6 +147,7 @@ export const CATALOG_SNAPSHOT: CatalogSnapshot = {
       maxFovDeg: 150,
       projectionModel: 'projection_polynomial_theta_even_powers',
       coefficientCount: 4,
+      fixtureDistortion: { alpha: 1, beta: 0.05, notes: 'Placeholder fisheye/wide-angle parity scaffold.' },
       mechanicalDrawingUrl: 'https://cdn.shopify.com/s/files/1/0624/5391/3805/files/CIL051.pdf',
       datasheet: GATED_DATASHEET,
       source: SOURCE,
@@ -155,9 +164,10 @@ export const CATALOG_SNAPSHOT: CatalogSnapshot = {
       eflMm: 16.0,
       fNumber: 1.8,
       imageCircleMm: 11.0,
-      maxFovDeg: 32,
+      maxFovDeg: 24,
       projectionModel: 'projection_polynomial_theta_even_powers',
       coefficientCount: 4,
+      fixtureDistortion: { alpha: 1, beta: 0, notes: 'Rectilinear baseline until production coefficients are connected.' },
       mechanicalDrawingUrl: 'https://cdn.shopify.com/s/files/1/0624/5391/3805/files/CIL121.pdf',
       datasheet: GATED_DATASHEET,
       source: SOURCE,

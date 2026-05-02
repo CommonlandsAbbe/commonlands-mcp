@@ -1,20 +1,36 @@
-# Phase 0 Implementation Plan
+# Implementation Plan
 
 Source reference: `/Users/maxbot1/agents202602/clawd-zernike/references/mcp/commonlands-mcp-phased-implementation-plan.md`.
 
-This repo implements Phase 0 only:
+The repo is being built in PR-sized phases. Each phase must preserve the public read-only boundary, pass lint/typecheck/tests, and avoid secrets or live production writes.
 
-1. Cloudflare Worker foundation.
-2. TypeScript strict mode.
-3. Lint, typecheck, tests, and CI.
-4. `GET /healthz` deploy smoke endpoint.
-5. `POST /mcp` initialize-only JSON-RPC smoke endpoint.
-6. Architecture, data audit, and secrets documentation.
+## Completed phases
 
-Out of scope until later phases:
+1. **Phase 0 — Worker foundation**
+   - Cloudflare Worker scaffold.
+   - TypeScript strict mode.
+   - Lint, typecheck, tests, and CI.
+   - `GET /healthz` deploy smoke endpoint.
+   - `POST /mcp` initialize JSON-RPC smoke endpoint.
+   - Architecture, data audit, and secrets documentation.
 
-- Lens search or detail tools.
-- FoV or optics calculations.
-- Shopify enrichment.
-- DynamoDB/AppSync adapters.
-- Inventory, cart, checkout, RFQ, or write flows.
+2. **Phase 1 — Fixture-backed catalog baseline**
+   - `tools/list`, `tools/call`, `resources/list`, and `resources/read`.
+   - Tools: `search_lenses`, `get_lens_details`, `get_sensor_specs`.
+   - Resources: `commonlands://catalog/lenses`, `commonlands://catalog/sensors`.
+   - Safe public URL validation and DocSend leak guardrails.
+
+3. **Phase 2 — Fixture-backed FoV parity scaffold**
+   - Tool: `compute_fov`.
+   - Uses fixture catalog records only.
+   - Clips sensor active area by image circle, computes FoV from EFL, caps by max FoV, and reports angular resolution as pixels/degree.
+   - Results are explicitly labeled `fixture_parity_scaffold` until real coefficient conventions and production parity fixtures are confirmed.
+
+## Still out of scope
+
+- Live AppSync/DynamoDB reads or scans.
+- Shopify API calls or writes.
+- Acumatica reads/writes.
+- Inventory, cart, checkout, RFQ, or order mutation.
+- Direct DocSend URLs.
+- Production secrets in source control.

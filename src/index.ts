@@ -6,6 +6,7 @@ import {
   searchLenses,
   type LensCatalogItem,
 } from './catalog';
+import { computeFov } from './optics';
 
 export interface Env {
   ENVIRONMENT?: string;
@@ -77,6 +78,26 @@ const TOOLS: ToolDefinition[] = [
         partNumber: { type: 'string', description: 'Sensor part number, for example IMX477.' },
       },
       required: ['partNumber'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'compute_fov',
+    title: 'Compute lens field of view',
+    description:
+      'Compute fixture-backed FoV, scene size, and angular resolution for a Commonlands lens and sensor pair.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        lensSku: { type: 'string', description: 'Commonlands short part number, for example CIL250.' },
+        sensorPartNumber: { type: 'string', description: 'Sensor part number, for example IMX477.' },
+        workingDistanceMm: {
+          type: 'number',
+          exclusiveMinimum: 0,
+          description: 'Optional working distance used to estimate scene width and height.',
+        },
+      },
+      required: ['lensSku', 'sensorPartNumber'],
       additionalProperties: false,
     },
   },
@@ -260,10 +281,41 @@ function toolCallResponse(id: unknown, params: unknown): Response {
     });
   }
 
+  if (params.name === 'compute_fov') {
+    if (typeof args.lensSku !== 'string') {
+      return rpcError(id, { code: -32602, message: 'Invalid params: lensSku is required' });
+    }
+    if (typeof args.sensorPartNumber !== 'string') {
+      return rpcError(id, { code: -32602, message: 'Invalid params: sensorPartNumber is required' });
+    }
+    if (
+      args.workingDistanceMm !== undefined &&
+      (typeof args.workingDistanceMm !== 'number' || !Number.isFinite(args.workingDistanceMm) || args.workingDistanceMm <= 0)
+    ) {
+      return rpcError(id, {
+        code: -32602,
+        message: 'Invalid params: workingDistanceMm must be positive when provided',
+      });
+    }
+
+    const lens = getLensBySku(args.lensSku);
+    if (!lens) {
+      return rpcError(id, { code: -32004, message: `Lens not found: ${args.lensSku}` });
+    }
+
+    const sensor = getSensorByPartNumber(args.sensorPartNumber);
+    if (!sensor) {
+      return rpcError(id, { code: -32004, message: `Sensor not found: ${args.sensorPartNumber}` });
+    }
+
+    return toolResult(id, computeFov(lens, sensor, args.workingDistanceMm));
+  }
+
+
   return rpcError(id, { code: -32601, message: `Tool not found: ${params.name}` });
 }
 
-function toolResult(id: unknown, structuredContent: Record<string, unknown>): Response {
+function toolResult(id: unknown, structuredContent: unknown): Response {
   return rpcResult(id, {
     structuredContent,
     content: [
@@ -276,7 +328,7 @@ function toolResult(id: unknown, structuredContent: Record<string, unknown>): Re
 }
 
 function summarizeLens(lens: LensCatalogItem): Omit<LensCatalogItem, 'source'> {
-  const summary: Omit<LensCatalogItem, 'source'> = {
+  const summary: Omit<LensCatalogItem, 'source' | 'fixtureDistortion'> = {
     sku: lens.sku,
     title: lens.title,
     handle: lens.handle,
