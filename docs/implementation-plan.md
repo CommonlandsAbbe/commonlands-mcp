@@ -59,6 +59,12 @@ The repo is being built in PR-sized phases. Each phase must preserve the public 
    - Purchase handoff returns selected SKU, fixture variant ID, product URL, quantity, and explicit no-mutation transaction status; it does not create carts, checkout, orders, RFQs, or Shopify writes.
    - This establishes a connector-free Commonlands catalog/search/handoff contract while keeping the implementation fully Commonlands-owned and pointed toward Shopify-native commerce.
 
+9. **Phase 8 — Fixture-backed purchase route options**
+   - Tool: `get_purchase_route_options`.
+   - Returns safe route options for future Commonlands MCP dedicated purchase, Shopify-native checkout, and engineering review request.
+   - Preserves SKU, quantity, optional sensor, buyer intent, product details, fixture variant ID, and source provenance for AI agents and robotics engineers.
+   - Includes hard transaction-safety flags and launch gates; it does not create carts, checkout, orders, RFQs, customer records, inventory reservations, Shopify writes, or Commonlands order writes.
+
 ## Still out of scope
 
 - Live AppSync/DynamoDB reads or scans.
