@@ -64,6 +64,9 @@ type NormalizedCart = {
 
 const DEFAULT_AGENT_PROFILE = 'https://commonlands-mcp.erp-14c.workers.dev/.well-known/ucp';
 const JSON_RPC_ID = 'commonlands-cart-ucp';
+const COMMONLANDS_SHOPIFY_HOSTS = new Set(['commonlands.com', 'commonlands-camera-components.myshopify.com']);
+const SHOPIFY_STOREFRONT_MCP_PATH = '/api/mcp';
+const SHOPIFY_UCP_MCP_PATH = '/api/ucp/mcp';
 
 export async function callShopifyCartUcp(
   env: ShopifyCartUcpEnv,
@@ -73,7 +76,7 @@ export async function callShopifyCartUcp(
   const endpoint = parseEndpoint(env.SHOPIFY_CART_MCP_ENDPOINT);
   if ('error' in endpoint) return withConnector(baseResult(operation), 'not_configured', 'not_connected', [endpoint.error]);
 
-  const normalized = normalizeArgs(operation, args, env.SHOPIFY_UCP_AGENT_PROFILE);
+  const normalized = normalizeArgs(endpoint.kind, operation, args, env.SHOPIFY_UCP_AGENT_PROFILE);
   if ('error' in normalized) return withConnector(baseResult(operation), 'invalid_request', 'not_connected', [normalized.error]);
 
   let response: Response;
@@ -85,7 +88,7 @@ export async function callShopifyCartUcp(
         jsonrpc: '2.0',
         id: JSON_RPC_ID,
         method: 'tools/call',
-        params: { name: operation, arguments: normalized.args },
+        params: { name: upstreamOperation(endpoint.kind, operation), arguments: upstreamArgs(endpoint.kind, operation, normalized.args) },
       }),
     });
   } catch (error) {
@@ -103,7 +106,7 @@ export async function callShopifyCartUcp(
     return withConnector(baseResult(operation), 'shopify_error', 'not_connected', [redactSensitiveText(body.data.error.message ?? 'Shopify Cart MCP returned a JSON-RPC error.')], endpoint.url.hostname);
   }
 
-  const cart = body.data.result?.structuredContent?.cart ?? null;
+  const cart = extractCart(body.data.result);
   return {
     ...baseResult(operation),
     configured: true,
@@ -117,10 +120,40 @@ export async function callShopifyCartUcp(
   };
 }
 
-function normalizeArgs(operation: CartOperation, args: CartArgs, agentProfile: string | undefined): { args: CartArgs } | { error: string } {
+function upstreamOperation(kind: EndpointKind, operation: CartOperation): string {
+  if (kind === 'shopify_storefront_mcp' && operation === 'create_cart') return 'update_cart';
+  return operation;
+}
+
+function upstreamArgs(kind: EndpointKind, operation: CartOperation, args: CartArgs): CartArgs {
+  if (kind !== 'shopify_storefront_mcp') return args;
+  if (operation === 'get_cart') return { cart_id: args.id };
+  if (operation === 'create_cart') return storefrontUpdateArgs(undefined, args.cart);
+  if (operation === 'update_cart') return storefrontUpdateArgs(args.id, args.cart);
+  return args;
+}
+
+function storefrontUpdateArgs(cartId: unknown, cart: unknown): CartArgs {
+  const lineItems = isRecord(cart) && Array.isArray(cart.line_items) ? cart.line_items : [];
+  const addItems = lineItems
+    .filter(isRecord)
+    .map((lineItem) => ({
+      product_variant_id: isRecord(lineItem.item) ? lineItem.item.id : undefined,
+      quantity: lineItem.quantity,
+    }));
+  return {
+    ...(typeof cartId === 'string' ? { cart_id: cartId } : {}),
+    add_items: addItems,
+  };
+}
+
+function normalizeArgs(kind: EndpointKind, operation: CartOperation, args: CartArgs, agentProfile: string | undefined): { args: CartArgs } | { error: string } {
   if (!isRecord(args)) return { error: 'Invalid params: arguments must be an object' };
   const meta = normalizeMeta(args.meta, agentProfile);
   if ('error' in meta) return meta;
+  if (kind === 'shopify_storefront_mcp' && operation === 'cancel_cart') {
+    return { error: 'Invalid params: cancel_cart requires the Shopify UCP endpoint; the live standard Storefront MCP endpoint exposes get_cart and update_cart only' };
+  }
 
   if (operation === 'create_cart') {
     const cart = normalizeCart(args.cart);
@@ -158,7 +191,7 @@ function normalizeMeta(value: unknown, agentProfile: string | undefined): { valu
 
 function normalizeCart(value: unknown): { value: NormalizedCart } | { error: string } {
   if (!isRecord(value)) return { error: 'Invalid params: cart is required' };
-  if ('buyer' in value) return { error: 'Invalid params: buyer/customer fields are not enabled for Commonlands Cart UCP' };
+  if ('buyer' in value || 'buyer_identity' in value) return { error: 'Invalid params: buyer/customer fields are not enabled for Commonlands Cart MCP' };
 
   const lineItems = value.line_items;
   if (!Array.isArray(lineItems) || lineItems.length < 1 || lineItems.length > 25) {
@@ -225,16 +258,22 @@ function readIdempotencyKey(meta: Record<string, unknown>): string | undefined {
     : undefined;
 }
 
-function parseEndpoint(value: string | undefined): { url: URL } | { error: string } {
+type EndpointKind = 'shopify_storefront_mcp' | 'shopify_ucp_mcp';
+
+function parseEndpoint(value: string | undefined): { url: URL; kind: EndpointKind } | { error: string } {
   if (!value || value.trim() === '') {
-    return { error: 'Add SHOPIFY_CART_MCP_ENDPOINT as the Shopify Cart MCP JSON-RPC endpoint, for example https://commonlands.com/api/ucp/mcp.' };
+    return { error: 'Add SHOPIFY_CART_MCP_ENDPOINT as the Shopify Cart MCP JSON-RPC endpoint, for example https://commonlands.com/api/mcp.' };
   }
   try {
     const url = new URL(value.trim());
     if (url.protocol !== 'https:') return { error: 'SHOPIFY_CART_MCP_ENDPOINT must be an HTTPS URL.' };
-    if (!url.pathname.endsWith('/api/ucp/mcp')) return { error: 'SHOPIFY_CART_MCP_ENDPOINT must point to /api/ucp/mcp.' };
-    if (url.hostname !== 'commonlands.com') return { error: 'SHOPIFY_CART_MCP_ENDPOINT must be hosted on commonlands.com.' };
-    return { url };
+    if (url.pathname !== SHOPIFY_STOREFRONT_MCP_PATH && url.pathname !== SHOPIFY_UCP_MCP_PATH) {
+      return { error: 'SHOPIFY_CART_MCP_ENDPOINT must point to /api/mcp or /api/ucp/mcp.' };
+    }
+    if (!COMMONLANDS_SHOPIFY_HOSTS.has(url.hostname)) {
+      return { error: 'SHOPIFY_CART_MCP_ENDPOINT must be hosted on commonlands.com or commonlands-camera-components.myshopify.com.' };
+    }
+    return { url, kind: url.pathname === SHOPIFY_STOREFRONT_MCP_PATH ? 'shopify_storefront_mcp' : 'shopify_ucp_mcp' };
   } catch {
     return { error: 'SHOPIFY_CART_MCP_ENDPOINT must be a valid HTTPS URL.' };
   }
@@ -311,11 +350,25 @@ interface ShopifyCartMcpResponse {
     structuredContent?: {
       cart?: unknown;
     };
+    content?: Array<{ type?: string; text?: string }>;
   };
   error?: {
     code?: number;
     message?: string;
   };
+}
+
+function extractCart(result: ShopifyCartMcpResponse['result']): unknown | null {
+  if (result?.structuredContent && 'cart' in result.structuredContent) return result.structuredContent.cart ?? null;
+  const text = result?.content?.find((item) => item.type === 'text' && typeof item.text === 'string')?.text;
+  if (!text) return null;
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (isRecord(parsed) && 'cart' in parsed) return parsed.cart ?? null;
+    return parsed;
+  } catch {
+    return null;
+  }
 }
 
 async function readJson<T>(response: Response, context: string): Promise<{ data: T } | { error: string }> {

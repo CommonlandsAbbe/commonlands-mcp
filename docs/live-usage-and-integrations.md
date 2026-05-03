@@ -166,16 +166,16 @@ Diagnostic tools:
 
 All diagnostic results include read-only safety flags and redact tokens/client credentials. Use them to validate connector readiness, not to make final public stock/price claims until the joined catalog snapshot is audited.
 
-## Shopify Cart UCP ordering path
+## Shopify Cart MCP ordering path
 
-Cart UCP is the optional Shopify-owned first ordering step for agents after explicit approval and enablement. It lets an agent build and revise a Shopify cart before the buyer commits to checkout. It does not complete payments, create orders, create customer records, reserve inventory, or mutate product/catalog/inventory data.
+Cart MCP is the optional Shopify-owned first ordering step for agents after explicit approval and enablement. It lets an agent build and revise a Shopify cart before the buyer commits to checkout. It does not complete payments, create orders, create customer records, reserve inventory, or mutate product/catalog/inventory data.
 
 By default these tools are hidden from `tools/list` and return `Tool not found` from `tools/call`. When approved, configured, and enabled with `ENABLE_COMMERCE_MUTATION_TOOLS=true`, Commonlands exposes these MCP tools:
 
 - `create_cart`: create a Shopify-owned cart from selected Shopify `ProductVariant` GIDs and quantities.
 - `get_cart`: fetch the latest Shopify-owned cart state by cart ID.
-- `update_cart`: replace the full Shopify-owned cart state. Treat this as PUT semantics: send the complete intended `line_items` and context each time.
-- `cancel_cart`: cancel a Shopify-owned cart by cart ID. Requires `meta["idempotency-key"]` as a UUID for retry safety.
+- `update_cart`: update a Shopify-owned cart. On the confirmed standard Storefront MCP endpoint, Commonlands maps `line_items` to Shopify `add_items`; if a validated UCP Cart MCP endpoint is used later, treat updates as full-state PUT semantics and send the complete intended `line_items`/context each time.
+- `cancel_cart`: UCP-only cancel path. The currently confirmed standard Storefront MCP endpoint exposes `get_cart` and `update_cart`, not cancel, so Commonlands rejects `cancel_cart` unless the endpoint is switched to a validated UCP Cart MCP endpoint.
 
 ### Where cart state is stored and mutated
 
@@ -183,7 +183,7 @@ Cart state is stored by Shopify Cart MCP, not by the Commonlands Worker. The Com
 
 1. The agent calls Commonlands MCP `create_cart`, `get_cart`, `update_cart`, or `cancel_cart`.
 2. Commonlands validates the request shape and safety boundaries.
-3. Commonlands forwards the request to `SHOPIFY_CART_MCP_ENDPOINT`, normally Shopify's merchant UCP endpoint at `https://commonlands.com/api/ucp/mcp` when available.
+3. Commonlands forwards the request to `SHOPIFY_CART_MCP_ENDPOINT`. Current confirmed Commonlands cart path uses Shopify's standard Storefront MCP endpoint at `https://commonlands-camera-components.myshopify.com/api/mcp`; the Worker maps the Commonlands `create_cart` facade to Shopify's live `update_cart` create-or-update operation. If Shopify UCP cart at `/api/ucp/mcp` is later validated with a working agent profile, the Worker keeps a separate UCP-mode path.
 4. Shopify Cart MCP owns the cart object, line IDs, totals, messages, expiry, and `continue_url`.
 5. Commonlands returns Shopify's structured cart payload plus a persistence contract explaining that the Worker has no durable cart storage.
 
@@ -202,7 +202,7 @@ If an agent has the `cart.id`, it can call `get_cart` in a later session to refr
 
 Shopify's returned `expires_at` is authoritative when present. Agents should warn buyers that carts can expire or change if availability, price, or Shopify validation changes.
 
-### Cart UCP syntax examples
+### Cart MCP syntax examples
 
 Create a cart from a Shopify variant ID returned by `read_shopify_products`:
 
@@ -248,7 +248,7 @@ Refresh a cart in a later agent session:
 }
 ```
 
-Replace cart contents:
+Update cart contents:
 
 ```json
 {

@@ -45,15 +45,15 @@ Rules:
 - No product, variant, inventory, metafield, collection, direct payment capture, raw card handling, customer-account, or catalog writes. Checkout completion is only proxied to Shopify Checkout MCP after Shopify authentication/authorization.
 - Client secret/token material must be scoped narrowly and stored only in secret storage.
 
-### Shopify Cart UCP
+### Shopify Cart MCP
 
 - `ENABLE_COMMERCE_MUTATION_TOOLS` non-secret explicit gate; cart tools are hidden unless set to `true`.
-- `SHOPIFY_CART_MCP_ENDPOINT` non-secret HTTPS merchant Cart MCP endpoint on `commonlands.com`, normally `https://commonlands.com/api/ucp/mcp` when available.
+- `SHOPIFY_CART_MCP_ENDPOINT` non-secret HTTPS merchant Cart MCP endpoint. Current confirmed Commonlands Storefront MCP endpoint is `https://commonlands-camera-components.myshopify.com/api/mcp`; the Worker also permits exact Commonlands merchant hosts only, not arbitrary tool-supplied endpoints.
 - `SHOPIFY_UCP_AGENT_PROFILE` optional non-secret profile URL; defaults to the live Commonlands UCP discovery URL.
 
 Rules:
 
-- Cart UCP remains hidden by default pending approval, Cloudflare protections, endpoint binding, and merchant-side availability.
+- Cart MCP remains hidden by default pending approval, Cloudflare protections, endpoint binding, and merchant-side availability.
 - Cart state is stored and mutated by Shopify Cart MCP; Commonlands Worker remains stateless and stores no cart database/session/customer record.
 - Do not log returned credentials, signed URLs, or authorization material if Shopify Cart MCP ever adds authenticated transport.
 
