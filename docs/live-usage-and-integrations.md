@@ -128,7 +128,7 @@ Current limitations:
 - `read_shopify_products` is the single obvious live product truth path for purchasable product URLs, Shopify Product/Variant GIDs, SKUs, prices, inventory signals, and metafields. `get_shopify_readonly_config_status` and `read_shopify_metaobjects` remain supporting read-only diagnostics.
 - Cart UCP tools require `ENABLE_COMMERCE_MUTATION_TOOLS=true` plus `SHOPIFY_CART_MCP_ENDPOINT`; without approval they are hidden from `tools/list` and blocked in `tools/call`.
 - Diagnostic Shopify reads require approved client credentials/scopes and may return `not_configured`, `missing_scope`, or sanitized Shopify errors if the production app/store cannot exchange a token.
-- No live DynamoDB/AppSync optical reads.
+- Live DynamoDB optical reads are available only when `FOV_LIVE_BACKEND_ENABLED=true`, `FOV_LAMBDA_ENDPOINT` is the approved API Gateway URL, and `FOV_API_KEY` is configured as a Worker secret. Otherwise `compute_fov` remains fixture-backed. No AWS credentials are ever stored in the Worker.
 - No cart mutations unless explicitly enabled and routed through approved Cart UCP tools; no checkout mutations unless explicitly enabled and routed through approved Checkout MCP tools. `complete_checkout` requires the extra checkout gate and is allowed only after Shopify checkout authentication verifies buyer name, email, phone, address, and card/payment authorization. No raw payment handling, RFQs, customer records, discounts, inventory reservations, inventory sync changes, or Shopify catalog writes.
 - Datasheets remain gated; responses must not expose direct gated-document URLs.
 

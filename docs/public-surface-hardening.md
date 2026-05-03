@@ -22,6 +22,6 @@ Endpoint allowlist is intentionally narrow: cart and checkout proxy endpoints mu
 
 ## Lambda/FoV backend gate
 
-`compute_fov` remains fixture-local. Before any Lambda/DynamoDB backend is enabled, keep the Worker free of AWS credentials and route only through a fixed HTTPS API Gateway/Lambda endpoint with its own auth, WAF/throttling, timeouts, response caps, cache, metrics, and exact-resource read-only DynamoDB IAM.
+`compute_fov` is fixture-local unless `FOV_LIVE_BACKEND_ENABLED=true`. When enabled, the Worker calls only the allowlisted HTTPS API Gateway endpoint `https://ia97wrz7ag.execute-api.us-west-2.amazonaws.com/default/fov`, sends `FOV_API_KEY` server-side as `x-api-key`, and applies outbound timeout/response caps. The Worker still has no AWS credentials.
 
-Worker-side `compute_fov` now rejects unsafe identifiers and unbounded working distances before lookup. Lambda must repeat validation independently.
+Worker-side `compute_fov` rejects unsafe identifiers and unbounded working distances before lookup. Lambda must repeat validation independently, require authentication, and use exact-resource read-only DynamoDB IAM.

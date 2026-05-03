@@ -29,6 +29,7 @@ import {
   searchCatalog,
 } from './ucp-catalog';
 import { getCatalogSnapshotStatus } from './snapshot-status';
+import { fetchWithTimeout, readJsonWithLimit } from './http-safety';
 
 export interface Env {
   ENVIRONMENT?: string;
@@ -45,6 +46,9 @@ export interface Env {
   ENABLE_COMMERCE_MUTATION_TOOLS?: string;
   ENABLE_CHECKOUT_MUTATION_TOOLS?: string;
   ENABLE_EXTRA_CHECKOUT_MUTATION_TOOLS?: string;
+  FOV_LIVE_BACKEND_ENABLED?: string;
+  FOV_LAMBDA_ENDPOINT?: string;
+  FOV_API_KEY?: string;
 }
 
 interface JsonRpcRequest {
@@ -75,6 +79,8 @@ const PROTOCOL_VERSION = '2024-11-05';
 const MAX_MCP_BODY_BYTES = 64 * 1024;
 const SAFE_IDENTIFIER_PATTERN = /^[A-Z0-9-]{2,32}$/;
 const MAX_WORKING_DISTANCE_MM = 100_000;
+const FOV_BACKEND_TIMEOUT_MS = 4_000;
+const FOV_BACKEND_MAX_RESPONSE_BYTES = 128 * 1024;
 
 const TOOLS: ToolDefinition[] = [
   {
@@ -121,7 +127,7 @@ const TOOLS: ToolDefinition[] = [
     name: 'compute_fov',
     title: 'Compute lens field of view',
     description:
-      'Compute fixture-backed FoV, scene size, and angular resolution for a Commonlands lens and sensor pair. Not live product truth; verify purchasable facts with read_shopify_products.',
+      'Compute field of view for a Commonlands lens and sensor pair. Uses the authenticated live FoV backend when configured; otherwise fixture-backed scaffold data. Verify purchasable facts with read_shopify_products.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -876,6 +882,18 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
     }
 
     const workingDistanceMm = typeof args.workingDistanceMm === 'number' ? args.workingDistanceMm : undefined;
+
+    if (isFovLiveBackendEnabled(env)) {
+      const liveInput: LiveFovInput = {
+        lensSku,
+        sensorPartNumber,
+        ...(workingDistanceMm !== undefined ? { workingDistanceMm } : {}),
+      };
+      const liveResult = await computeFovWithLiveBackend(env, liveInput);
+      if ('error' in liveResult) return rpcError(id, liveResult.error);
+      return toolResult(id, liveResult.structuredContent);
+    }
+
     return toolResult(id, {
       ...computeFov(lens, sensor, workingDistanceMm),
       sourceWarning: FIXTURE_NOT_PRODUCT_TRUTH_WARNING,
@@ -1074,6 +1092,120 @@ function toolResult(id: unknown, structuredContent: unknown): Response {
       },
     ],
   });
+}
+
+
+function isFovLiveBackendEnabled(env: Env): boolean {
+  return env.FOV_LIVE_BACKEND_ENABLED === 'true';
+}
+
+interface LiveFovInput {
+  lensSku: string;
+  sensorPartNumber: string;
+  workingDistanceMm?: number;
+}
+
+interface LiveFovResponse {
+  sensor?: unknown;
+  count?: unknown;
+  lenses?: unknown;
+  errors?: unknown;
+}
+
+async function computeFovWithLiveBackend(
+  env: Env,
+  input: LiveFovInput,
+): Promise<{ structuredContent: Record<string, unknown> } | { error: JsonRpcError }> {
+  const endpoint = parseFovBackendEndpoint(env.FOV_LAMBDA_ENDPOINT);
+  if ('error' in endpoint) return { error: endpoint.error };
+  if (!env.FOV_API_KEY || env.FOV_API_KEY.trim() === '') {
+    return { error: { code: -32603, message: 'Live FoV backend is missing authentication configuration' } };
+  }
+
+  const sensor = getSensorByPartNumber(input.sensorPartNumber);
+  if (!sensor) {
+    return { error: { code: -32004, message: 'Sensor not found' } };
+  }
+
+  const requestBody = {
+    sensor: {
+      partNumber: sensor.partNumber,
+      hsize: sensor.activeAreaMm.width,
+      vsize: sensor.activeAreaMm.height,
+      dsize: Math.hypot(sensor.activeAreaMm.width, sensor.activeAreaMm.height),
+      pixpitch: sensor.pixelSizeUm,
+      resolution: sensor.resolution,
+    },
+    partNums: [input.lensSku],
+    ...(input.workingDistanceMm !== undefined ? { workingDistanceMm: input.workingDistanceMm } : {}),
+  };
+
+  let response: Response;
+  try {
+    response = await fetchWithTimeout(endpoint.url, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'accept': 'application/json',
+        'x-api-key': env.FOV_API_KEY,
+      },
+      body: JSON.stringify(requestBody),
+    }, FOV_BACKEND_TIMEOUT_MS);
+  } catch {
+    return { error: { code: -32603, message: 'Live FoV backend request failed' } };
+  }
+
+  const parsed = await readJsonWithLimit<LiveFovResponse>(response, 'Live FoV backend', {
+    maxBytes: FOV_BACKEND_MAX_RESPONSE_BYTES,
+  });
+  if ('error' in parsed) {
+    return { error: { code: -32603, message: 'Live FoV backend returned invalid response' } };
+  }
+
+  if (!response.ok) {
+    return { error: { code: response.status === 401 || response.status === 403 ? -32001 : -32603, message: 'Live FoV backend rejected request' } };
+  }
+
+  return {
+    structuredContent: {
+      schemaVersion: 'optics.fov.live.v1',
+      modelVersion: 'lambda-dynamodb-beta-fov-0.1.0',
+      correctionStatus: 'live_lambda_dynamodb',
+      source: 'aws-lambda-dynamodb-readonly',
+      requested: {
+        lensSku: input.lensSku,
+        sensorPartNumber: input.sensorPartNumber,
+        ...(input.workingDistanceMm !== undefined ? { workingDistanceMm: input.workingDistanceMm } : {}),
+      },
+      sensor: parsed.data.sensor,
+      count: parsed.data.count,
+      lenses: parsed.data.lenses,
+      errors: parsed.data.errors,
+      assumptions: [
+        'FoV values are computed by the authenticated Commonlands AWS Lambda backend using read-only DynamoDB lens records.',
+        'The MCP Worker stores backend authentication server-side; agents and users do not receive the Lambda API key.',
+      ],
+    },
+  };
+}
+
+function parseFovBackendEndpoint(value: string | undefined): { url: string } | { error: JsonRpcError } {
+  if (!value || value.trim() === '') {
+    return { error: { code: -32603, message: 'Live FoV backend endpoint is not configured' } };
+  }
+
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:') {
+      return { error: { code: -32603, message: 'Live FoV backend endpoint must use HTTPS' } };
+    }
+    if (url.hostname !== 'ia97wrz7ag.execute-api.us-west-2.amazonaws.com' || url.pathname !== '/default/fov') {
+      return { error: { code: -32603, message: 'Live FoV backend endpoint is not allowlisted' } };
+    }
+    return { url: url.toString() };
+  } catch {
+    return { error: { code: -32603, message: 'Live FoV backend endpoint is invalid' } };
+  }
 }
 
 
