@@ -2,7 +2,7 @@
 
 This guide is for agents and humans using the live public Commonlands MCP endpoint.
 
-The current production service is public and read-mostly. Its catalog, optics, recommendation, and legacy purchase-handoff flows are fixture-backed scaffold data by default and are not authoritative for final SKU recommendations, price, availability, Shopify IDs, variant IDs, exact product specs, or cart/checkout preparation. Use `read_shopify_products` as the live read-only Shopify product truth source for purchasable facts. Cart UCP and Checkout MCP support are separate, explicitly approved commerce-mutation proxy paths: when configured, they may create/update/cancel Shopify-owned cart and checkout handoff state only. They are currently exposed but safe-fail until `SHOPIFY_CART_MCP_ENDPOINT` and `SHOPIFY_CHECKOUT_MCP_ENDPOINT` are configured. They do not create RFQs, create/read customer records, apply discounts, reserve inventory, mutate inventory, write Shopify catalog data, or touch inventory sync.
+The current production service is public and read-mostly. Its catalog, optics, recommendation, and legacy purchase-handoff flows are fixture-backed scaffold data by default and are not authoritative for final SKU recommendations, price, availability, Shopify IDs, variant IDs, exact product specs, or cart/checkout preparation. Use `read_shopify_products` as the live read-only Shopify product truth source for purchasable facts. Cart UCP and Checkout MCP support are hidden by default behind explicit environment gates pending approval, Cloudflare protections, endpoint bindings, and merchant-side availability. They must not create RFQs, create/read customer records, apply discounts, reserve inventory, mutate inventory, write Shopify catalog data, or touch inventory sync.
 
 ## Endpoint
 
@@ -46,12 +46,12 @@ Recommended tool flow:
 4. Use `compute_fov`, `match_lenses_to_sensor`, `compare_lenses`, or `recommend_lenses_for_application` for optical fit and tradeoff analysis, while preserving their fixture warnings.
 5. Use `read_shopify_products` for live product URLs, Shopify Product/Variant GIDs, SKUs, prices, inventory signals, and metafields.
 6. Use `prepare_shopify_purchase_handoff` or `get_purchase_route_options` only as non-authoritative handoff scaffolds unless live variant IDs came from `read_shopify_products`.
-7. If Cart UCP or Checkout MCP is configured and the buyer explicitly asks for commerce handoff, use those proxy tools and preserve the returned `cart.id`, `checkout.id`, `continue_url`, or checkout URL.
-8. Send the buyer to the returned Commonlands product URL, cart `continue_url`, checkout URL, or engineering review path for human-visible next steps.
+7. Commerce mutation tools are not part of the default public surface. Use them only if an approved environment explicitly exposes them and the buyer explicitly asks for commerce handoff.
+8. Send the buyer to the returned Commonlands product URL or engineering review path for human-visible next steps.
 
 ## Current safe boundaries
 
-The live Worker must remain read-only except for the explicitly approved Shopify Cart UCP and Checkout MCP proxy tools, which safe-fail unless their endpoints are configured.
+The live Worker must remain read-only by default. Shopify Cart UCP and Checkout MCP proxy tools are hidden pending explicit approval and configuration.
 
 Allowed:
 
@@ -64,12 +64,12 @@ Allowed:
 - Snapshot/status inspection.
 - Credential-gated diagnostic Shopify Admin reads for product/variant/metaobject summaries.
 - Safe purchase-route planning that points users to pages or engineering review.
-- Cart UCP creation/update/cancel when Shopify Cart MCP is configured and the buyer has explicitly selected line items.
+- Catalog-only UCP discovery by default; commerce mutation proxy tools only after explicit approval and enablement.
 
 Not allowed:
 
-- Cart creation or cart updates outside the approved Cart UCP tools.
-- Checkout creation.
+- Cart creation or cart updates unless explicitly enabled through the approved Cart UCP gate.
+- Checkout creation unless explicitly enabled through the approved Checkout MCP gate.
 - Orders.
 - RFQs.
 - Customer/account access.
@@ -126,10 +126,10 @@ Current limitations:
 - Catalog/search/recommendation/purchase-handoff flows still use fixture data.
 - Fixture catalog product/variant IDs, price, availability, exact product specs, Shopify IDs, variant IDs, and catalog completeness are not guaranteed to match production Shopify and must not be used for final purchasable product truth.
 - `read_shopify_products` is the single obvious live product truth path for purchasable product URLs, Shopify Product/Variant GIDs, SKUs, prices, inventory signals, and metafields. `get_shopify_readonly_config_status` and `read_shopify_metaobjects` remain supporting read-only diagnostics.
-- Cart UCP tools require `SHOPIFY_CART_MCP_ENDPOINT`; without that binding they return `not_configured` and do not mutate state.
+- Cart UCP tools require `ENABLE_COMMERCE_MUTATION_TOOLS=true` plus `SHOPIFY_CART_MCP_ENDPOINT`; without approval they are hidden from `tools/list` and blocked in `tools/call`.
 - Diagnostic Shopify reads require approved client credentials/scopes and may return `not_configured`, `missing_scope`, or sanitized Shopify errors if the production app/store cannot exchange a token.
 - No live DynamoDB/AppSync optical reads.
-- No cart mutations unless routed through approved Cart UCP tools; no checkout mutations unless routed through approved Checkout MCP tools. `complete_checkout` is allowed only after Shopify checkout authentication verifies buyer name, email, phone, address, and card/payment authorization. No raw payment handling, RFQs, customer records, discounts, inventory reservations, inventory sync changes, or Shopify catalog writes.
+- No cart mutations unless explicitly enabled and routed through approved Cart UCP tools; no checkout mutations unless explicitly enabled and routed through approved Checkout MCP tools. `complete_checkout` requires the extra checkout gate and is allowed only after Shopify checkout authentication verifies buyer name, email, phone, address, and card/payment authorization. No raw payment handling, RFQs, customer records, discounts, inventory reservations, inventory sync changes, or Shopify catalog writes.
 - Datasheets remain gated; responses must not expose direct gated-document URLs.
 
 ## Shopify read-only diagnostic access

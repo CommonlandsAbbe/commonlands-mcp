@@ -1,6 +1,6 @@
 # Commonlands MCP
 
-Public read-mostly Commonlands MCP server on Cloudflare Workers for lens discovery, optics workflows, safe commerce handoff, explicitly scoped Shopify Cart UCP, and explicitly scoped Shopify Checkout MCP handoff.
+Public read-mostly Commonlands MCP server on Cloudflare Workers for lens discovery, optics workflows, safe commerce handoff planning, and gated Shopify commerce proxy experiments.
 
 ## Live endpoint
 
@@ -13,13 +13,13 @@ See [`docs/live-usage-and-integrations.md`](docs/live-usage-and-integrations.md)
 ## Current scope
 
 - `GET /healthz` returns deploy metadata.
-- `GET /.well-known/ucp` returns catalog + cart/checkout discovery metadata.
+- `GET /.well-known/ucp` returns catalog-only discovery metadata by default.
 - `POST /mcp` supports MCP JSON-RPC tools/resources for fixture-backed lens discovery, optics calculations, product details, recommendations, and safe purchase handoff planning.
 - `read_shopify_products` is the live read-only Shopify product truth source for purchasable product URLs, Product/Variant GIDs, SKUs, prices, inventory signals, and metafields; `read_shopify_metaobjects` remains a supporting read-only diagnostic.
-- Four explicitly scoped Cart UCP tools proxy Shopify-owned cart state when `SHOPIFY_CART_MCP_ENDPOINT` is configured: `create_cart`, `get_cart`, `update_cart`, and `cancel_cart`.
-- Five explicitly scoped Checkout MCP tools proxy Shopify-owned checkout state when `SHOPIFY_CHECKOUT_MCP_ENDPOINT` is configured: `create_checkout`, `get_checkout`, `update_checkout`, `complete_checkout`, and `cancel_checkout`; `complete_checkout` requires Shopify checkout authentication plus verified name, email, phone, address, and card/payment authorization.
+- Cart UCP tools (`create_cart`, `get_cart`, `update_cart`, `cancel_cart`) are hidden unless `ENABLE_COMMERCE_MUTATION_TOOLS=true` and the endpoint is approved/configured.
+- Basic Checkout MCP tools (`create_checkout`, `get_checkout`) are hidden unless `ENABLE_CHECKOUT_MUTATION_TOOLS=true`; extra checkout operations (`update_checkout`, `complete_checkout`, `cancel_checkout`) require `ENABLE_EXTRA_CHECKOUT_MUTATION_TOOLS=true` and official review before use.
 - Fixture-backed catalog, recommendation, and legacy purchase-handoff flows are scaffold/status helpers only; do not use them as final truth for SKU recommendations, price, availability, Shopify IDs, variant IDs, exact product specs, or cart/checkout preparation without `read_shopify_products`.
-- No Acumatica writes, database writes, direct payment handling, raw card data, customer-account access, inventory mutations, inventory sync changes, Shopify catalog writes, or secret exposure. Checkout completion is only via Shopify Checkout MCP after Shopify-authenticated payment/identity verification.
+- No Acumatica writes, database writes, direct payment handling, raw card data, customer-account access, inventory mutations, inventory sync changes, Shopify catalog writes, or secret exposure. Commerce mutation tools are hidden by default pending approval.
 
 ## Local commands
 

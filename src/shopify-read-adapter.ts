@@ -1,3 +1,4 @@
+import { fetchWithTimeout, readJsonWithLimit } from './http-safety';
 import { getShopifyReadonlyStatus, normalizeShopDomain, parseScopes, type ShopifyReadonlyEnv } from './shopify-readonly-status';
 
 export interface ShopifyReadAdapterEnv extends ShopifyReadonlyEnv {
@@ -464,7 +465,7 @@ async function getAccessToken(input: { shopDomain: string; clientId: string; cli
 
   let response: Response;
   try {
-    response = await fetch(`https://${input.shopDomain}/admin/oauth/access_token`, {
+    response = await fetchWithTimeout(`https://${input.shopDomain}/admin/oauth/access_token`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', accept: 'application/json' },
       body: JSON.stringify({
@@ -534,7 +535,7 @@ async function readProductNodes(
 async function shopifyGraphQl<T>(client: { shopDomain: string; apiVersion: string; accessToken: string }, query: string, variables: Record<string, unknown>): Promise<{ data: T } | { error: string }> {
   let response: Response;
   try {
-    response = await fetch(`https://${client.shopDomain}/admin/api/${client.apiVersion}/graphql.json`, {
+    response = await fetchWithTimeout(`https://${client.shopDomain}/admin/api/${client.apiVersion}/graphql.json`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -562,7 +563,7 @@ async function shopifyGraphQl<T>(client: { shopDomain: string; apiVersion: strin
 
 async function readJson<T>(response: Response, context: string): Promise<{ data: T } | { error: string }> {
   try {
-    return { data: await response.json() as T };
+    return await readJsonWithLimit<T>(response, context);
   } catch (error) {
     return { error: `${context} returned invalid JSON: ${errorMessage(error)}` };
   }

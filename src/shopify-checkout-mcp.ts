@@ -1,3 +1,4 @@
+import { fetchWithTimeout, readJsonWithLimit } from './http-safety';
 import { UCP_VERSION } from './ucp-catalog';
 
 export interface ShopifyCheckoutMcpEnv {
@@ -77,7 +78,7 @@ export async function callShopifyCheckoutMcp(
 
   let response: Response;
   try {
-    response = await fetch(endpoint.url.toString(), {
+    response = await fetchWithTimeout(endpoint.url.toString(), {
       method: 'POST',
       headers: { 'content-type': 'application/json', accept: 'application/json' },
       body: JSON.stringify({
@@ -322,6 +323,7 @@ function parseEndpoint(value: string | undefined): { url: URL } | { error: strin
     if (!url.pathname.endsWith('/api/checkout/mcp') && !url.pathname.endsWith('/api/ucp/mcp')) {
       return { error: 'SHOPIFY_CHECKOUT_MCP_ENDPOINT must point to /api/checkout/mcp or /api/ucp/mcp.' };
     }
+    if (url.hostname !== 'commonlands.com') return { error: 'SHOPIFY_CHECKOUT_MCP_ENDPOINT must be hosted on commonlands.com.' };
     return { url };
   } catch {
     return { error: 'SHOPIFY_CHECKOUT_MCP_ENDPOINT must be a valid HTTPS URL.' };
@@ -408,7 +410,7 @@ interface ShopifyCheckoutMcpResponse {
 
 async function readJson<T>(response: Response, context: string): Promise<{ data: T } | { error: string }> {
   try {
-    return { data: await response.json() as T };
+    return await readJsonWithLimit<T>(response, context);
   } catch (error) {
     return { error: `${context} returned invalid JSON: ${errorMessage(error)}` };
   }

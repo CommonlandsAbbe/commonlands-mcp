@@ -18,13 +18,20 @@ const shopifyReadonlyEnv: Env = {
 
 const shopifyCartEnv: Env = {
   ...shopifyReadonlyEnv,
+  ENABLE_COMMERCE_MUTATION_TOOLS: 'true',
   SHOPIFY_CART_MCP_ENDPOINT: 'https://commonlands.com/api/ucp/mcp',
   SHOPIFY_UCP_AGENT_PROFILE: 'https://commonlands-mcp.erp-14c.workers.dev/.well-known/ucp',
 };
 
-const shopifyCheckoutEnv: Env = {
+const shopifyCheckoutBasicEnv: Env = {
   ...shopifyCartEnv,
+  ENABLE_CHECKOUT_MUTATION_TOOLS: 'true',
   SHOPIFY_CHECKOUT_MCP_ENDPOINT: 'https://commonlands.com/api/ucp/mcp',
+};
+
+const shopifyCheckoutEnv: Env = {
+  ...shopifyCheckoutBasicEnv,
+  ENABLE_EXTRA_CHECKOUT_MUTATION_TOOLS: 'true',
 };
 
 type JsonObject = Record<string, unknown>;
@@ -263,15 +270,6 @@ describe('Commonlands MCP Worker', () => {
       'get_shopify_readonly_config_status',
       'read_shopify_products',
       'read_shopify_metaobjects',
-      'create_cart',
-      'get_cart',
-      'update_cart',
-      'cancel_cart',
-      'create_checkout',
-      'get_checkout',
-      'update_checkout',
-      'complete_checkout',
-      'cancel_checkout',
       'search_catalog',
       'lookup_catalog',
       'get_product',
@@ -279,7 +277,37 @@ describe('Commonlands MCP Worker', () => {
       'get_purchase_route_options',
       'recommend_lenses_for_application',
     ]);
+    expect(tools.map((tool) => tool.name)).not.toContain('complete_checkout');
+    expect(tools.map((tool) => tool.name)).not.toContain('update_checkout');
+    expect(tools.map((tool) => tool.name)).not.toContain('cancel_checkout');
     expect(tools[0]?.inputSchema.type).toBe('object');
+  });
+
+  it('only lists commerce mutation tools when explicitly enabled', async () => {
+    const cartList = await rpc('tools/list', undefined, 'cart-tools', shopifyCartEnv);
+    const cartNames = ((getResult(cartList.body).tools as ToolSummary[]).map((tool) => tool.name));
+    expect(cartNames).toEqual(expect.arrayContaining(['create_cart', 'get_cart', 'update_cart', 'cancel_cart']));
+    expect(cartNames).not.toContain('create_checkout');
+    expect(cartNames).not.toContain('complete_checkout');
+
+    const checkoutList = await rpc('tools/list', undefined, 'checkout-tools', shopifyCheckoutBasicEnv);
+    const checkoutNames = ((getResult(checkoutList.body).tools as ToolSummary[]).map((tool) => tool.name));
+    expect(checkoutNames).toEqual(expect.arrayContaining(['create_checkout', 'get_checkout']));
+    expect(checkoutNames).not.toContain('update_checkout');
+    expect(checkoutNames).not.toContain('complete_checkout');
+    expect(checkoutNames).not.toContain('cancel_checkout');
+  });
+
+  it('blocks commerce mutation tool calls unless explicitly enabled', async () => {
+    const blocked = await rpc('tools/call', { name: 'create_cart', arguments: { lines: [] } });
+    expect(blocked.body).toMatchObject({
+      error: { code: -32601, message: 'Tool not found: create_cart' },
+    });
+
+    const extraCheckout = await rpc('tools/call', { name: 'complete_checkout', arguments: {} }, 'complete-disabled', shopifyCheckoutBasicEnv);
+    expect(extraCheckout.body).toMatchObject({
+      error: { code: -32601, message: 'Tool not found: complete_checkout' },
+    });
   });
 
   it('searches joined catalog snapshot and returns safe product summaries', async () => {
@@ -365,13 +393,13 @@ describe('Commonlands MCP Worker', () => {
         ucpCatalogVersion: '2026-04-08',
       },
       readiness: {
-        status: 'catalog_fixture_ready_cart_checkout_proxy_configurable',
+        status: 'catalog_fixture_ready_commerce_mutations_disabled_by_default',
         liveConnectors: 'not_connected',
-        cartCheckout: 'cart_and_checkout_mcp_proxy_enabled_authenticated_completion',
+        cartCheckout: 'cart_checkout_mutation_tools_hidden_pending_approval',
         customerAccounts: 'not_implemented_requires_oauth_and_protected_customer_data',
       },
       ucpCatalog: {
-        compatibleTools: ['search_catalog', 'lookup_catalog', 'get_product', 'create_cart', 'get_cart', 'update_cart', 'cancel_cart', 'create_checkout', 'get_checkout', 'update_checkout', 'complete_checkout', 'cancel_checkout'],
+        compatibleTools: ['search_catalog', 'lookup_catalog', 'get_product'],
         missingRequiredFields: [],
         productCount: 5,
         variantCount: 5,
@@ -946,7 +974,7 @@ describe('Commonlands MCP Worker', () => {
           line_items: [{ quantity: 2, item: { id: 'gid://shopify/ProductVariant/12345678901' } }],
         },
       },
-    });
+    }, 'cart-missing-config', { ...env, ENABLE_COMMERCE_MUTATION_TOOLS: 'true' });
     const structuredContent = getStructuredContent(body);
 
     expect(structuredContent).toMatchObject({
@@ -1143,7 +1171,7 @@ describe('Commonlands MCP Worker', () => {
     const { body } = await rpc('tools/call', {
       name: 'create_checkout',
       arguments: { checkout: { cart_id: 'gid://shopify/Cart/cart_abc123' } },
-    });
+    }, 'checkout-missing-config', { ...env, ENABLE_CHECKOUT_MUTATION_TOOLS: 'true' });
     const structuredContent = getStructuredContent(body);
 
     expect(structuredContent).toMatchObject({
@@ -1451,7 +1479,7 @@ describe('Commonlands MCP Worker', () => {
       uri: 'commonlands://compatibility/shopify-ucp',
       mimeType: 'application/json',
     });
-    expect(parsed.ucpCatalog.compatibleTools).toEqual(['search_catalog', 'lookup_catalog', 'get_product', 'create_cart', 'get_cart', 'update_cart', 'cancel_cart', 'create_checkout', 'get_checkout', 'update_checkout', 'complete_checkout', 'cancel_checkout']);
+    expect(parsed.ucpCatalog.compatibleTools).toEqual(['search_catalog', 'lookup_catalog', 'get_product']);
     expect(parsed.readiness.liveConnectors).toBe('not_connected');
   });
 
@@ -1562,6 +1590,20 @@ describe('Commonlands MCP Worker', () => {
     expect((structuredContent.warnings as string[]).join(' ')).toMatch(/maximum field/i);
   });
 
+  it('rejects unsafe compute_fov identifiers and unbounded working distances', async () => {
+    const badSku = await rpc('tools/call', {
+      name: 'compute_fov',
+      arguments: { lensSku: '../CIL250', sensorPartNumber: 'IMX477' },
+    });
+    expect(badSku.body).toMatchObject({ error: { code: -32602, message: 'Invalid params: lensSku must match /^[A-Z0-9-]{2,32}$/' } });
+
+    const hugeDistance = await rpc('tools/call', {
+      name: 'compute_fov',
+      arguments: { lensSku: 'CIL250', sensorPartNumber: 'IMX477', workingDistanceMm: 100001 },
+    });
+    expect(hugeDistance.body).toMatchObject({ error: { code: -32602, message: 'Invalid params: workingDistanceMm must be between 1 and 100000' } });
+  });
+
   it('rejects invalid FoV params without throwing', async () => {
     const missingLens = await rpc('tools/call', {
       name: 'compute_fov',
@@ -1569,7 +1611,7 @@ describe('Commonlands MCP Worker', () => {
     });
     expect(missingLens.body).toMatchObject({
       jsonrpc: '2.0',
-      error: { code: -32004, message: 'Lens not found: NOPE' },
+      error: { code: -32004, message: 'Lens not found' },
     });
 
     const invalidDistance = await rpc('tools/call', {
@@ -1743,6 +1785,18 @@ describe('Commonlands MCP Worker', () => {
     });
   });
 
+  it('rejects oversized MCP request bodies before parsing JSON', async () => {
+    const response = await fetchWorker('/mcp', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 'oversized', method: 'tools/list', padding: 'x'.repeat(70000) }),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(413);
+    expect(body).toEqual({ error: 'payload_too_large' });
+  });
+
   it('rejects non-json MCP requests before parsing', async () => {
     const response = await fetchWorker('/mcp', { method: 'POST', body: 'not json' });
     const body = await response.json();
@@ -1759,7 +1813,7 @@ describe('Commonlands MCP Worker', () => {
     expect(body).toEqual({ error: 'not_found' });
   });
 
-  it('serves a UCP discovery profile that advertises catalog and cart capabilities', async () => {
+  it('serves a UCP discovery profile that advertises catalog capabilities only', async () => {
     const response = await fetchWorker('/.well-known/ucp');
     const profile = await response.json() as Record<string, unknown>;
 
@@ -1771,12 +1825,10 @@ describe('Commonlands MCP Worker', () => {
       capabilities: [
         'dev.ucp.shopping.catalog.search',
         'dev.ucp.shopping.catalog.lookup',
-        'dev.ucp.shopping.cart',
-        'dev.ucp.shopping.checkout',
       ],
     });
     expect(profile).toMatchObject({
-      metadata: { cartPersistence: 'shopify_owned_cart_checkout_id_resume', cartBoundary: 'cart_and_checkout_mcp_enabled_authenticated_completion' },
+      metadata: { cartPersistence: 'not_advertised', cartBoundary: 'commerce_mutation_tools_hidden_pending_approval' },
     });
     expect(JSON.stringify(profile)).not.toMatch(/order|customer/i);
   });

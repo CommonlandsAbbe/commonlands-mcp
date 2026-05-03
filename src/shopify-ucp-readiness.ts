@@ -7,18 +7,18 @@ export interface ShopifyUcpReadiness {
   compatibilityTarget: {
     shopifyStorefrontMcp: 'storefront-mcp';
     ucpCatalogVersion: typeof UCP_VERSION;
-    referenceTools: ['search_catalog', 'lookup_catalog', 'get_product', 'create_cart', 'get_cart', 'update_cart', 'cancel_cart', 'create_checkout', 'get_checkout', 'update_checkout', 'complete_checkout', 'cancel_checkout'];
+    referenceTools: ['search_catalog', 'lookup_catalog', 'get_product'];
     nonGoals: string[];
   };
   readiness: {
-    status: 'catalog_fixture_ready_cart_checkout_proxy_configurable';
+    status: 'catalog_fixture_ready_commerce_mutations_disabled_by_default';
     liveConnectors: 'not_connected';
-    cartCheckout: 'cart_and_checkout_mcp_proxy_enabled_authenticated_completion';
+    cartCheckout: 'cart_checkout_mutation_tools_hidden_pending_approval';
     customerAccounts: 'not_implemented_requires_oauth_and_protected_customer_data';
     policyFaqs: 'not_implemented_needs_approved_public_policy_source';
   };
   ucpCatalog: {
-    compatibleTools: ['search_catalog', 'lookup_catalog', 'get_product', 'create_cart', 'get_cart', 'update_cart', 'cancel_cart', 'create_checkout', 'get_checkout', 'update_checkout', 'complete_checkout', 'cancel_checkout'];
+    compatibleTools: ['search_catalog', 'lookup_catalog', 'get_product'];
     productCount: number;
     variantCount: number;
     missingRequiredFields: string[];
@@ -44,22 +44,22 @@ export function getShopifyUcpReadiness(snapshot: CatalogSnapshot = CATALOG_SNAPS
     compatibilityTarget: {
       shopifyStorefrontMcp: 'storefront-mcp',
       ucpCatalogVersion: UCP_VERSION,
-      referenceTools: ['search_catalog', 'lookup_catalog', 'get_product', 'create_cart', 'get_cart', 'update_cart', 'cancel_cart', 'create_checkout', 'get_checkout', 'update_checkout', 'complete_checkout', 'cancel_checkout'],
+      referenceTools: ['search_catalog', 'lookup_catalog', 'get_product'],
       nonGoals: [
-        'Checkout completion is available only through Shopify Checkout MCP after Shopify-hosted buyer/payment authentication; customer-account, discount, inventory-reservation, and inventory-sync tools remain excluded.',
+        'Commerce mutation tools are hidden by default pending official approval; customer-account, discount, inventory-reservation, and inventory-sync tools remain excluded.',
         'Customer-account/order tools require OAuth and protected customer-data approval before any implementation.',
         'Live catalog connectors remain separate from the Cart/Checkout MCP proxies and require audited read-only enrichment before replacing fixture defaults.',
       ],
     },
     readiness: {
-      status: 'catalog_fixture_ready_cart_checkout_proxy_configurable',
+      status: 'catalog_fixture_ready_commerce_mutations_disabled_by_default',
       liveConnectors: 'not_connected',
-      cartCheckout: 'cart_and_checkout_mcp_proxy_enabled_authenticated_completion',
+      cartCheckout: 'cart_checkout_mutation_tools_hidden_pending_approval',
       customerAccounts: 'not_implemented_requires_oauth_and_protected_customer_data',
       policyFaqs: 'not_implemented_needs_approved_public_policy_source',
     },
     ucpCatalog: {
-      compatibleTools: ['search_catalog', 'lookup_catalog', 'get_product', 'create_cart', 'get_cart', 'update_cart', 'cancel_cart', 'create_checkout', 'get_checkout', 'update_checkout', 'complete_checkout', 'cancel_checkout'],
+      compatibleTools: ['search_catalog', 'lookup_catalog', 'get_product'],
       productCount: products.length,
       variantCount: products.reduce((count, product) => count + product.variants.length, 0),
       missingRequiredFields: findMissingRequiredFields(products),
@@ -85,12 +85,12 @@ export function getShopifyUcpReadiness(snapshot: CatalogSnapshot = CATALOG_SNAPS
     ],
     launchBlockers: [
       'Confirm Shopify read-only API path, product IDs, variant IDs, handle mapping, and mechanical drawing metafield/file-reference source.',
-      'Confirm production Shopify Cart MCP and Checkout MCP endpoint bindings and merchant-side availability before enabling live cart/checkout flows.',
+      'Confirm official approval, Cloudflare protections, endpoint bindings, and merchant-side availability before enabling any live cart/checkout tools.',
       'Confirm Cloudflare route, /.well-known/ucp profile, and whether any legacy /sse compatibility endpoint is required.',
       'Confirm public policy/FAQ source if search_shop_policies_and_faqs parity is desired.',
     ],
     safeguards: [
-      'Cart UCP and Checkout MCP are the only approved Shopify mutation paths; complete_checkout requires Shopify checkout authentication and idempotency, while customer-account access, order lookup, inventory mutation, product writes, raw payment credentials, and protected customer data remain blocked.',
+      'Cart/checkout mutation tools are hidden by default pending official approval; customer-account access, order lookup, inventory mutation, product writes, raw payment credentials, and protected customer data remain blocked.',
       'No direct gated-document URLs are emitted.',
       'No credentials, tokens, or signed URLs are stored in fixtures or responses.',
     ],
