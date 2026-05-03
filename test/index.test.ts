@@ -1568,6 +1568,64 @@ describe('Commonlands MCP Worker', () => {
   });
 
 
+  it('calls the authenticated live FoV backend when enabled', async () => {
+    let seenUrl = '';
+    let seenInit: RequestInit | undefined;
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      seenUrl = input.toString();
+      seenInit = init;
+      return Response.json({
+        sensor: { partNumber: 'IMX477', hsize: 6.287, vsize: 4.712 },
+        count: 1,
+        lenses: [{ partNum: 'CIL250', hfov: 51.3, vfov: 39.6, dfov: 61.9 }],
+        errors: [],
+      });
+    }) as typeof fetch;
+
+    const { body } = await rpc('tools/call', {
+      name: 'compute_fov',
+      arguments: { lensSku: 'CIL250', sensorPartNumber: 'IMX477', workingDistanceMm: 1000 },
+    }, 'live-fov-test', {
+      ...env,
+      FOV_LIVE_BACKEND_ENABLED: 'true',
+      FOV_LAMBDA_ENDPOINT: 'https://ia97wrz7ag.execute-api.us-west-2.amazonaws.com/default/fov',
+      FOV_API_KEY: 'test-secret-never-return',
+    });
+    const structuredContent = getStructuredContent(body);
+
+    expect(seenUrl).toBe('https://ia97wrz7ag.execute-api.us-west-2.amazonaws.com/default/fov');
+    expect(seenInit?.method).toBe('POST');
+    expect((seenInit?.headers as Record<string, string>)['x-api-key']).toBe('test-secret-never-return');
+    expect(JSON.parse(seenInit?.body as string)).toMatchObject({
+      sensor: { partNumber: 'IMX477', hsize: 6.287, vsize: 4.712 },
+      partNums: ['CIL250'],
+      workingDistanceMm: 1000,
+    });
+    expect(structuredContent).toMatchObject({
+      schemaVersion: 'optics.fov.live.v1',
+      correctionStatus: 'live_lambda_dynamodb',
+      source: 'aws-lambda-dynamodb-readonly',
+      requested: { lensSku: 'CIL250', sensorPartNumber: 'IMX477', workingDistanceMm: 1000 },
+      lenses: [{ partNum: 'CIL250', hfov: 51.3, vfov: 39.6, dfov: 61.9 }],
+    });
+    expect(JSON.stringify(structuredContent)).not.toContain('test-secret-never-return');
+  });
+
+  it('fails closed when live FoV backend auth is missing', async () => {
+    const { body } = await rpc('tools/call', {
+      name: 'compute_fov',
+      arguments: { lensSku: 'CIL250', sensorPartNumber: 'IMX477' },
+    }, 'missing-fov-auth-test', {
+      ...env,
+      FOV_LIVE_BACKEND_ENABLED: 'true',
+      FOV_LAMBDA_ENDPOINT: 'https://ia97wrz7ag.execute-api.us-west-2.amazonaws.com/default/fov',
+    });
+
+    expect(body).toMatchObject({
+      error: { code: -32603, message: 'Live FoV backend is missing authentication configuration' },
+    });
+  });
+
   it('computes fixture-backed distortion-aware FoV and angular resolution', async () => {
     const { body } = await rpc('tools/call', {
       name: 'compute_fov',
