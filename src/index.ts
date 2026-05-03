@@ -721,6 +721,7 @@ function visibleTools(env: Env): ToolDefinition[] {
 }
 
 function isToolEnabled(name: string, env: Env): boolean {
+  if (name === 'cancel_cart' && !cartEndpointSupportsCancel(env)) return false;
   if (isCartTool(name)) return env.ENABLE_COMMERCE_MUTATION_TOOLS === 'true';
   if (name === 'create_checkout' || name === 'get_checkout') return env.ENABLE_CHECKOUT_MUTATION_TOOLS === 'true';
   if (name === 'update_checkout' || name === 'complete_checkout' || name === 'cancel_checkout') return env.ENABLE_EXTRA_CHECKOUT_MUTATION_TOOLS === 'true';
@@ -1048,6 +1049,15 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
 
 function isCartTool(name: unknown): name is CartOperation {
   return name === 'create_cart' || name === 'get_cart' || name === 'update_cart' || name === 'cancel_cart';
+}
+
+function cartEndpointSupportsCancel(env: Env): boolean {
+  if (env.ENABLE_COMMERCE_MUTATION_TOOLS !== 'true') return false;
+  try {
+    return new URL(env.SHOPIFY_CART_MCP_ENDPOINT ?? '').pathname === '/api/ucp/mcp';
+  } catch {
+    return false;
+  }
 }
 
 function isCheckoutTool(name: unknown): name is CheckoutOperation {
