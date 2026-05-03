@@ -36,7 +36,7 @@ Good prompts:
 
 ## What agents should do
 
-Agents should treat this MCP server primarily as an engineering/catalog intelligence endpoint. Use fixture-backed tools for broad discovery and optical scaffold context only; before final SKU recommendation, price/availability claims, variant IDs, product URLs, metafields, or cart/checkout preparation, call `read_shopify_products`. Cart and checkout tools are the only approved commerce mutation proxy surfaces, are limited to Shopify-owned state, and safe-fail until their endpoints are configured.
+Agents should treat this MCP server primarily as an engineering/catalog intelligence endpoint. Use fixture-backed tools for broad discovery and optical scaffold context only; before final SKU recommendation, price/availability claims, variant IDs, product URLs, metafields, or cart/checkout preparation, call `read_shopify_products`. Cart and checkout tools are not part of the default public surface; they are hidden unless explicit approval, environment gates, and Shopify-owned endpoints are all present.
 
 Recommended tool flow:
 
@@ -168,9 +168,9 @@ All diagnostic results include read-only safety flags and redact tokens/client c
 
 ## Shopify Cart UCP ordering path
 
-Cart UCP is the approved first ordering step for agents. It lets an agent build and revise a Shopify cart before the buyer commits to checkout. It does not complete payments, create orders, create customer records, reserve inventory, or mutate product/catalog/inventory data.
+Cart UCP is the optional Shopify-owned first ordering step for agents after explicit approval and enablement. It lets an agent build and revise a Shopify cart before the buyer commits to checkout. It does not complete payments, create orders, create customer records, reserve inventory, or mutate product/catalog/inventory data.
 
-When deployed and configured, Commonlands exposes these MCP tools:
+By default these tools are hidden from `tools/list` and return `Tool not found` from `tools/call`. When approved, configured, and enabled with `ENABLE_COMMERCE_MUTATION_TOOLS=true`, Commonlands exposes these MCP tools:
 
 - `create_cart`: create a Shopify-owned cart from selected Shopify `ProductVariant` GIDs and quantities.
 - `get_cart`: fetch the latest Shopify-owned cart state by cart ID.
@@ -297,12 +297,15 @@ Agents may build carts only after the buyer has selected specific line items and
 
 ## Shopify Checkout MCP handoff path
 
-Checkout MCP is the approved checkout step after a buyer has confirmed cart or line-item intent. It lets an agent create, refresh, revise, complete, or cancel Shopify-owned checkout state. `complete_checkout` is allowed only through Shopify Checkout MCP after the Shopify checkout phase has authenticated/verified buyer name, email, phone, address, and card/payment authorization. Commonlands never accepts raw card numbers, CVV/CVC, payment tokens, customer records, discounts, inventory reservation/mutation, inventory sync, or catalog writes.
+Checkout MCP is the optional Shopify-owned checkout step after a buyer has confirmed cart or line-item intent and the checkout surface has explicit approval and enablement. It lets an agent create, refresh, revise, complete, or cancel Shopify-owned checkout state within Shopify-owned boundaries. `complete_checkout` is allowed only through Shopify Checkout MCP after the Shopify checkout phase has authenticated/verified buyer name, email, phone, address, and card/payment authorization. Commonlands never accepts raw card numbers, CVV/CVC, payment tokens, customer records, discounts, inventory reservation/mutation, inventory sync, or catalog writes.
 
-When deployed and configured, Commonlands exposes these MCP tools:
+By default all checkout tools are hidden from `tools/list` and return `Tool not found` from `tools/call`. When approved, configured, and enabled with `ENABLE_CHECKOUT_MUTATION_TOOLS=true`, Commonlands exposes only the basic Checkout MCP tools:
 
 - `create_checkout`: create Shopify-owned checkout handoff state from a retained Shopify Cart gid or explicit Shopify `ProductVariant` GIDs and quantities.
 - `get_checkout`: fetch latest Shopify-owned checkout state by checkout ID.
+
+Extra checkout operations remain separately hidden. They require `ENABLE_EXTRA_CHECKOUT_MUTATION_TOOLS=true` plus official review before use:
+
 - `update_checkout`: replace allowed checkout line item/context state. Buyer, customer, address, payment, discount, and gift-card fields are rejected.
 - `complete_checkout`: finalize through Shopify Checkout MCP only after Shopify-hosted checkout authentication verifies buyer name, email, phone, address, and card/payment authorization. Requires `meta["idempotency-key"]` UUID and an `authentication` object with all verification flags true; raw card/payment fields are rejected.
 - `cancel_checkout`: cancel Shopify-owned checkout state by checkout ID. Requires `meta["idempotency-key"]` as a UUID for retry safety.
