@@ -14,11 +14,11 @@ The Worker is being built in PR-sized phases:
 - Phase 7 adds fixture-backed UCP catalog aliases, `/.well-known/ucp`, and a read-only Shopify purchase handoff seam so clients can discover products in Shopify-native shapes without creating transaction state.
 - Phase 8 adds fixture-backed purchase-route options for AI agents and robotics engineers, showing the future Commonlands MCP purchase surface, Shopify-native checkout path, and engineering review path without mutating commerce state.
 - Phase 9 adds credential-gated Shopify Admin GraphQL reads. `read_shopify_products` is the live read-only product truth path for purchasable product URLs, Product/Variant GIDs, SKUs, prices, inventory signals, and metafields; `read_shopify_metaobjects` remains a supporting diagnostic while fixture-backed catalog and handoff flows stay scaffold-only.
-- Phase 10 adds an explicitly scoped Shopify Cart UCP proxy for create/get/update/cancel cart state while keeping payment, order, customer, inventory, and catalog writes blocked outside Shopify checkout.
-- Phase 11 adds an explicitly scoped Shopify Checkout MCP proxy for create/get/update/complete/cancel checkout state. `complete_checkout` requires Shopify checkout authentication, verified buyer name/email/phone/address, card/payment authorization, and idempotency; Commonlands never accepts raw payment credentials.
+- Phase 10 adds an explicitly scoped Shopify Cart UCP proxy for create/get/update/cancel cart state, hidden by default behind `ENABLE_COMMERCE_MUTATION_TOOLS=true`, while keeping payment, order, customer, inventory, and catalog writes blocked outside Shopify checkout.
+- Phase 11 adds an explicitly scoped Shopify Checkout MCP proxy. Basic checkout tools (`create_checkout`, `get_checkout`) require `ENABLE_CHECKOUT_MUTATION_TOOLS=true`; extra checkout operations (`update_checkout`, `complete_checkout`, `cancel_checkout`) require `ENABLE_EXTRA_CHECKOUT_MUTATION_TOOLS=true` and official review before use. `complete_checkout` requires Shopify checkout authentication, verified buyer name/email/phone/address, card/payment authorization, and idempotency; Commonlands never accepts raw payment credentials.
 - Later phases replace fixtures with a scheduled joined catalog snapshot and connector-backed enrichment behind tests.
 
-No live Acumatica or database behavior is implemented yet. Shopify behavior is limited to explicit diagnostic read-only tools plus the separately approved Shopify Cart UCP and Checkout MCP proxies. Checkout completion is only through Shopify Checkout MCP after Shopify-authenticated buyer/payment verification; no direct payment capture, raw card handling, customer-account, RFQ, inventory mutation, inventory sync change, or catalog write tool is implemented.
+No live Acumatica or database behavior is implemented yet. Shopify behavior is limited to explicit diagnostic read-only tools plus Shopify Cart UCP and Checkout MCP proxy code that is hidden by default until explicitly approved and enabled. Checkout completion is only through Shopify Checkout MCP after Shopify-authenticated buyer/payment verification; no direct payment capture, raw card handling, customer-account, RFQ, inventory mutation, inventory sync change, or catalog write tool is implemented.
 
 ## Target endpoint
 
@@ -41,8 +41,9 @@ Keep the Workers.dev endpoint live for now. Do not move `commonlands.com` DNS to
 - No database writes.
 - No secrets in source control.
 - No direct DocSend URLs in fixtures, responses, logs, or docs.
-- Cart UCP and Checkout MCP create/update/complete/cancel are the only approved Shopify mutation surfaces; no customer-account/order/write tools outside those Shopify-managed boundaries.
+- Cart UCP and Checkout MCP proxy code is hidden by default and must stay behind explicit approval/config gates; no customer-account/order/write tools outside Shopify-managed boundaries.
 - Live Shopify reads must remain diagnostic and read-only until audited joined snapshots are ready.
+- Public `/mcp` request bodies are capped before JSON parsing, and live connector responses are timeout/size bounded before JSON parsing.
 
 ## Deployment metadata
 

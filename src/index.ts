@@ -42,6 +42,9 @@ export interface Env {
   SHOPIFY_CART_MCP_ENDPOINT?: string;
   SHOPIFY_CHECKOUT_MCP_ENDPOINT?: string;
   SHOPIFY_UCP_AGENT_PROFILE?: string;
+  ENABLE_COMMERCE_MUTATION_TOOLS?: string;
+  ENABLE_CHECKOUT_MUTATION_TOOLS?: string;
+  ENABLE_EXTRA_CHECKOUT_MUTATION_TOOLS?: string;
 }
 
 interface JsonRpcRequest {
@@ -69,6 +72,9 @@ const SERVER_INFO = {
 } as const;
 
 const PROTOCOL_VERSION = '2024-11-05';
+const MAX_MCP_BODY_BYTES = 64 * 1024;
+const SAFE_IDENTIFIER_PATTERN = /^[A-Z0-9-]{2,32}$/;
+const MAX_WORKING_DISTANCE_MM = 100_000;
 
 const TOOLS: ToolDefinition[] = [
   {
@@ -684,8 +690,19 @@ function initializeResponse(id: unknown): Response {
   });
 }
 
-function toolListResponse(id: unknown): Response {
-  return rpcResult(id, { tools: TOOLS });
+function toolListResponse(id: unknown, env: Env): Response {
+  return rpcResult(id, { tools: visibleTools(env) });
+}
+
+function visibleTools(env: Env): ToolDefinition[] {
+  return TOOLS.filter((tool) => isToolEnabled(tool.name, env));
+}
+
+function isToolEnabled(name: string, env: Env): boolean {
+  if (isCartTool(name)) return env.ENABLE_COMMERCE_MUTATION_TOOLS === 'true';
+  if (name === 'create_checkout' || name === 'get_checkout') return env.ENABLE_CHECKOUT_MUTATION_TOOLS === 'true';
+  if (name === 'update_checkout' || name === 'complete_checkout' || name === 'cancel_checkout') return env.ENABLE_EXTRA_CHECKOUT_MUTATION_TOOLS === 'true';
+  return true;
 }
 
 function resourceListResponse(id: unknown): Response {
@@ -762,6 +779,9 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
   }
 
   const args = isRecord(params.arguments) ? params.arguments : {};
+  if (!isToolEnabled(params.name, env)) {
+    return rpcError(id, { code: -32601, message: `Tool not found: ${params.name}` });
+  }
 
   if (params.name === 'search_lenses') {
     const query = typeof args.query === 'string' ? args.query : '';
@@ -813,23 +833,23 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
   }
 
   if (params.name === 'compute_fov') {
-    if (typeof args.lensSku !== 'string') {
-      return rpcError(id, { code: -32602, message: 'Invalid params: lensSku is required' });
-    }
-    if (typeof args.sensorPartNumber !== 'string') {
-      return rpcError(id, { code: -32602, message: 'Invalid params: sensorPartNumber is required' });
-    }
-    const distanceError = validateOptionalPositiveNumber(args.workingDistanceMm, 'workingDistanceMm');
+    const lensSkuError = validateSafeIdentifier(args.lensSku, 'lensSku');
+    if (lensSkuError) return rpcError(id, lensSkuError);
+    const sensorError = validateSafeIdentifier(args.sensorPartNumber, 'sensorPartNumber');
+    if (sensorError) return rpcError(id, sensorError);
+    const distanceError = validateOptionalPositiveNumber(args.workingDistanceMm, 'workingDistanceMm', MAX_WORKING_DISTANCE_MM);
     if (distanceError) return rpcError(id, distanceError);
 
-    const lens = getLensBySku(args.lensSku);
+    const lensSku = normalizeSafeIdentifier(args.lensSku as string);
+    const sensorPartNumber = normalizeSafeIdentifier(args.sensorPartNumber as string);
+    const lens = getLensBySku(lensSku);
     if (!lens) {
-      return rpcError(id, { code: -32004, message: `Lens not found: ${args.lensSku}` });
+      return rpcError(id, { code: -32004, message: 'Lens not found' });
     }
 
-    const sensor = getSensorByPartNumber(args.sensorPartNumber);
+    const sensor = getSensorByPartNumber(sensorPartNumber);
     if (!sensor) {
-      return rpcError(id, { code: -32004, message: `Sensor not found: ${args.sensorPartNumber}` });
+      return rpcError(id, { code: -32004, message: 'Sensor not found' });
     }
 
     const workingDistanceMm = typeof args.workingDistanceMm === 'number' ? args.workingDistanceMm : undefined;
@@ -1025,6 +1045,18 @@ function toolResult(id: unknown, structuredContent: unknown): Response {
 }
 
 
+function validateSafeIdentifier(value: unknown, fieldName: string): JsonRpcError | null {
+  if (typeof value !== 'string') return { code: -32602, message: `Invalid params: ${fieldName} is required` };
+  if (!SAFE_IDENTIFIER_PATTERN.test(value.trim().toUpperCase())) {
+    return { code: -32602, message: `Invalid params: ${fieldName} must match /^[A-Z0-9-]{2,32}$/` };
+  }
+  return null;
+}
+
+function normalizeSafeIdentifier(value: string): string {
+  return value.trim().toUpperCase();
+}
+
 function buildRecommendationInput(args: Record<string, unknown>): {
   sensorPartNumber: string;
   desiredHorizontalFovDeg?: number;
@@ -1079,9 +1111,12 @@ function validateRecommendationArgs(args: Record<string, unknown>): JsonRpcError
   return undefined;
 }
 
-function validateOptionalPositiveNumber(value: unknown, field: string): JsonRpcError | undefined {
+function validateOptionalPositiveNumber(value: unknown, field: string, max = Number.POSITIVE_INFINITY): JsonRpcError | undefined {
   if (value !== undefined && (typeof value !== 'number' || !Number.isFinite(value) || value <= 0)) {
     return { code: -32602, message: `Invalid params: ${field} must be positive when provided` };
+  }
+  if (typeof value === 'number' && value > max) {
+    return { code: -32602, message: `Invalid params: ${field} must be between 1 and ${max}` };
   }
   return undefined;
 }
@@ -1146,9 +1181,19 @@ async function handleMcp(request: Request, env: Env): Promise<Response> {
     return json({ error: 'unsupported_media_type' }, { status: 415 });
   }
 
+  const contentLength = request.headers.get('content-length');
+  if (contentLength && Number(contentLength) > MAX_MCP_BODY_BYTES) {
+    return json({ error: 'payload_too_large' }, { status: 413 });
+  }
+
+  const bodyText = await request.text();
+  if (new TextEncoder().encode(bodyText).byteLength > MAX_MCP_BODY_BYTES) {
+    return json({ error: 'payload_too_large' }, { status: 413 });
+  }
+
   let payload: unknown;
   try {
-    payload = await request.json();
+    payload = JSON.parse(bodyText);
   } catch {
     return rpcError(null, { code: -32700, message: 'Parse error' });
   }
@@ -1160,7 +1205,7 @@ async function handleMcp(request: Request, env: Env): Promise<Response> {
   }
 
   if (parsed.method === 'initialize') return initializeResponse(parsed.id);
-  if (parsed.method === 'tools/list') return toolListResponse(parsed.id);
+  if (parsed.method === 'tools/list') return toolListResponse(parsed.id, env);
   if (parsed.method === 'tools/call') return await toolCallResponse(parsed.id, parsed.params, env);
   if (parsed.method === 'resources/list') return resourceListResponse(parsed.id);
   if (parsed.method === 'resources/read') return resourceReadResponse(parsed.id, parsed.params);
