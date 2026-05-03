@@ -871,11 +871,6 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
 
     const lensSku = normalizeSafeIdentifier(args.lensSku as string);
     const sensorPartNumber = normalizeSafeIdentifier(args.sensorPartNumber as string);
-    const lens = getLensBySku(lensSku);
-    if (!lens) {
-      return rpcError(id, { code: -32004, message: 'Lens not found' });
-    }
-
     const sensor = getSensorByPartNumber(sensorPartNumber);
     if (!sensor) {
       return rpcError(id, { code: -32004, message: 'Sensor not found' });
@@ -892,6 +887,11 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
       const liveResult = await computeFovWithLiveBackend(env, liveInput);
       if ('error' in liveResult) return rpcError(id, liveResult.error);
       return toolResult(id, liveResult.structuredContent);
+    }
+
+    const lens = getLensBySku(lensSku);
+    if (!lens) {
+      return rpcError(id, { code: -32004, message: 'Lens not found' });
     }
 
     return toolResult(id, {

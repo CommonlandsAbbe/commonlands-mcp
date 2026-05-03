@@ -1577,14 +1577,14 @@ describe('Commonlands MCP Worker', () => {
       return Response.json({
         sensor: { partNumber: 'IMX477', hsize: 6.287, vsize: 4.712 },
         count: 1,
-        lenses: [{ partNum: 'CIL250', hfov: 51.3, vfov: 39.6, dfov: 61.9 }],
+        lenses: [{ partNum: 'CIL026', hfov: 120.3, vfov: 91.6, dfov: 130.4 }],
         errors: [],
       });
     }) as typeof fetch;
 
     const { body } = await rpc('tools/call', {
       name: 'compute_fov',
-      arguments: { lensSku: 'CIL250', sensorPartNumber: 'IMX477', workingDistanceMm: 1000 },
+      arguments: { lensSku: 'CIL026', sensorPartNumber: 'IMX477', workingDistanceMm: 1000 },
     }, 'live-fov-test', {
       ...env,
       FOV_LIVE_BACKEND_ENABLED: 'true',
@@ -1598,15 +1598,15 @@ describe('Commonlands MCP Worker', () => {
     expect((seenInit?.headers as Record<string, string>)['x-api-key']).toBe('test-secret-never-return');
     expect(JSON.parse(seenInit?.body as string)).toMatchObject({
       sensor: { partNumber: 'IMX477', hsize: 6.287, vsize: 4.712 },
-      partNums: ['CIL250'],
+      partNums: ['CIL026'],
       workingDistanceMm: 1000,
     });
     expect(structuredContent).toMatchObject({
       schemaVersion: 'optics.fov.live.v1',
       correctionStatus: 'live_lambda_dynamodb',
       source: 'aws-lambda-dynamodb-readonly',
-      requested: { lensSku: 'CIL250', sensorPartNumber: 'IMX477', workingDistanceMm: 1000 },
-      lenses: [{ partNum: 'CIL250', hfov: 51.3, vfov: 39.6, dfov: 61.9 }],
+      requested: { lensSku: 'CIL026', sensorPartNumber: 'IMX477', workingDistanceMm: 1000 },
+      lenses: [{ partNum: 'CIL026', hfov: 120.3, vfov: 91.6, dfov: 130.4 }],
     });
     expect(JSON.stringify(structuredContent)).not.toContain('test-secret-never-return');
   });
