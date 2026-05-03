@@ -13,7 +13,7 @@ The Worker is being built in PR-sized phases:
 - Phase 6 adds fixture-backed Shopify Storefront MCP / UCP Catalog compatibility readiness so Commonlands can interoperate with commerce agents without enabling write flows.
 - Phase 7 adds fixture-backed UCP catalog aliases, `/.well-known/ucp`, and a read-only Shopify purchase handoff seam so clients can discover products in Shopify-native shapes without creating transaction state.
 - Phase 8 adds fixture-backed purchase-route options for AI agents and robotics engineers, showing the future Commonlands MCP purchase surface, Shopify-native checkout path, and engineering review path without mutating commerce state.
-- Phase 9 adds credential-gated diagnostic Shopify Admin GraphQL read tools for product/variant/metaobject summary verification while leaving fixture-backed catalog and purchase-handoff flows unchanged.
+- Phase 9 adds credential-gated Shopify Admin GraphQL reads. `read_shopify_products` is the live read-only product truth path for purchasable product URLs, Product/Variant GIDs, SKUs, prices, inventory signals, and metafields; `read_shopify_metaobjects` remains a supporting diagnostic while fixture-backed catalog and handoff flows stay scaffold-only.
 - Phase 10 adds an explicitly scoped Shopify Cart UCP proxy for create/get/update/cancel cart state while keeping payment, order, customer, inventory, and catalog writes blocked outside Shopify checkout.
 - Phase 11 adds an explicitly scoped Shopify Checkout MCP proxy for create/get/update/complete/cancel checkout state. `complete_checkout` requires Shopify checkout authentication, verified buyer name/email/phone/address, card/payment authorization, and idempotency; Commonlands never accepts raw payment credentials.
 - Later phases replace fixtures with a scheduled joined catalog snapshot and connector-backed enrichment behind tests.
@@ -150,18 +150,18 @@ Phase 8 adds `get_purchase_route_options` as a fixture-backed transaction-readin
 - three route options: future Commonlands MCP dedicated purchase, future Shopify-native checkout, and engineering review request;
 - route-specific current safe actions and future tool names;
 - hard safety flags proving no cart, checkout, order, RFQ, customer record, inventory reservation, Shopify write, or Commonlands order write occurred;
-- launch prerequisites for approved Shopify Storefront credentials, live product/variant ID mapping, price/availability revalidation, idempotency/audit/rate-limit design, and customer-data policy review.
+- launch prerequisites for configured Shopify Cart/Checkout MCP endpoints, live ProductVariant GIDs resolved through `read_shopify_products`, price/availability revalidation, idempotency/audit/rate-limit design, and customer-data policy review.
 
 The tool is not a checkout. It is the typed plan that lets agents preserve optical context and choose the right future purchase path while the public MVP stays read-only and fixture-backed.
 
 ## Phase 9 MCP surface
 
-Phase 9 adds narrow live Shopify Admin GraphQL diagnostic reads behind the existing sanitized Shopify read-only config checks:
+Phase 9 adds live Shopify Admin GraphQL reads behind the existing sanitized Shopify read-only config checks:
 
-- `read_shopify_products` reads product, variant, selected public metafield/media URL, price, and inventory summary fields by SKU/search or handle-only lookup. SKU/search uses `productVariants`; handle-only lookup uses Shopify `productByHandle` instead of an undocumented `product_handle` variant filter.
+- `read_shopify_products` is the live read-only product truth path for product and variant IDs, normalized `id`/`numericId`, product URLs, variant `storefrontCartPath`, SKUs, prices, inventory signals, and selected public metafield/media URL fields by SKU/search or handle-only lookup. SKU/search uses `productVariants`; handle-only lookup uses Shopify `productByHandle` instead of an undocumented `product_handle` variant filter.
 - `read_shopify_metaobjects` reads metaobjects by type and optional handle, returning redacted field previews only.
 
-These tools do not replace fixture-backed catalog, recommendation, UCP, or purchase-handoff flows. They return `schemaVersion: shopify.live_read.v1`, sanitized connector/token state, explicit read-only safety flags, and empty results on missing config/scope/token/API errors. Tokens, client secrets, client IDs, authorization headers, carts, checkouts, customers, orders, RFQs, inventory mutations, product writes, metafield writes, metaobject writes, file writes, Acumatica writes, database writes, and inventory sync changes remain out of scope.
+These tools do not mutate commerce state. Fixture-backed catalog, recommendation, UCP, or purchase-handoff flows remain scaffold-only and must not be treated as final SKU, price, availability, Shopify ID, variant ID, exact product spec, cart, or checkout truth without `read_shopify_products`. They return `schemaVersion: shopify.live_read.v1`, sanitized connector/token state, explicit read-only safety flags, and empty results on missing config/scope/token/API errors. Tokens, client secrets, client IDs, authorization headers, carts, checkouts, customers, orders, RFQs, inventory mutations, product writes, metafield writes, metaobject writes, file writes, Acumatica writes, database writes, and inventory sync changes remain out of scope.
 
 
 ## Phase 10 MCP surface

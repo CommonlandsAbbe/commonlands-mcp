@@ -2,7 +2,7 @@
 
 This guide is for agents and humans using the live public Commonlands MCP endpoint.
 
-The current production service is public and read-mostly. Its user-facing catalog, optics, product lookup, and purchase-handoff flows remain fixture-backed by default. It also exposes credential-gated diagnostic Shopify Admin read tools for product/metaobject summary checks when approved read-only Shopify configuration is present. Cart UCP and Checkout MCP support are separate, explicitly approved commerce-mutation paths: when configured, they may create/update/cancel Shopify-owned cart and checkout handoff state only. They do not complete purchases, capture payment, create orders, create RFQs, create/read customer records, apply discounts, reserve inventory, mutate inventory, write Shopify catalog data, or touch inventory sync.
+The current production service is public and read-mostly. Its catalog, optics, recommendation, and legacy purchase-handoff flows are fixture-backed scaffold data by default and are not authoritative for final SKU recommendations, price, availability, Shopify IDs, variant IDs, exact product specs, or cart/checkout preparation. Use `read_shopify_products` as the live read-only Shopify product truth source for purchasable facts. Cart UCP and Checkout MCP support are separate, explicitly approved commerce-mutation proxy paths: when configured, they may create/update/cancel Shopify-owned cart and checkout handoff state only. They are currently exposed but safe-fail until `SHOPIFY_CART_MCP_ENDPOINT` and `SHOPIFY_CHECKOUT_MCP_ENDPOINT` are configured. They do not create RFQs, create/read customer records, apply discounts, reserve inventory, mutate inventory, write Shopify catalog data, or touch inventory sync.
 
 ## Endpoint
 
@@ -36,21 +36,22 @@ Good prompts:
 
 ## What agents should do
 
-Agents should treat this MCP server primarily as an engineering/catalog intelligence endpoint. Cart tools are the only approved commerce mutation surface, and they are limited to Shopify-owned cart state.
+Agents should treat this MCP server primarily as an engineering/catalog intelligence endpoint. Use fixture-backed tools for broad discovery and optical scaffold context only; before final SKU recommendation, price/availability claims, variant IDs, product URLs, metafields, or cart/checkout preparation, call `read_shopify_products`. Cart and checkout tools are the only approved commerce mutation proxy surfaces, are limited to Shopify-owned state, and safe-fail until their endpoints are configured.
 
 Recommended tool flow:
 
 1. Call `tools/list` to discover available tools.
 2. Use `search_catalog` for broad lens discovery.
-3. Use `get_product` or `lookup_catalog` for exact SKU/product resolution.
-4. Use `compute_fov`, `match_lenses_to_sensor`, `compare_lenses`, or `recommend_lenses_for_application` for optical fit and tradeoff analysis.
-5. Use `prepare_shopify_purchase_handoff` or `get_purchase_route_options` to prepare a safe product/page handoff.
-6. If Cart UCP is configured and the buyer explicitly asks to build a cart, use `create_cart`, then preserve the returned `cart.id` and `continue_url`.
-7. Send the buyer to the returned Commonlands product URL, cart `continue_url`, or engineering review path for human-visible next steps.
+3. Use `get_product` or `lookup_catalog` for fixture SKU/product scaffold context only.
+4. Use `compute_fov`, `match_lenses_to_sensor`, `compare_lenses`, or `recommend_lenses_for_application` for optical fit and tradeoff analysis, while preserving their fixture warnings.
+5. Use `read_shopify_products` for live product URLs, Shopify Product/Variant GIDs, SKUs, prices, inventory signals, and metafields.
+6. Use `prepare_shopify_purchase_handoff` or `get_purchase_route_options` only as non-authoritative handoff scaffolds unless live variant IDs came from `read_shopify_products`.
+7. If Cart UCP or Checkout MCP is configured and the buyer explicitly asks for commerce handoff, use those proxy tools and preserve the returned `cart.id`, `checkout.id`, `continue_url`, or checkout URL.
+8. Send the buyer to the returned Commonlands product URL, cart `continue_url`, checkout URL, or engineering review path for human-visible next steps.
 
 ## Current safe boundaries
 
-The live Worker must remain read-only except for the explicitly approved Cart UCP tools.
+The live Worker must remain read-only except for the explicitly approved Shopify Cart UCP and Checkout MCP proxy tools, which safe-fail unless their endpoints are configured.
 
 Allowed:
 
@@ -123,8 +124,8 @@ The fixture catalog remains the default user-facing source. The live Worker vali
 Current limitations:
 
 - Catalog/search/recommendation/purchase-handoff flows still use fixture data.
-- Fixture catalog product/variant IDs, price, and availability are not guaranteed to match production Shopify.
-- Diagnostic Shopify reads are separate tools: `get_shopify_readonly_config_status`, `read_shopify_products`, and `read_shopify_metaobjects`.
+- Fixture catalog product/variant IDs, price, availability, exact product specs, Shopify IDs, variant IDs, and catalog completeness are not guaranteed to match production Shopify and must not be used for final purchasable product truth.
+- `read_shopify_products` is the single obvious live product truth path for purchasable product URLs, Shopify Product/Variant GIDs, SKUs, prices, inventory signals, and metafields. `get_shopify_readonly_config_status` and `read_shopify_metaobjects` remain supporting read-only diagnostics.
 - Cart UCP tools require `SHOPIFY_CART_MCP_ENDPOINT`; without that binding they return `not_configured` and do not mutate state.
 - Diagnostic Shopify reads require approved client credentials/scopes and may return `not_configured`, `missing_scope`, or sanitized Shopify errors if the production app/store cannot exchange a token.
 - No live DynamoDB/AppSync optical reads.
@@ -160,7 +161,7 @@ These scopes remain read-only. They do not permit carts, checkouts, orders, cust
 Diagnostic tools:
 
 - `get_shopify_readonly_config_status` reports sanitized config/scope readiness only; it never returns secret values.
-- `read_shopify_products` reads product, variant, selected public metafield/media URL, price, and inventory summary fields through Shopify Admin GraphQL. SKU search is the safest path; handle-only lookup uses Shopify `productByHandle`.
+- `read_shopify_products` reads live product, variant, selected public metafield/media URL, price, inventory summary fields, normalized `id`/`numericId`, `productUrl`, and variant `storefrontCartPath` through Shopify Admin GraphQL. SKU search is the safest path; handle-only lookup uses Shopify `productByHandle`.
 - `read_shopify_metaobjects` reads metaobjects by type and optional handle, returning redacted field previews only.
 
 All diagnostic results include read-only safety flags and redact tokens/client credentials. Use them to validate connector readiness, not to make final public stock/price claims until the joined catalog snapshot is audited.
@@ -409,13 +410,13 @@ Agents may create checkout only after the buyer has confirmed specific line item
 
 ## How to interpret results
 
-Agents and users should label default catalog output as fixture-backed when discussing price, availability, Shopify IDs, variant IDs, or catalog completeness. If a diagnostic Shopify read tool was used, say that explicitly and preserve uncertainty until the joined catalog snapshot is audited.
+Agents and users must label default catalog/recommendation/purchase-handoff output as fixture-backed scaffold data when discussing SKU recommendations, price, availability, Shopify IDs, variant IDs, exact product specs, or catalog completeness. Use `read_shopify_products` and cite it explicitly for live purchasable product truth.
 
 Good phrasing:
 
 - `The MCP fixture catalog includes CIL078 as a candidate.`
 - `Use the returned product URL, cart continue_url, or checkout URL as the next step; only `complete_checkout` through Shopify Checkout MCP may finalize checkout, and only after Shopify authentication/authorization verification.`
-- `Price and availability from the default catalog are fixture-backed unless a diagnostic Shopify read result is explicitly cited.`
+- `Price, availability, Shopify IDs, variant IDs, product URLs, and metafields from fixture tools are non-authoritative unless read_shopify_products is explicitly cited.`
 
 Bad phrasing:
 

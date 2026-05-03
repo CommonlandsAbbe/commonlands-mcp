@@ -73,7 +73,8 @@ export function buildProductPageDetails(lens: LensCatalogItem): ProductPageDetai
       notes: [
         'Resolution is an optical catalog field sourced from DynamoDB, not Shopify enrichment.',
         'Datasheets remain gated and direct gated-document URLs are never emitted.',
-        'Live price, inventory, and metafields are fixture-backed until read-only connectors are approved and configured.',
+        'Price, availability, and exact product specs here are fixture-backed and non-authoritative; use read_shopify_products for live Shopify product truth.',
+        'Resolve live Shopify ProductVariant IDs through read_shopify_products before cart or checkout preparation.',
       ],
     },
     source: lens.source,

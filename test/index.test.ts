@@ -65,26 +65,35 @@ interface ShopifyUcpReadiness {
 }
 
 
+interface SourceWarning {
+  severity: string;
+  code: string;
+  text: string;
+}
+
 interface UcpCatalogResult {
   schemaVersion: string;
   ucp: { version: string; capability: string; transport: string };
   catalog: { products: Array<Record<string, unknown>> };
   messages: Array<{ type: string; code: string; text: string }>;
+  sourceWarning?: SourceWarning;
 }
 
 interface ShopifyPurchaseHandoff {
   schemaVersion: string;
   correctionStatus: string;
   quantity: number;
-  product: { sku: string; productUrl: string; variantId: string };
+  product: { sku: string; productUrl: string; variantId: string; selectedVariantIdSource?: string };
   transaction: { mode: string; cartCheckout: string; createsCart: boolean; requiresApprovalBeforeLiveMutation: boolean };
   warnings: string[];
+  sourceWarning?: SourceWarning;
 }
 
 interface PurchaseRouteOptions {
   schemaVersion: string;
   correctionStatus: string;
   product: { sku: string; productUrl: string; variantId: string };
+  sourceWarning?: SourceWarning;
   context: { buyerIntent: string; agentType?: string; sensorPartNumber?: string; quantity: number };
   routes: Array<{ channel: string; status: string; recommendedFor: string[]; actions: Record<string, unknown> }>;
   requiredBeforeLiveTransaction: string[];
@@ -108,6 +117,7 @@ interface CatalogSnapshotStatus {
     errors: string[];
     warnings: string[];
   };
+  sourceWarning?: SourceWarning;
   sources: {
     optical: string;
     commerce: string;
@@ -152,6 +162,43 @@ function getStructuredContent(body: JsonObject): JsonObject {
   const result = getResult(body);
   expect(result.structuredContent).toBeTypeOf('object');
   return result.structuredContent as JsonObject;
+}
+
+function metafield(namespace: string, key: string, type: string, value: string): JsonObject {
+  return { namespace, key, type, value, reference: null };
+}
+
+function shopifyProductVariantNode(input: {
+  productId: string;
+  handle: string;
+  title: string;
+  sku: string;
+  variantId: string;
+  price: string;
+  inventoryQuantity: number;
+  metafields: JsonObject[];
+}): JsonObject {
+  return {
+    id: input.variantId,
+    sku: input.sku,
+    title: input.sku,
+    price: input.price,
+    inventoryQuantity: input.inventoryQuantity,
+    inventoryItem: { id: `${input.variantId}/InventoryItem`, tracked: true },
+    metafields: { nodes: [] },
+    product: {
+      id: input.productId,
+      handle: input.handle,
+      title: input.title,
+      status: 'ACTIVE',
+      productType: 'Lens',
+      vendor: 'Commonlands',
+      tags: [],
+      onlineStoreUrl: null,
+      metafields: { nodes: input.metafields },
+      media: { nodes: [] },
+    },
+  };
 }
 
 describe('Commonlands MCP Worker', () => {
@@ -532,6 +579,84 @@ describe('Commonlands MCP Worker', () => {
     });
     expect(calls).toHaveLength(2);
     expect(JSON.stringify(getResult(body))).not.toMatch(/shpat_fallback_token_never_return|client-secret-test|client-id-fallback-test|Authorization|Bearer/i);
+  });
+
+  it('returns live product truth fields for arbitrary Shopify products without adding workflow tools', async () => {
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      if (url.endsWith('/admin/oauth/access_token')) {
+        return Response.json({ access_token: 'shpat_live_truth_token_never_return', expires_in: 86400 });
+      }
+      if (url.endsWith('/admin/api/2026-04/graphql.json')) {
+        return Response.json({
+          data: {
+            productVariants: {
+              nodes: [
+                shopifyProductVariantNode({
+                  productId: 'gid://shopify/Product/1',
+                  handle: 'arbitrary-product-a',
+                  title: 'Arbitrary Product A',
+                  sku: 'ABC123-F1.8-M12A650',
+                  variantId: 'gid://shopify/ProductVariant/111',
+                  price: '49.00',
+                  inventoryQuantity: 10,
+                  metafields: [metafield('custom', 'short_partnumber', 'single_line_text_field', 'ABC123')],
+                }),
+                shopifyProductVariantNode({
+                  productId: 'gid://shopify/Product/2',
+                  handle: 'arbitrary-product-b',
+                  title: 'Arbitrary Product B',
+                  sku: 'XYZ789-F4.0-C',
+                  variantId: 'gid://shopify/ProductVariant/222',
+                  price: '79.00',
+                  inventoryQuantity: 0,
+                  metafields: [metafield('custom', 'short_partnumber', 'single_line_text_field', 'XYZ789')],
+                }),
+              ],
+            },
+          },
+        });
+      }
+      return new Response('unexpected fetch', { status: 500 });
+    }) as typeof fetch;
+
+    const { body } = await rpc(
+      'tools/call',
+      { name: 'read_shopify_products', arguments: { query: 'arbitrary', includeMetafields: true, limit: 5 } },
+      'live-product-truth',
+      { ...shopifyReadonlyEnv, SHOPIFY_CLIENT_ID: 'client-id-live-truth-test' },
+    );
+    const structuredContent = getStructuredContent(body);
+
+    expect(structuredContent.source).toMatchObject({
+      mode: 'live_shopify_admin_graphql_readonly',
+      productTruth: true,
+      readOnly: true,
+      writesShopify: false,
+      includesProducts: true,
+      includesVariants: true,
+      includesMetafields: true,
+    });
+    const products = structuredContent.products as JsonObject[];
+    expect(products).toHaveLength(2);
+    expect(products[0]).toMatchObject({
+      id: 'gid://shopify/Product/1',
+      numericId: '1',
+      handle: 'arbitrary-product-a',
+      productUrl: 'https://commonlands.com/products/arbitrary-product-a',
+    });
+    expect(products[0]?.variants).toEqual([
+      expect.objectContaining({
+        id: 'gid://shopify/ProductVariant/111',
+        numericId: '111',
+        sku: 'ABC123-F1.8-M12A650',
+        price: '49.00',
+        inventoryQuantity: 10,
+        storefrontCartPath: '/cart/111:1',
+      }),
+    ]);
+    expect(JSON.stringify(structuredContent)).not.toContain('recommend_live_shopify_lens_for_sensor');
+    expect(JSON.stringify(getResult(body))).not.toMatch(/shpat_live_truth_token_never_return|client-secret-test|client-id-live-truth-test|Authorization|Bearer/i);
   });
 
   it('exchanges Shopify token and reads product variants without leaking credentials or mutating state', async () => {
@@ -1481,6 +1606,24 @@ describe('Commonlands MCP Worker', () => {
     expect(JSON.stringify(structuredContent)).not.toMatch(/docsend/i);
   });
 
+  it('marks fixture-backed recommendation outputs as unsafe for purchasable product truth', async () => {
+    const { body } = await rpc('tools/call', {
+      name: 'match_lenses_to_sensor',
+      arguments: { sensorPartNumber: 'IMX477', desiredHorizontalFovDeg: 60, mount: 'M12', maxResults: 3 },
+    });
+    const structuredContent = getStructuredContent(body);
+
+    expect(structuredContent.correctionStatus).toBe('fixture_recommendation_scaffold');
+    expect(structuredContent.sourceWarning).toMatchObject({
+      severity: 'danger',
+      code: 'fixture_not_product_truth',
+    });
+    expect(JSON.stringify(structuredContent)).toContain('read_shopify_products');
+    expect(JSON.stringify(structuredContent)).toContain('price');
+    expect(JSON.stringify(structuredContent)).toContain('availability');
+    expect(JSON.stringify(structuredContent)).toContain('variant');
+  });
+
   it('compares selected lenses and ranks full image-circle coverage above clipped candidates when FoV is otherwise close', async () => {
     const { body } = await rpc('tools/call', {
       name: 'compare_lenses',
@@ -1521,9 +1664,9 @@ describe('Commonlands MCP Worker', () => {
     expect(recommendations).toHaveLength(2);
     expect(recommendations[0]).toMatchObject({ lens: { mount: 'M12' } });
     expect((recommendations[0]?.tradeoffs as string[]).join(' ')).toMatch(/M12 form factor/i);
-    expect(structuredContent.assumptions).toContain(
-      'Ranking is fixture-backed and excludes live Shopify stock, price breaks, MTF, CRA, and production coefficient parity until integrations are approved.',
-    );
+    expect((structuredContent.assumptions as string[]).join(' ')).toContain('Use read_shopify_products for live purchasable product truth');
+    expect((structuredContent.assumptions as string[]).join(' ')).toContain('price');
+    expect((structuredContent.assumptions as string[]).join(' ')).toContain('variant IDs');
   });
 
 
@@ -1650,6 +1793,7 @@ describe('Commonlands MCP Worker', () => {
       ucp: { version: '2026-04-08', capability: 'search_catalog', transport: 'mcp' },
       messages: [],
     });
+    expect(searchContent.sourceWarning).toMatchObject({ severity: 'danger', code: 'fixture_not_product_truth' });
     expect(searchContent.catalog.products).toHaveLength(1);
     expect(searchContent.catalog.products[0]).toMatchObject({
       id: 'gid://commonlands/Product/CIL250',
@@ -1730,7 +1874,9 @@ describe('Commonlands MCP Worker', () => {
         currentSafeAction: 'open_product_url',
       },
     });
-    expect(options.requiredBeforeLiveTransaction).toContain('approved Shopify Storefront API cart/checkout credentials stored outside source control');
+    expect(options.sourceWarning).toMatchObject({ severity: 'danger', code: 'fixture_not_product_truth' });
+    expect(options.requiredBeforeLiveTransaction).toContain('configured SHOPIFY_CART_MCP_ENDPOINT or SHOPIFY_CHECKOUT_MCP_ENDPOINT; exposed tools safe-fail until configured');
+    expect(options.requiredBeforeLiveTransaction).toContain('live Shopify ProductVariant GIDs resolved through read_shopify_products, not fixture Commonlands IDs');
     expect(JSON.stringify(options)).not.toMatch(/docsend|secret|shpat|signedUrl|accessToken/i);
   });
 
@@ -1777,7 +1923,10 @@ describe('Commonlands MCP Worker', () => {
         requiresApprovalBeforeLiveMutation: true,
       },
     });
+    expect(handoff.sourceWarning).toMatchObject({ severity: 'danger', code: 'fixture_not_product_truth' });
+    expect(handoff.product.selectedVariantIdSource).toBe('fixture_commonlands_gid_non_authoritative');
     expect(handoff.warnings.join(' ')).toContain('No Shopify cart or checkout was created');
+    expect(handoff.warnings.join(' ')).toContain('read_shopify_products');
     expect(JSON.stringify(handoff)).not.toMatch(/docsend|secret|shpat|signedUrl/i);
   });
 

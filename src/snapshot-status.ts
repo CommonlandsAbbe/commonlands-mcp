@@ -1,9 +1,15 @@
-import { CATALOG_SNAPSHOT, type CatalogSnapshot } from './catalog';
+import { CATALOG_SNAPSHOT, FIXTURE_NOT_PRODUCT_TRUTH_WARNING, type CatalogSnapshot } from './catalog';
 
 interface SnapshotValidation {
   ok: boolean;
   errors: string[];
   warnings: string[];
+}
+
+interface SourceWarning {
+  severity: typeof FIXTURE_NOT_PRODUCT_TRUTH_WARNING.severity;
+  code: typeof FIXTURE_NOT_PRODUCT_TRUTH_WARNING.code;
+  text: typeof FIXTURE_NOT_PRODUCT_TRUTH_WARNING.text;
 }
 
 export interface CatalogSnapshotStatus {
@@ -18,6 +24,7 @@ export interface CatalogSnapshotStatus {
     unsafeUrls: number;
   };
   validation: SnapshotValidation;
+  sourceWarning: SourceWarning;
   sources: {
     optical: 'fixture:dynamodb-audit';
     commerce: 'fixture:shopify-products-sheet';
@@ -43,7 +50,11 @@ export function getCatalogSnapshotStatus(snapshot: CatalogSnapshot = CATALOG_SNA
       missingOptical: snapshot.lenses.filter((lens) => !lens.source.optical).length,
       unsafeUrls: validation.errors.filter((error) => error.includes('Unsafe')).length,
     },
-    validation,
+    validation: {
+      ...validation,
+      warnings: [FIXTURE_NOT_PRODUCT_TRUTH_WARNING.text, ...validation.warnings],
+    },
+    sourceWarning: FIXTURE_NOT_PRODUCT_TRUTH_WARNING,
     sources: {
       optical: 'fixture:dynamodb-audit',
       commerce: 'fixture:shopify-products-sheet',
@@ -51,7 +62,7 @@ export function getCatalogSnapshotStatus(snapshot: CatalogSnapshot = CATALOG_SNA
     refresh: {
       mode: 'fixture_static',
       liveConnectors: 'not_connected',
-      note: 'Static fixture snapshot until DDB/AppSync, Shopify read-only API, and cache refresh contracts are approved/configured.',
+      note: 'Static fixture snapshot. Use read_shopify_products for live purchasable product truth; fixture data is not authoritative for price, availability, Shopify IDs, variant IDs, exact product specs, cart, or checkout preparation.',
     },
   };
 }
