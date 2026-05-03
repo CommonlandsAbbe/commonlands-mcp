@@ -174,7 +174,7 @@ By default these tools are hidden from `tools/list` and return `Tool not found` 
 
 - `create_cart`: create a Shopify-owned cart from selected Shopify `ProductVariant` GIDs and quantities.
 - `get_cart`: fetch the latest Shopify-owned cart state by cart ID.
-- `update_cart`: update a Shopify-owned cart. On the confirmed standard Storefront MCP endpoint, Commonlands maps `line_items` to Shopify `add_items`; if a validated UCP Cart MCP endpoint is used later, treat updates as full-state PUT semantics and send the complete intended `line_items`/context each time.
+- `update_cart`: update a Shopify-owned cart. On the confirmed standard Storefront MCP endpoint, Commonlands maps `line_items` to Shopify `add_items`, `update_items` to quantity changes, and `remove_line_ids` to explicit line removals. Quantity `0` in `update_items` removes a line. If a validated UCP Cart MCP endpoint is used later, treat updates as full-state PUT semantics and send the complete intended `line_items`/context each time.
 - `cancel_cart`: UCP-only cancel path. The currently confirmed standard Storefront MCP endpoint exposes `get_cart` and `update_cart`, not cancel, so Commonlands rejects `cancel_cart` unless the endpoint is switched to a validated UCP Cart MCP endpoint.
 
 ### Where cart state is stored and mutated
