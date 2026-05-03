@@ -307,7 +307,7 @@ const TOOLS: ToolDefinition[] = [
     name: 'update_cart',
     title: 'Update Shopify cart',
     description:
-      'Update a Shopify-owned cart through the configured Cart/Storefront MCP endpoint. With UCP endpoints, treat updates as full-state PUT semantics; with the confirmed standard Storefront MCP endpoint, Commonlands maps line_items to Shopify add_items.',
+      'Update a Shopify-owned cart through the configured Cart/Storefront MCP endpoint. With UCP endpoints, treat updates as full-state PUT semantics; with the confirmed standard Storefront MCP endpoint, Commonlands maps line_items to Shopify add_items, update_items to quantity changes, and remove_line_ids to explicit removals. Quantity 0 in update_items removes a line.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -320,6 +320,7 @@ const TOOLS: ToolDefinition[] = [
               type: 'array',
               minItems: 1,
               maxItems: 25,
+              description: 'Variant items to add to the cart.',
               items: {
                 type: 'object',
                 properties: {
@@ -330,10 +331,31 @@ const TOOLS: ToolDefinition[] = [
                 additionalProperties: false,
               },
             },
+            update_items: {
+              type: 'array',
+              minItems: 1,
+              maxItems: 25,
+              description: 'Existing Shopify cart line IDs with desired quantities; quantity 0 removes the line.',
+              items: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string', description: 'Shopify CartLine gid.' },
+                  quantity: { type: 'integer', minimum: 0, maximum: 999 },
+                },
+                required: ['id', 'quantity'],
+                additionalProperties: false,
+              },
+            },
+            remove_line_ids: {
+              type: 'array',
+              minItems: 1,
+              maxItems: 25,
+              description: 'Existing Shopify CartLine gids to remove explicitly.',
+              items: { type: 'string' },
+            },
             context: { type: 'object' },
             signals: { type: 'object' },
           },
-          required: ['line_items'],
           additionalProperties: false,
         },
       },

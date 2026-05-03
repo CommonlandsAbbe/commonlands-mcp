@@ -56,8 +56,15 @@ type NormalizedLineItem = {
   item: { id: string };
 };
 
+type NormalizedCartLineUpdate = {
+  id: string;
+  quantity: number;
+};
+
 type NormalizedCart = {
-  line_items: NormalizedLineItem[];
+  line_items?: NormalizedLineItem[];
+  update_items?: NormalizedCartLineUpdate[];
+  remove_line_ids?: string[];
   context?: Record<string, string>;
   signals?: Record<string, unknown>;
 };
@@ -134,7 +141,8 @@ function upstreamArgs(kind: EndpointKind, operation: CartOperation, args: CartAr
 }
 
 function storefrontUpdateArgs(cartId: unknown, cart: unknown): CartArgs {
-  const lineItems = isRecord(cart) && Array.isArray(cart.line_items) ? cart.line_items : [];
+  const normalizedCart = isRecord(cart) ? cart : {};
+  const lineItems = Array.isArray(normalizedCart.line_items) ? normalizedCart.line_items : [];
   const addItems = lineItems
     .filter(isRecord)
     .map((lineItem) => ({
@@ -143,7 +151,9 @@ function storefrontUpdateArgs(cartId: unknown, cart: unknown): CartArgs {
     }));
   return {
     ...(typeof cartId === 'string' ? { cart_id: cartId } : {}),
-    add_items: addItems,
+    ...(addItems.length > 0 ? { add_items: addItems } : {}),
+    ...(Array.isArray(normalizedCart.update_items) && normalizedCart.update_items.length > 0 ? { update_items: normalizedCart.update_items } : {}),
+    ...(Array.isArray(normalizedCart.remove_line_ids) && normalizedCart.remove_line_ids.length > 0 ? { remove_line_ids: normalizedCart.remove_line_ids } : {}),
   };
 }
 
@@ -193,19 +203,33 @@ function normalizeCart(value: unknown): { value: NormalizedCart } | { error: str
   if (!isRecord(value)) return { error: 'Invalid params: cart is required' };
   if ('buyer' in value || 'buyer_identity' in value) return { error: 'Invalid params: buyer/customer fields are not enabled for Commonlands Cart MCP' };
 
+  const cart: NormalizedCart = {};
   const lineItems = value.line_items;
-  if (!Array.isArray(lineItems) || lineItems.length < 1 || lineItems.length > 25) {
-    return { error: 'Invalid params: cart.line_items must include 1-25 items' };
+  if (lineItems !== undefined) {
+    if (!Array.isArray(lineItems) || lineItems.length < 1 || lineItems.length > 25) {
+      return { error: 'Invalid params: cart.line_items must include 1-25 items when provided' };
+    }
+    const normalizedItems: NormalizedLineItem[] = [];
+    for (const [index, lineItem] of lineItems.entries()) {
+      const normalized = normalizeLineItem(lineItem, index);
+      if ('error' in normalized) return normalized;
+      normalizedItems.push(normalized.value);
+    }
+    cart.line_items = normalizedItems;
   }
 
-  const normalizedItems: NormalizedLineItem[] = [];
-  for (const [index, lineItem] of lineItems.entries()) {
-    const normalized = normalizeLineItem(lineItem, index);
-    if ('error' in normalized) return normalized;
-    normalizedItems.push(normalized.value);
+  const updateItems = normalizeCartLineUpdates(value.update_items);
+  if ('error' in updateItems) return updateItems;
+  if (updateItems.value) cart.update_items = updateItems.value;
+
+  const removeLineIds = normalizeRemoveLineIds(value.remove_line_ids);
+  if ('error' in removeLineIds) return removeLineIds;
+  if (removeLineIds.value) cart.remove_line_ids = removeLineIds.value;
+
+  if (!cart.line_items && !cart.update_items && !cart.remove_line_ids) {
+    return { error: 'Invalid params: cart must include line_items, update_items, or remove_line_ids' };
   }
 
-  const cart: NormalizedCart = { line_items: normalizedItems };
   const context = normalizeContext(value.context);
   if ('error' in context) return context;
   if (context.value) cart.context = context.value;
@@ -224,6 +248,48 @@ function normalizeLineItem(value: unknown, index: number): { value: NormalizedLi
     return { error: `Invalid params: cart.line_items[${index}].item.id must be a Shopify ProductVariant gid` };
   }
   return { value: { quantity: Math.trunc(quantity), item: { id: item.id } } };
+}
+
+function normalizeCartLineUpdates(value: unknown): { value?: NormalizedCartLineUpdate[] } | { error: string } {
+  if (value === undefined) return {};
+  if (!Array.isArray(value) || value.length < 1 || value.length > 25) {
+    return { error: 'Invalid params: cart.update_items must include 1-25 items when provided' };
+  }
+  const normalized: NormalizedCartLineUpdate[] = [];
+  for (const [index, item] of value.entries()) {
+    if (!isRecord(item)) return { error: `Invalid params: cart.update_items[${index}] must be an object` };
+    const id = normalizeCartLineId(item.id, `cart.update_items[${index}].id`);
+    if ('error' in id) return id;
+    const quantity = item.quantity;
+    if (typeof quantity !== 'number' || !Number.isFinite(quantity) || quantity < 0 || quantity > 999) {
+      return { error: `Invalid params: cart.update_items[${index}].quantity must be between 0 and 999` };
+    }
+    normalized.push({ id: id.value, quantity: Math.trunc(quantity) });
+  }
+  return { value: normalized };
+}
+
+function normalizeRemoveLineIds(value: unknown): { value?: string[] } | { error: string } {
+  if (value === undefined) return {};
+  if (!Array.isArray(value) || value.length < 1 || value.length > 25) {
+    return { error: 'Invalid params: cart.remove_line_ids must include 1-25 ids when provided' };
+  }
+  const normalized: string[] = [];
+  for (const [index, id] of value.entries()) {
+    const lineId = normalizeCartLineId(id, `cart.remove_line_ids[${index}]`);
+    if ('error' in lineId) return lineId;
+    normalized.push(lineId.value);
+  }
+  return { value: normalized };
+}
+
+function normalizeCartLineId(value: unknown, field: string): { value: string } | { error: string } {
+  if (typeof value !== 'string' || value.trim() === '') return { error: `Invalid params: ${field} is required` };
+  const trimmed = value.trim();
+  if (!/^gid:\/\/shopify\/CartLine\/[A-Za-z0-9_?=&:-]+$/.test(trimmed)) {
+    return { error: `Invalid params: ${field} must be a Shopify CartLine gid` };
+  }
+  return { value: trimmed };
 }
 
 function normalizeContext(value: unknown): { value?: Record<string, string> } | { error: string } {

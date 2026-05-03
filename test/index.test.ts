@@ -1077,24 +1077,18 @@ describe('Commonlands MCP Worker', () => {
     expect(JSON.stringify(getResult(body))).not.toMatch(/shpat|shpss|accessToken|Authorization|Bearer/i);
   });
 
-  it('proxies get_cart, update_cart, and cancel_cart with Shopify-owned cart persistence', async () => {
-    const toolNames: string[] = [];
+  it('proxies get_cart and standard Storefront MCP add/change/remove cart updates', async () => {
+    const toolCalls: Array<{ name: string; arguments: Record<string, unknown> }> = [];
     globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body ?? '{}')) as { params: { name: string; arguments: Record<string, unknown> } };
-      toolNames.push(body.params.name);
-      if (body.params.name === 'update_cart') {
-        expect(body.params.arguments).toMatchObject({
-          cart_id: 'gid://shopify/Cart/cart_abc123',
-          add_items: [{ quantity: 3, product_variant_id: 'gid://shopify/ProductVariant/12345678901' }],
-        });
-      }
+      toolCalls.push(body.params);
       return Response.json({
         result: {
           structuredContent: {
             cart: {
               id: body.params.arguments.cart_id ?? 'gid://shopify/Cart/cart_abc123',
               continue_url: 'https://commonlands.com/cart/c/cart_abc123',
-              messages: body.params.name === 'cancel_cart' ? [{ type: 'info', code: 'cart_canceled', content: 'Cart canceled' }] : [],
+              messages: [],
             },
           },
         },
@@ -1106,10 +1100,25 @@ describe('Commonlands MCP Worker', () => {
       name: 'update_cart',
       arguments: {
         id: 'gid://shopify/Cart/cart_abc123',
-        cart: { line_items: [{ quantity: 3, item: { id: 'gid://shopify/ProductVariant/12345678901' } }] },
+        cart: {
+          line_items: [{ quantity: 3, item: { id: 'gid://shopify/ProductVariant/12345678901' } }],
+          update_items: [{ id: 'gid://shopify/CartLine/li_1?cart=cart_abc123', quantity: 5 }],
+          remove_line_ids: ['gid://shopify/CartLine/li_2?cart=cart_abc123'],
+        },
       },
     }, 'update-cart', shopifyCartEnv);
-    expect(toolNames).toEqual(['get_cart', 'update_cart']);
+    expect(toolCalls).toEqual([
+      { name: 'get_cart', arguments: { cart_id: 'gid://shopify/Cart/cart_abc123' } },
+      {
+        name: 'update_cart',
+        arguments: {
+          cart_id: 'gid://shopify/Cart/cart_abc123',
+          add_items: [{ quantity: 3, product_variant_id: 'gid://shopify/ProductVariant/12345678901' }],
+          update_items: [{ id: 'gid://shopify/CartLine/li_1?cart=cart_abc123', quantity: 5 }],
+          remove_line_ids: ['gid://shopify/CartLine/li_2?cart=cart_abc123'],
+        },
+      },
+    ]);
     expect(getStructuredContent(get.body)).toMatchObject({ operation: 'get_cart', safety: { createsCart: false, updatesCart: false } });
     expect(getStructuredContent(update.body)).toMatchObject({ operation: 'update_cart', safety: { updatesCart: true, createsCheckout: false } });
   });
