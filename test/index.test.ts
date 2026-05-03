@@ -19,7 +19,7 @@ const shopifyReadonlyEnv: Env = {
 const shopifyCartEnv: Env = {
   ...shopifyReadonlyEnv,
   ENABLE_COMMERCE_MUTATION_TOOLS: 'true',
-  SHOPIFY_CART_MCP_ENDPOINT: 'https://commonlands.com/api/ucp/mcp',
+  SHOPIFY_CART_MCP_ENDPOINT: 'https://commonlands.com/api/mcp',
   SHOPIFY_UCP_AGENT_PROFILE: 'https://commonlands-mcp.erp-14c.workers.dev/.well-known/ucp',
 };
 
@@ -1013,18 +1013,16 @@ describe('Commonlands MCP Worker', () => {
       const url = input instanceof Request ? input.url : input.toString();
       const body = String(init?.body ?? '');
       calls.push({ url, body });
-      expect(url).toBe('https://commonlands.com/api/ucp/mcp');
-      expect(body).toContain('create_cart');
+      expect(url).toBe('https://commonlands.com/api/mcp');
+      expect(body).toContain('update_cart');
       expect(body).toContain('gid://shopify/ProductVariant/12345678901');
       expect(body).not.toMatch(/checkout|order|customer|inventory|mutation/i);
-      const payload = JSON.parse(body) as { params: { arguments: { meta: Record<string, unknown>; cart: Record<string, unknown> } } };
-      expect(payload.params.arguments.meta).toMatchObject({
-        'ucp-agent': { profile: 'https://commonlands-mcp.erp-14c.workers.dev/.well-known/ucp' },
+      const payload = JSON.parse(body) as { params: { name: string; arguments: Record<string, unknown> } };
+      expect(payload.params.name).toBe('update_cart');
+      expect(payload.params.arguments).toEqual({
+        add_items: [{ quantity: 2, product_variant_id: 'gid://shopify/ProductVariant/12345678901' }],
       });
-      expect(payload.params.arguments.cart).toEqual({
-        line_items: [{ quantity: 2, item: { id: 'gid://shopify/ProductVariant/12345678901' } }],
-        context: { address_country: 'US', address_region: 'CA', postal_code: '92101' },
-      });
+      expect(payload.params.arguments).not.toHaveProperty('cart_id');
       return Response.json({
         jsonrpc: '2.0',
         id: 'commonlands-cart-ucp',
@@ -1086,18 +1084,15 @@ describe('Commonlands MCP Worker', () => {
       toolNames.push(body.params.name);
       if (body.params.name === 'update_cart') {
         expect(body.params.arguments).toMatchObject({
-          id: 'gid://shopify/Cart/cart_abc123',
-          cart: { line_items: [{ quantity: 3, item: { id: 'gid://shopify/ProductVariant/12345678901' } }] },
+          cart_id: 'gid://shopify/Cart/cart_abc123',
+          add_items: [{ quantity: 3, product_variant_id: 'gid://shopify/ProductVariant/12345678901' }],
         });
-      }
-      if (body.params.name === 'cancel_cart') {
-        expect(body.params.arguments.meta).toMatchObject({ 'idempotency-key': '660e8400-e29b-41d4-a716-446655440001' });
       }
       return Response.json({
         result: {
           structuredContent: {
             cart: {
-              id: body.params.arguments.id ?? 'gid://shopify/Cart/cart_abc123',
+              id: body.params.arguments.cart_id ?? 'gid://shopify/Cart/cart_abc123',
               continue_url: 'https://commonlands.com/cart/c/cart_abc123',
               messages: body.params.name === 'cancel_cart' ? [{ type: 'info', code: 'cart_canceled', content: 'Cart canceled' }] : [],
             },
@@ -1114,18 +1109,48 @@ describe('Commonlands MCP Worker', () => {
         cart: { line_items: [{ quantity: 3, item: { id: 'gid://shopify/ProductVariant/12345678901' } }] },
       },
     }, 'update-cart', shopifyCartEnv);
-    const cancel = await rpc('tools/call', {
-      name: 'cancel_cart',
-      arguments: {
-        id: 'gid://shopify/Cart/cart_abc123',
-        meta: { 'idempotency-key': '660e8400-e29b-41d4-a716-446655440001' },
-      },
-    }, 'cancel-cart', shopifyCartEnv);
-
-    expect(toolNames).toEqual(['get_cart', 'update_cart', 'cancel_cart']);
+    expect(toolNames).toEqual(['get_cart', 'update_cart']);
     expect(getStructuredContent(get.body)).toMatchObject({ operation: 'get_cart', safety: { createsCart: false, updatesCart: false } });
     expect(getStructuredContent(update.body)).toMatchObject({ operation: 'update_cart', safety: { updatesCart: true, createsCheckout: false } });
-    expect(getStructuredContent(cancel.body)).toMatchObject({ operation: 'cancel_cart', safety: { cancelsCart: true, createsOrder: false } });
+  });
+
+  it('keeps Shopify Cart UCP mode separate for future validated /api/ucp/mcp endpoints', async () => {
+    const ucpEnv: Env = {
+      ...shopifyCartEnv,
+      SHOPIFY_CART_MCP_ENDPOINT: 'https://commonlands-camera-components.myshopify.com/api/ucp/mcp',
+    };
+    const calls: Array<{ url: string; body: string }> = [];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      const body = String(init?.body ?? '');
+      calls.push({ url, body });
+      const payload = JSON.parse(body) as { params: { name: string; arguments: Record<string, unknown> } };
+      expect(url).toBe('https://commonlands-camera-components.myshopify.com/api/ucp/mcp');
+      expect(payload.params.name).toBe('create_cart');
+      expect(payload.params.arguments).toMatchObject({
+        meta: { 'ucp-agent': { profile: 'https://commonlands-mcp.erp-14c.workers.dev/.well-known/ucp' } },
+        cart: { line_items: [{ quantity: 1, item: { id: 'gid://shopify/ProductVariant/12345678901' } }] },
+      });
+      return Response.json({
+        result: {
+          content: [{ type: 'text', text: JSON.stringify({ cart: { id: 'gid://shopify/Cart/cart_ucp123', continue_url: 'https://commonlands.com/cart/c/cart_ucp123' } }) }],
+        },
+      });
+    }) as typeof fetch;
+
+    const result = await rpc('tools/call', {
+      name: 'create_cart',
+      arguments: {
+        cart: { line_items: [{ quantity: 1, item: { id: 'gid://shopify/ProductVariant/12345678901' } }] },
+      },
+    }, 'create-cart-ucp-mode', ucpEnv);
+
+    expect(calls).toHaveLength(1);
+    expect(getStructuredContent(result.body)).toMatchObject({
+      configured: true,
+      connector: { status: 'ok', endpointHost: 'commonlands-camera-components.myshopify.com' },
+      cart: { id: 'gid://shopify/Cart/cart_ucp123' },
+    });
   });
 
   it('rejects unsafe Cart UCP requests before calling Shopify', async () => {
@@ -1145,7 +1170,7 @@ describe('Commonlands MCP Worker', () => {
       },
     }, 'unsafe-cart-buyer', shopifyCartEnv);
     expect(getStructuredContent(withBuyer.body)).toMatchObject({
-      connector: { status: 'invalid_request', messages: ['Invalid params: buyer/customer fields are not enabled for Commonlands Cart UCP'] },
+      connector: { status: 'invalid_request', messages: ['Invalid params: buyer/customer fields are not enabled for Commonlands Cart MCP'] },
       safety: { readsCustomers: false, createsCustomer: false },
     });
 
@@ -1160,7 +1185,7 @@ describe('Commonlands MCP Worker', () => {
       arguments: { id: 'gid://shopify/Cart/cart_abc123' },
     }, 'unsafe-cart-cancel', shopifyCartEnv);
     expect(getStructuredContent(badCancel.body)).toMatchObject({
-      connector: { status: 'invalid_request', messages: ['Invalid params: cancel_cart requires meta["idempotency-key"] for retry safety'] },
+      connector: { status: 'invalid_request', messages: ['Invalid params: cancel_cart requires the Shopify UCP endpoint; the live standard Storefront MCP endpoint exposes get_cart and update_cart only'] },
     });
 
     expect(called).toBe(false);

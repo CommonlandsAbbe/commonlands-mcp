@@ -257,9 +257,9 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: 'create_cart',
-    title: 'Create Shopify Cart UCP cart',
+    title: 'Create Shopify cart',
     description:
-      'Create a Shopify-owned UCP cart for selected variant line items. Commonlands MCP is a stateless proxy: cart state is stored and mutated by Shopify Cart MCP, not in the Worker.',
+      'Create a Shopify-owned cart for selected variant line items through the configured Shopify Cart/Storefront MCP endpoint. Commonlands MCP is a stateless proxy: cart state is stored and mutated by Shopify, not in the Worker.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -294,8 +294,8 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: 'get_cart',
-    title: 'Get Shopify Cart UCP cart',
-    description: 'Retrieve a Shopify-owned UCP cart by cart id. Cart persistence comes from Shopify; agents must retain cart id or continue_url across sessions.',
+    title: 'Get Shopify cart',
+    description: 'Retrieve a Shopify-owned cart by cart id. Cart persistence comes from Shopify; agents must retain cart id or continue_url across sessions.',
     inputSchema: {
       type: 'object',
       properties: { meta: { type: 'object' }, id: { type: 'string', description: 'Shopify Cart gid.' } },
@@ -305,9 +305,9 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: 'update_cart',
-    title: 'Update Shopify Cart UCP cart',
+    title: 'Update Shopify cart',
     description:
-      'Replace a Shopify-owned UCP cart full state using Cart MCP PUT semantics. Send the complete desired line_items/context state every time.',
+      'Update a Shopify-owned cart through the configured Cart/Storefront MCP endpoint. With UCP endpoints, treat updates as full-state PUT semantics; with the confirmed standard Storefront MCP endpoint, Commonlands maps line_items to Shopify add_items.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -343,8 +343,8 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: 'cancel_cart',
-    title: 'Cancel Shopify Cart UCP cart',
-    description: 'Cancel a Shopify-owned UCP cart by id. Requires meta["idempotency-key"] UUID for retry safety.',
+    title: 'Cancel Shopify cart',
+    description: 'Cancel a Shopify-owned UCP cart by id. Requires a validated UCP Cart MCP endpoint and meta["idempotency-key"] UUID for retry safety; the confirmed standard Storefront MCP endpoint does not expose cancel_cart.',
     inputSchema: {
       type: 'object',
       properties: { meta: { type: 'object' }, id: { type: 'string' } },
