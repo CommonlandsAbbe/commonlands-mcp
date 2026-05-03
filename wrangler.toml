@@ -7,3 +7,5 @@ workers_dev = true
 ENVIRONMENT = "local"
 VERSION = "0.1.0"
 GIT_SHA = "local"
+FOV_LIVE_BACKEND_ENABLED = "true"
+FOV_LAMBDA_ENDPOINT = "https://ia97wrz7ag.execute-api.us-west-2.amazonaws.com/default/fov"
