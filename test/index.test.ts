@@ -286,7 +286,8 @@ describe('Commonlands MCP Worker', () => {
   it('only lists commerce mutation tools when explicitly enabled', async () => {
     const cartList = await rpc('tools/list', undefined, 'cart-tools', shopifyCartEnv);
     const cartNames = ((getResult(cartList.body).tools as ToolSummary[]).map((tool) => tool.name));
-    expect(cartNames).toEqual(expect.arrayContaining(['create_cart', 'get_cart', 'update_cart', 'cancel_cart']));
+    expect(cartNames).toEqual(expect.arrayContaining(['create_cart', 'get_cart', 'update_cart']));
+    expect(cartNames).not.toContain('cancel_cart');
     expect(cartNames).not.toContain('create_checkout');
     expect(cartNames).not.toContain('complete_checkout');
 
@@ -296,6 +297,15 @@ describe('Commonlands MCP Worker', () => {
     expect(checkoutNames).not.toContain('update_checkout');
     expect(checkoutNames).not.toContain('complete_checkout');
     expect(checkoutNames).not.toContain('cancel_checkout');
+  });
+
+  it('lists cancel_cart only for validated UCP cart endpoints', async () => {
+    const ucpCartList = await rpc('tools/list', undefined, 'ucp-cart-tools', {
+      ...shopifyCartEnv,
+      SHOPIFY_CART_MCP_ENDPOINT: 'https://commonlands-camera-components.myshopify.com/api/ucp/mcp',
+    });
+    const ucpCartNames = ((getResult(ucpCartList.body).tools as ToolSummary[]).map((tool) => tool.name));
+    expect(ucpCartNames).toEqual(expect.arrayContaining(['create_cart', 'get_cart', 'update_cart', 'cancel_cart']));
   });
 
   it('blocks commerce mutation tool calls unless explicitly enabled', async () => {
@@ -1193,9 +1203,7 @@ describe('Commonlands MCP Worker', () => {
       name: 'cancel_cart',
       arguments: { id: 'gid://shopify/Cart/cart_abc123' },
     }, 'unsafe-cart-cancel', shopifyCartEnv);
-    expect(getStructuredContent(badCancel.body)).toMatchObject({
-      connector: { status: 'invalid_request', messages: ['Invalid params: cancel_cart requires the Shopify UCP endpoint; the live standard Storefront MCP endpoint exposes get_cart and update_cart only'] },
-    });
+    expect(badCancel.body.error).toMatchObject({ code: -32601, message: 'Tool not found: cancel_cart' });
 
     expect(called).toBe(false);
   });
