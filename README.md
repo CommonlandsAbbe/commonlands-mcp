@@ -4,9 +4,9 @@ Public Model Context Protocol (MCP) server for Commonlands precision optics. It 
 
 ## Live endpoint
 
-- MCP endpoint: `https://commonlands-mcp.erp-14c.workers.dev/mcp`
-- UCP discovery: `https://commonlands-mcp.erp-14c.workers.dev/.well-known/ucp`
-- Health check: `https://commonlands-mcp.erp-14c.workers.dev/healthz`
+- MCP endpoint: `https://mcp.commonlands.com/mcp`
+- UCP discovery: `https://mcp.commonlands.com/.well-known/ucp`
+- Health check: `https://mcp.commonlands.com/healthz`
 - Client setup guide: [`docs/client-connections.md`](docs/client-connections.md)
 - Live usage guide: [`docs/live-usage-and-integrations.md`](docs/live-usage-and-integrations.md)
 
@@ -35,7 +35,7 @@ Add this to `~/.codex/config.toml` or a trusted project `.codex/config.toml`:
 
 ```toml
 [mcp_servers.commonlands]
-url = "https://commonlands-mcp.erp-14c.workers.dev/mcp"
+url = "https://mcp.commonlands.com/mcp"
 tool_timeout_sec = 60
 ```
 
@@ -50,7 +50,7 @@ Claude Desktop-style local MCP configs can bridge to the remote HTTP server with
   "mcpServers": {
     "commonlands": {
       "command": "npx",
-      "args": ["-y", "mcp-remote", "https://commonlands-mcp.erp-14c.workers.dev/mcp"]
+      "args": ["-y", "mcp-remote", "https://mcp.commonlands.com/mcp"]
     }
   }
 }
@@ -64,7 +64,7 @@ Add this to `.cursor/mcp.json` in a project or `~/.cursor/mcp.json` globally:
 {
   "mcpServers": {
     "commonlands": {
-      "url": "https://commonlands-mcp.erp-14c.workers.dev/mcp"
+      "url": "https://mcp.commonlands.com/mcp"
     }
   }
 }
@@ -78,7 +78,7 @@ Add this to `~/.codeium/windsurf/mcp_config.json`:
 {
   "mcpServers": {
     "commonlands": {
-      "serverUrl": "https://commonlands-mcp.erp-14c.workers.dev/mcp"
+      "serverUrl": "https://mcp.commonlands.com/mcp"
     }
   }
 }

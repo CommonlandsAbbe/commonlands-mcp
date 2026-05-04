@@ -20,7 +20,7 @@ const shopifyCartEnv: Env = {
   ...shopifyReadonlyEnv,
   ENABLE_COMMERCE_MUTATION_TOOLS: 'true',
   SHOPIFY_CART_MCP_ENDPOINT: 'https://commonlands.com/api/mcp',
-  SHOPIFY_UCP_AGENT_PROFILE: 'https://commonlands-mcp.erp-14c.workers.dev/.well-known/ucp',
+  SHOPIFY_UCP_AGENT_PROFILE: 'https://mcp.commonlands.com/.well-known/ucp',
 };
 
 const shopifyCheckoutBasicEnv: Env = {
@@ -1210,7 +1210,7 @@ describe('Commonlands MCP Worker', () => {
       expect(url).toBe('https://commonlands-camera-components.myshopify.com/api/ucp/mcp');
       expect(payload.params.name).toBe('create_cart');
       expect(payload.params.arguments).toMatchObject({
-        meta: { 'ucp-agent': { profile: 'https://commonlands-mcp.erp-14c.workers.dev/.well-known/ucp' } },
+        meta: { 'ucp-agent': { profile: 'https://mcp.commonlands.com/.well-known/ucp' } },
         cart: { line_items: [{ quantity: 1, item: { id: 'gid://shopify/ProductVariant/12345678901' } }] },
       });
       return Response.json({
@@ -1341,7 +1341,7 @@ describe('Commonlands MCP Worker', () => {
       expect(body).not.toMatch(/complete_checkout|payment|order|customer|inventory|mutation/i);
       const payload = JSON.parse(body) as { params: { arguments: { meta: Record<string, unknown>; checkout: Record<string, unknown> } } };
       expect(payload.params.arguments.meta).toMatchObject({
-        'ucp-agent': { profile: 'https://commonlands-mcp.erp-14c.workers.dev/.well-known/ucp' },
+        'ucp-agent': { profile: 'https://mcp.commonlands.com/.well-known/ucp' },
       });
       expect(payload.params.arguments.checkout).toEqual({
         cart_id: 'gid://shopify/Cart/cart_abc123',
@@ -2063,7 +2063,7 @@ describe('Commonlands MCP Worker', () => {
     expect(body).toEqual({ error: 'not_found' });
   });
 
-  it('serves a UCP discovery profile that advertises catalog capabilities only', async () => {
+  it('serves a UCP discovery profile that advertises catalog and cart discovery only', async () => {
     const response = await fetchWorker('/.well-known/ucp');
     const profile = await response.json() as Record<string, unknown>;
 

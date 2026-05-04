@@ -2,9 +2,9 @@
 
 Commonlands MCP is a remote Streamable HTTP MCP server for precision-optics workflows: M12 lenses, C-mount lenses, lens field of view, live read-only Shopify product truth, and Shopify-owned cart handoff.
 
-- **MCP endpoint:** `https://commonlands-mcp.erp-14c.workers.dev/mcp`
-- **Discovery profile:** `https://commonlands-mcp.erp-14c.workers.dev/.well-known/ucp`
-- **Health check:** `https://commonlands-mcp.erp-14c.workers.dev/healthz`
+- **MCP endpoint:** `https://mcp.commonlands.com/mcp`
+- **Discovery profile:** `https://mcp.commonlands.com/.well-known/ucp`
+- **Health check:** `https://mcp.commonlands.com/healthz`
 
 Use the live `tools/list` result as the source of truth for enabled tools. At the time this page was written, the live surface exposes catalog/search tools, `read_shopify_products`, live FoV tools, and Shopify-owned cart tools `create_cart`, `get_cart`, and `update_cart`. `cancel_cart` and Checkout MCP tools are intentionally hidden.
 
@@ -26,7 +26,7 @@ Codex supports remote Streamable HTTP MCP servers in `~/.codex/config.toml` or i
 
 ```toml
 [mcp_servers.commonlands]
-url = "https://commonlands-mcp.erp-14c.workers.dev/mcp"
+url = "https://mcp.commonlands.com/mcp"
 tool_timeout_sec = 60
 ```
 
@@ -34,7 +34,7 @@ Optional: allowlist read/catalog/FoV tools if you do not want cart tools visible
 
 ```toml
 [mcp_servers.commonlands]
-url = "https://commonlands-mcp.erp-14c.workers.dev/mcp"
+url = "https://mcp.commonlands.com/mcp"
 tool_timeout_sec = 60
 enabled_tools = [
   "search_lenses",
@@ -59,7 +59,7 @@ After saving config, open Codex and run `/mcp` to confirm `commonlands` is conne
 Recent Codex CLI versions can also register a Streamable HTTP server from the command line:
 
 ```bash
-codex mcp add commonlands --url https://commonlands-mcp.erp-14c.workers.dev/mcp
+codex mcp add commonlands --url https://mcp.commonlands.com/mcp
 ```
 
 If your Codex version does not support `--url`, use the `config.toml` snippet above.
@@ -74,7 +74,7 @@ For OpenAI-compatible agent frameworks that support MCP servers, configure Commo
     {
       "name": "commonlands",
       "type": "streamable_http",
-      "url": "https://commonlands-mcp.erp-14c.workers.dev/mcp"
+      "url": "https://mcp.commonlands.com/mcp"
     }
   ]
 }
@@ -104,7 +104,7 @@ curl https://api.anthropic.com/v1/messages \
     "mcp_servers": [
       {
         "type": "url",
-        "url": "https://commonlands-mcp.erp-14c.workers.dev/mcp",
+        "url": "https://mcp.commonlands.com/mcp",
         "name": "commonlands"
       }
     ],
@@ -128,13 +128,13 @@ Some Claude clients use local stdio MCP configuration. If the client does not su
   "mcpServers": {
     "commonlands": {
       "command": "npx",
-      "args": ["-y", "mcp-remote", "https://commonlands-mcp.erp-14c.workers.dev/mcp"]
+      "args": ["-y", "mcp-remote", "https://mcp.commonlands.com/mcp"]
     }
   }
 }
 ```
 
-Save the config, restart the Claude client, and ask it to list available Commonlands tools. If your Claude plan or client supports native remote MCP integrations, add `https://commonlands-mcp.erp-14c.workers.dev/mcp` as the integration URL instead.
+Save the config, restart the Claude client, and ask it to list available Commonlands tools. If your Claude plan or client supports native remote MCP integrations, add `https://mcp.commonlands.com/mcp` as the integration URL instead.
 
 ## Cursor
 
@@ -144,7 +144,7 @@ Cursor supports remote MCP servers in `.cursor/mcp.json` for a project or `~/.cu
 {
   "mcpServers": {
     "commonlands": {
-      "url": "https://commonlands-mcp.erp-14c.workers.dev/mcp"
+      "url": "https://mcp.commonlands.com/mcp"
     }
   }
 }
@@ -166,7 +166,7 @@ Windsurf Cascade reads MCP servers from `~/.codeium/windsurf/mcp_config.json`. R
 {
   "mcpServers": {
     "commonlands": {
-      "serverUrl": "https://commonlands-mcp.erp-14c.workers.dev/mcp"
+      "serverUrl": "https://mcp.commonlands.com/mcp"
     }
   }
 }
@@ -178,7 +178,7 @@ If your Windsurf version expects `url` instead of `serverUrl`, use:
 {
   "mcpServers": {
     "commonlands": {
-      "url": "https://commonlands-mcp.erp-14c.workers.dev/mcp"
+      "url": "https://mcp.commonlands.com/mcp"
     }
   }
 }
@@ -191,7 +191,7 @@ Restart or refresh Cascade’s MCP list after saving the file.
 Initialize:
 
 ```bash
-curl -X POST https://commonlands-mcp.erp-14c.workers.dev/mcp \
+curl -X POST https://mcp.commonlands.com/mcp \
   -H 'content-type: application/json' \
   -H 'accept: application/json, text/event-stream' \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"commonlands-smoke","version":"0.0.0"}}}'
@@ -200,7 +200,7 @@ curl -X POST https://commonlands-mcp.erp-14c.workers.dev/mcp \
 List tools:
 
 ```bash
-curl -X POST https://commonlands-mcp.erp-14c.workers.dev/mcp \
+curl -X POST https://mcp.commonlands.com/mcp \
   -H 'content-type: application/json' \
   -H 'accept: application/json, text/event-stream' \
   -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
@@ -209,7 +209,7 @@ curl -X POST https://commonlands-mcp.erp-14c.workers.dev/mcp \
 Safe read-only product truth example:
 
 ```bash
-curl -X POST https://commonlands-mcp.erp-14c.workers.dev/mcp \
+curl -X POST https://mcp.commonlands.com/mcp \
   -H 'content-type: application/json' \
   -H 'accept: application/json, text/event-stream' \
   -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"read_shopify_products","arguments":{"query":"CIL250","limit":1}}}'

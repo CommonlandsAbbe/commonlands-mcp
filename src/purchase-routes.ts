@@ -181,7 +181,7 @@ export function getPurchaseRouteOptions(args: Record<string, unknown>): Purchase
     warnings: [
       'This response plans purchase routes only; it does not create a cart, checkout, order, RFQ, customer record, or inventory reservation.',
       'Use read_shopify_products to resolve live ProductVariant IDs before cart/checkout handoff; fixture variant IDs are not valid Shopify purchase IDs.',
-      'Cart/checkout tools are exposed but safe-fail until their Shopify MCP endpoints are configured; exposure does not mean readiness.',
+      'Cart tools may be exposed for Shopify-owned cart handoff; checkout tools remain hidden until the Shopify Checkout MCP endpoint is validated/configured and approved.',
       'Live price, availability, variant IDs, and inventory must be revalidated before any future transaction.',
     ],
     provenance: {

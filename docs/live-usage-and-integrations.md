@@ -4,11 +4,11 @@ Commonlands MCP lets AI agents answer lens-selection questions with Commonlands 
 
 The live server is:
 
-- **MCP endpoint:** `https://commonlands-mcp.erp-14c.workers.dev/mcp`
-- **Discovery profile:** `https://commonlands-mcp.erp-14c.workers.dev/.well-known/ucp`
-- **Health check:** `https://commonlands-mcp.erp-14c.workers.dev/healthz`
+- **MCP endpoint:** `https://mcp.commonlands.com/mcp`
+- **Discovery profile:** `https://mcp.commonlands.com/.well-known/ucp`
+- **Health check:** `https://mcp.commonlands.com/healthz`
 
-The current public surface was verified after the PR #26 deployment on 2026-05-03 PDT. It exposes 22 tools. Checkout tools and `cancel_cart` are intentionally hidden.
+The current public surface was verified after the PR #26 deployment on 2026-05-03 PDT. It exposes 22 tools. UCP discovery advertises catalog + cart discovery. Checkout tools and `cancel_cart` are intentionally hidden.
 
 ## The short version
 
@@ -50,8 +50,8 @@ If a buyer explicitly asks for a cart, the agent can use live Shopify Variant GI
 - **Live FoV backend:** `compute_fov` and `compute_fov_catalog` use the authenticated AWS Lambda/DynamoDB backend when configured. The Worker sends the backend secret server-side; agents never receive it, and returned lens records are allowlisted.
 - **Sensor specs:** `get_sensor_specs` is currently fixture-backed from the Worker sensor catalog.
 - **Cart tools:** `create_cart`, `get_cart`, and `update_cart` are exposed through Shopify's standard Storefront MCP endpoint.
-- **Checkout tools:** hidden. `create_checkout` returns `Tool not found`.
-- **Cancel cart:** hidden for the current standard Storefront MCP endpoint. `cancel_cart` returns `Tool not found`.
+- **Checkout tools:** hidden. `create_checkout` returns `Tool not found`; checkout still needs a validated Shopify Checkout MCP endpoint, Cloudflare protections, and explicit approval before exposure.
+- **Cancel cart:** hidden for the current standard Storefront MCP endpoint. `cancel_cart` returns `Tool not found` unless a validated UCP Cart MCP endpoint with cancel semantics is configured later.
 
 ## Recommended agent workflow
 
@@ -439,7 +439,7 @@ Live catalog mode depends on the Lambda supporting a bounded catalog scan when n
 }
 ```
 
-Note: the readiness text is conservative/static. The live `tools/list` is authoritative for what is currently exposed. Current approved cart exposure is limited to `create_cart`, `get_cart`, and `update_cart` when configured; `cancel_cart`, checkout, customer, order, inventory, and catalog-write tools remain hidden/gated.
+Note: the readiness text is conservative/static. The live `tools/list` is authoritative for what is currently exposed. Current approved cart exposure is limited to `create_cart`, `get_cart`, and `update_cart` when configured; UCP discovery advertises catalog + cart discovery; `cancel_cart`, checkout, customer, order, inventory, and catalog-write tools remain hidden/gated.
 
 ### `get_shopify_readonly_config_status`
 
@@ -805,13 +805,13 @@ These are intentionally not part of the current live tool surface:
 Health check:
 
 ```bash
-curl -s 'https://commonlands-mcp.erp-14c.workers.dev/healthz' | python3 -m json.tool
+curl -s 'https://mcp.commonlands.com/healthz' | python3 -m json.tool
 ```
 
 List tools:
 
 ```bash
-curl -s -X POST 'https://commonlands-mcp.erp-14c.workers.dev/mcp' \
+curl -s -X POST 'https://mcp.commonlands.com/mcp' \
   -H 'content-type: application/json' \
   -H 'accept: application/json' \
   -H 'user-agent: Mozilla/5.0 commonlands-mcp-smoke' \
@@ -821,7 +821,7 @@ curl -s -X POST 'https://commonlands-mcp.erp-14c.workers.dev/mcp' \
 Read live Shopify product truth:
 
 ```bash
-curl -s -X POST 'https://commonlands-mcp.erp-14c.workers.dev/mcp' \
+curl -s -X POST 'https://mcp.commonlands.com/mcp' \
   -H 'content-type: application/json' \
   -H 'accept: application/json' \
   -H 'user-agent: Mozilla/5.0 commonlands-mcp-smoke' \
@@ -831,7 +831,7 @@ curl -s -X POST 'https://commonlands-mcp.erp-14c.workers.dev/mcp' \
 Compute live FoV for a known Lambda/DynamoDB lens:
 
 ```bash
-curl -s -X POST 'https://commonlands-mcp.erp-14c.workers.dev/mcp' \
+curl -s -X POST 'https://mcp.commonlands.com/mcp' \
   -H 'content-type: application/json' \
   -H 'accept: application/json' \
   -H 'user-agent: Mozilla/5.0 commonlands-mcp-smoke' \
@@ -841,7 +841,7 @@ curl -s -X POST 'https://commonlands-mcp.erp-14c.workers.dev/mcp' \
 Check that checkout is hidden:
 
 ```bash
-curl -s -X POST 'https://commonlands-mcp.erp-14c.workers.dev/mcp' \
+curl -s -X POST 'https://mcp.commonlands.com/mcp' \
   -H 'content-type: application/json' \
   -H 'accept: application/json' \
   -H 'user-agent: Mozilla/5.0 commonlands-mcp-smoke' \
@@ -858,10 +858,10 @@ curl -s -X POST 'https://commonlands-mcp.erp-14c.workers.dev/mcp' \
 - Do not expose direct gated datasheet URLs.
 - For live FoV, agents call Commonlands MCP only. Agents must not call the AWS Lambda/API Gateway endpoint directly.
 
-## Future custom domain note
+## Public endpoint
 
-Current approved public endpoint remains Workers.dev:
+Use the custom-domain endpoint in public docs and client configs:
 
-`https://commonlands-mcp.erp-14c.workers.dev/mcp`
+`https://mcp.commonlands.com/mcp`
 
-Do not move `commonlands.com` DNS to Cloudflare for this. The future clean custom-domain path requires Cloudflare Business custom hostname/proxy setup, currently estimated around `$200/month`.
+Discovery and health are available at `https://mcp.commonlands.com/.well-known/ucp` and `https://mcp.commonlands.com/healthz`.

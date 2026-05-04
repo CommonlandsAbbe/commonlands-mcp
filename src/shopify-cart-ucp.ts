@@ -69,7 +69,7 @@ type NormalizedCart = {
   signals?: Record<string, unknown>;
 };
 
-const DEFAULT_AGENT_PROFILE = 'https://commonlands-mcp.erp-14c.workers.dev/.well-known/ucp';
+const DEFAULT_AGENT_PROFILE = 'https://mcp.commonlands.com/.well-known/ucp';
 const JSON_RPC_ID = 'commonlands-cart-ucp';
 const COMMONLANDS_SHOPIFY_HOSTS = new Set(['commonlands.com', 'commonlands-camera-components.myshopify.com']);
 const SHOPIFY_STOREFRONT_MCP_PATH = '/api/mcp';
