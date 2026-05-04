@@ -38,6 +38,8 @@ type JsonObject = Record<string, unknown>;
 
 interface ToolSummary {
   name: string;
+  title?: string;
+  description?: string;
   inputSchema: JsonObject;
 }
 
@@ -137,6 +139,8 @@ interface CatalogSnapshotStatus {
 
 interface ResourceSummary {
   uri: string;
+  name?: string;
+  description?: string;
 }
 
 async function fetchWorker(path: string, init?: RequestInit, requestEnv: Env = env): Promise<Response> {
@@ -282,6 +286,34 @@ describe('Commonlands MCP Worker', () => {
     expect(tools.map((tool) => tool.name)).not.toContain('update_checkout');
     expect(tools.map((tool) => tool.name)).not.toContain('cancel_checkout');
     expect(tools[0]?.inputSchema.type).toBe('object');
+
+    const metadataText = tools.map((tool) => `${tool.title ?? ''} ${tool.description ?? ''}`).join(' ');
+    expect(metadataText).toMatch(/M12 lenses/i);
+    expect(metadataText).toMatch(/C-mount lenses/i);
+    expect(metadataText).toMatch(/lens field of view/i);
+    expect(metadataText).toMatch(/read_shopify_products/i);
+    expect(metadataText).toMatch(/read-only/i);
+  });
+
+  it('returns MCP initialize instructions with usage, SEO, and security metadata', async () => {
+    const { body } = await rpc(
+      'initialize',
+      {
+        protocolVersion: '2024-11-05',
+        capabilities: {},
+        clientInfo: { name: 'vitest', version: '0.0.0' },
+      },
+      'initialize-metadata',
+    );
+    const result = getResult(body);
+    const instructions = result.instructions as string;
+
+    expect(instructions).toMatch(/M12 lenses/i);
+    expect(instructions).toMatch(/C-mount lenses/i);
+    expect(instructions).toMatch(/lens field of view/i);
+    expect(instructions).toMatch(/Use read_shopify_products/i);
+    expect(instructions).toMatch(/Do not pass arbitrary URLs/i);
+    expect(instructions).toMatch(/not accept client-supplied downstream tokens/i);
   });
 
   it('only lists commerce mutation tools when explicitly enabled', async () => {
@@ -381,6 +413,10 @@ describe('Commonlands MCP Worker', () => {
     expect(resources.map((resource) => resource.uri)).toContain('commonlands://catalog/lenses');
     expect(resources.map((resource) => resource.uri)).toContain('commonlands://catalog/snapshot-status');
     expect(resources.map((resource) => resource.uri)).toContain('commonlands://compatibility/shopify-ucp');
+    const resourceMetadataText = resources.map((resource) => `${resource.name ?? ''} ${resource.description ?? ''}`).join(' ');
+    expect(resourceMetadataText).toMatch(/M12 lenses/i);
+    expect(resourceMetadataText).toMatch(/C-mount lenses/i);
+    expect(resourceMetadataText).toMatch(/lens field of view/i);
 
     const read = await rpc('resources/read', { uri: 'commonlands://catalog/lenses' });
     const readResult = getResult(read.body);

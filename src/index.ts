@@ -84,12 +84,18 @@ const FOV_BACKEND_MAX_RESPONSE_BYTES = 128 * 1024;
 const FOV_SINGLE_MAX_RESULTS = 10;
 const FOV_CATALOG_MAX_RESULTS = 250;
 
+const SERVER_INSTRUCTIONS = [
+  'Commonlands MCP helps agents select precision optics for machine vision, robotics, and embedded vision: M12 lenses, C-mount lenses, and lens field of view calculations.',
+  'Usage flow: discover lenses with search_lenses/search_catalog, inspect details with get_lens_details/get_product, compute lens field of view with compute_fov or compute_fov_catalog, rank options with match_lenses_to_sensor/compare_lenses/recommend_lenses_for_application, then use read_shopify_products for live purchasable truth before quoting price, availability, Shopify variantId, product URL, or cart payloads.',
+  'Safety boundaries: fixture-backed tools are scaffold/context only; Shopify product/cart truth is read-only unless approved cart tools are explicitly listed in tools/list; cancel, checkout, payment, customer, order, inventory, and product writes remain hidden/gated unless separately approved. Do not pass arbitrary URLs or client-supplied downstream tokens; Commonlands uses fixed allowlisted endpoints and server-side secrets only, and does not accept client-supplied downstream tokens.',
+].join(' ');
+
 const TOOLS: ToolDefinition[] = [
   {
     name: 'search_lenses',
     title: 'Search Commonlands lenses',
     description:
-      'Search the fixture-backed Commonlands lens catalog snapshot by SKU, title, mount, or lens type. Use read_shopify_products for live purchasable product truth.',
+      'Search the fixture-backed Commonlands lens catalog snapshot by SKU, title, mount, lens type, M12 lenses, C-mount lenses, or machine-vision application. Use read_shopify_products for live purchasable product truth.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -102,7 +108,7 @@ const TOOLS: ToolDefinition[] = [
   {
     name: 'get_lens_details',
     title: 'Get lens details',
-    description: 'Return fixture-backed public product and optical metadata for one Commonlands lens SKU. Use read_shopify_products for live product, price, availability, variant IDs, and metafields.',
+    description: 'Return fixture-backed public product and optical metadata for one Commonlands lens SKU, including mount, focal length, image circle, resolution, and machine-vision lens context. Use read_shopify_products for live product, price, availability, variant IDs, and metafields.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -115,7 +121,7 @@ const TOOLS: ToolDefinition[] = [
   {
     name: 'get_sensor_specs',
     title: 'Get sensor specs',
-    description: 'Return fixture-backed sensor dimensions and resolution for Phase 1 matching inputs.',
+    description: 'Return fixture-backed sensor dimensions, pixel pitch, and resolution for lens field of view, M12 lens, and C-mount lens matching inputs.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -129,7 +135,7 @@ const TOOLS: ToolDefinition[] = [
     name: 'compute_fov',
     title: 'Compute lens field of view',
     description:
-      'Compute field of view for a Commonlands lens and sensor pair. Uses the authenticated live FoV backend when configured; otherwise fixture-backed scaffold data. Verify purchasable facts with read_shopify_products.',
+      'Compute lens field of view for a Commonlands lens and sensor pair, including horizontal, vertical, and diagonal FoV when available. Supports M12 lenses and C-mount lenses. Uses the authenticated live FoV backend when configured; otherwise fixture-backed scaffold data. Verify purchasable facts with read_shopify_products.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -149,7 +155,7 @@ const TOOLS: ToolDefinition[] = [
     name: 'compute_fov_catalog',
     title: 'Compute catalog field of view for a sensor',
     description:
-      'Compute field of view for the available Commonlands lens catalog on one sensor. Uses the authenticated live FoV backend when configured and returns sanitized FoV/catalog fields only; alpha/beta coefficients are never returned.',
+      'Compute lens field of view for the available Commonlands M12 lens and C-mount lens catalog on one sensor. Uses the authenticated live FoV backend when configured and returns sanitized FoV/catalog fields only; raw distortion coefficients are never returned.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -168,7 +174,7 @@ const TOOLS: ToolDefinition[] = [
     name: 'match_lenses_to_sensor',
     title: 'Match lenses to a sensor',
     description:
-      'Rank fixture catalog lenses for one sensor using image-circle coverage, FoV target fit, and deterministic optical tradeoffs. Not live product truth; verify purchasable facts with read_shopify_products.',
+      'Rank fixture catalog M12 lenses and C-mount lenses for one sensor using image-circle coverage, lens field of view target fit, and deterministic optical tradeoffs. Not live product truth; verify purchasable facts with read_shopify_products.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -185,7 +191,7 @@ const TOOLS: ToolDefinition[] = [
   {
     name: 'compare_lenses',
     title: 'Compare Commonlands lenses',
-    description: 'Compare selected fixture-backed lens SKUs on the same sensor with the same deterministic scoring model. Not live product truth; verify purchasable facts with read_shopify_products.',
+    description: 'Compare selected fixture-backed Commonlands M12 lens and C-mount lens SKUs on the same sensor with the same deterministic scoring model. Not live product truth; verify purchasable facts with read_shopify_products.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -632,7 +638,7 @@ const TOOLS: ToolDefinition[] = [
     name: 'recommend_lenses_for_application',
     title: 'Recommend lenses for an application',
     description:
-      'Rank fixture catalog lenses for an application note such as embedded robotics or machine-vision inspection.',
+      'Rank fixture catalog M12 lenses and C-mount lenses for an application note such as embedded robotics, machine-vision inspection, or a required lens field of view.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -654,26 +660,26 @@ const TOOLS: ToolDefinition[] = [
 const RESOURCES = [
   {
     uri: 'commonlands://catalog/lenses',
-    name: 'Commonlands lens catalog snapshot',
-    description: 'Fixture-backed Phase 1 joined lens catalog snapshot.',
+    name: 'Commonlands M12 and C-mount lens catalog snapshot',
+    description: 'Fixture-backed Phase 1 joined catalog of Commonlands M12 lenses, C-mount lenses, focal lengths, mounts, image circles, and product handoff fields.',
     mimeType: 'application/json',
   },
   {
     uri: 'commonlands://catalog/sensors',
     name: 'Commonlands sensor fixture catalog',
-    description: 'Fixture-backed Phase 1 sensor catalog for optics-tool inputs.',
+    description: 'Fixture-backed Phase 1 sensor catalog for lens field of view inputs: active area, resolution, and pixel pitch.',
     mimeType: 'application/json',
   },
   {
     uri: 'commonlands://catalog/snapshot-status',
     name: 'Commonlands joined catalog snapshot status',
-    description: 'Fixture-backed catalog validation, join counts, source provenance, and connector-readiness status.',
+    description: 'Fixture-backed catalog validation, join counts, source provenance, connector-readiness status, and product-truth boundaries for M12/C-mount lens recommendations.',
     mimeType: 'application/json',
   },
   {
     uri: 'commonlands://compatibility/shopify-ucp',
     name: 'Commonlands Shopify Storefront/UCP readiness',
-    description: 'Fixture-backed compatibility report for Shopify Storefront MCP and UCP Catalog launch planning.',
+    description: 'Compatibility report for Shopify Storefront MCP and UCP Catalog launch planning, including read-only product truth and approved Shopify-owned cart boundaries.',
     mimeType: 'application/json',
   },
 ];
@@ -734,8 +740,7 @@ function initializeResponse(id: unknown): Response {
       resources: {},
     },
     serverInfo: SERVER_INFO,
-    instructions:
-      'Commonlands MCP catalog, optics, live read-only Shopify product truth, live FoV when configured, and approved Shopify-owned cart handoff endpoint. Fixture-backed tools are scaffold/context only; use read_shopify_products for purchasable truth.',
+    instructions: SERVER_INSTRUCTIONS,
   });
 }
 

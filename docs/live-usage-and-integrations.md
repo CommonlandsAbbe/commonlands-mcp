@@ -33,7 +33,7 @@ Use it to search the Commonlands lens catalog, shortlist lenses by sensor/applic
 
 ### Optical calculations
 
-Use `compute_fov` for one lens/sensor pair and `compute_fov_catalog` for catalog-wide FoV on one sensor. In production, these use the authenticated AWS Lambda/DynamoDB FoV backend when configured. Sensor specs currently come from the Worker fixture sensor catalog. Agent-facing FoV responses are sanitized before return and never expose raw `alpha`/`beta` coefficients.
+Use `compute_fov` for one lens/sensor pair and `compute_fov_catalog` for catalog-wide FoV on one sensor. In production, these use the authenticated AWS Lambda/DynamoDB FoV backend when configured. Sensor specs currently come from the Worker fixture sensor catalog. Agent-facing FoV responses are sanitized before return and never expose raw distortion coefficients.
 
 ### Live Shopify product truth
 
@@ -244,7 +244,7 @@ The output excerpts below are from live-safe calls to the production endpoint un
 }
 ```
 
-Live backend records are allowlisted by the Worker before they are returned to agents. Raw DynamoDB/Lambda fields such as `alpha` and `beta` are not exposed. If a SKU is missing from, or rejected by, the Lambda's current DynamoDB table, the tool fails closed with:
+Live backend records are allowlisted by the Worker before they are returned to agents. Raw DynamoDB/Lambda distortion-coefficient fields are not exposed. If a SKU is missing from, or rejected by, the Lambda's current DynamoDB table, the tool fails closed with:
 
 ```json
 { "code": -32603, "message": "Live FoV backend rejected request" }
