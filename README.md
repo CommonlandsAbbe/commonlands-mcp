@@ -95,6 +95,8 @@ See [`docs/client-connections.md`](docs/client-connections.md) for OpenAI/Codex,
 
 ## Local development
 
+The canonical public MCP endpoint is always `https://mcp.commonlands.com/mcp`. The `localhost:8787` URLs below are only for a local Wrangler dev server and should not be used in public metadata or client configuration.
+
 Requirements: Node.js 22+.
 
 ```bash

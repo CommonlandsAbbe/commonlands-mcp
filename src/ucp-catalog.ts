@@ -2,6 +2,8 @@ import { CATALOG_SNAPSHOT, getLensBySku, searchLenses, type LensCatalogItem } fr
 import { buildProductPageDetails } from './product-page';
 
 export const UCP_VERSION = '2026-04-08' as const;
+const PUBLIC_MCP_ORIGIN = 'https://mcp.commonlands.com';
+const PUBLIC_MCP_ENDPOINT = `${PUBLIC_MCP_ORIGIN}/mcp`;
 
 export interface UcpCatalogMessage {
   type: 'info' | 'warning' | 'error';
@@ -133,11 +135,11 @@ export interface UcpDiscoveryProfile {
   };
 }
 
-export function buildUcpDiscoveryProfile(origin: string): UcpDiscoveryProfile {
+export function buildUcpDiscoveryProfile(_origin: string): UcpDiscoveryProfile {
   return {
     version: UCP_VERSION,
     transport: 'mcp',
-    endpoint: `${origin}/mcp`,
+    endpoint: PUBLIC_MCP_ENDPOINT,
     capabilities: [
       'dev.ucp.shopping.catalog.search',
       'dev.ucp.shopping.catalog.lookup',
@@ -145,7 +147,7 @@ export function buildUcpDiscoveryProfile(origin: string): UcpDiscoveryProfile {
     ],
     schema: {
       name: 'Commonlands catalog profile',
-      url: `${origin}/schemas/ucp-catalog.json`,
+      url: `${PUBLIC_MCP_ORIGIN}/schemas/ucp-catalog.json`,
     },
     metadata: {
       service: 'commonlands-mcp',

@@ -308,6 +308,7 @@ describe('Commonlands MCP Worker', () => {
     const result = getResult(body);
     const instructions = result.instructions as string;
 
+    expect(instructions).toMatch(/https:\/\/mcp\.commonlands\.com\/mcp/i);
     expect(instructions).toMatch(/M12 lenses/i);
     expect(instructions).toMatch(/C-mount lenses/i);
     expect(instructions).toMatch(/lens field of view/i);
@@ -410,10 +411,12 @@ describe('Commonlands MCP Worker', () => {
     const listed = await rpc('resources/list');
     const listedResult = getResult(listed.body);
     const resources = listedResult.resources as ResourceSummary[];
+    expect(resources.map((resource) => resource.uri)).toContain('commonlands://server/connection');
     expect(resources.map((resource) => resource.uri)).toContain('commonlands://catalog/lenses');
     expect(resources.map((resource) => resource.uri)).toContain('commonlands://catalog/snapshot-status');
     expect(resources.map((resource) => resource.uri)).toContain('commonlands://compatibility/shopify-ucp');
     const resourceMetadataText = resources.map((resource) => `${resource.name ?? ''} ${resource.description ?? ''}`).join(' ');
+    expect(resourceMetadataText).toMatch(/https:\/\/mcp\.commonlands\.com\/mcp/i);
     expect(resourceMetadataText).toMatch(/M12 lenses/i);
     expect(resourceMetadataText).toMatch(/C-mount lenses/i);
     expect(resourceMetadataText).toMatch(/lens field of view/i);
@@ -2071,7 +2074,7 @@ describe('Commonlands MCP Worker', () => {
     expect(profile).toMatchObject({
       version: '2026-04-08',
       transport: 'mcp',
-      endpoint: 'https://mcp.commonlands.test/mcp',
+      endpoint: 'https://mcp.commonlands.com/mcp',
       capabilities: [
         'dev.ucp.shopping.catalog.search',
         'dev.ucp.shopping.catalog.lookup',

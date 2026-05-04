@@ -75,6 +75,7 @@ const SERVER_INFO = {
   version: '0.1.0',
 } as const;
 
+const PUBLIC_MCP_ENDPOINT = 'https://mcp.commonlands.com/mcp';
 const PROTOCOL_VERSION = '2024-11-05';
 const MAX_MCP_BODY_BYTES = 64 * 1024;
 const SAFE_IDENTIFIER_PATTERN = /^[A-Z0-9-]{2,32}$/;
@@ -85,6 +86,7 @@ const FOV_SINGLE_MAX_RESULTS = 10;
 const FOV_CATALOG_MAX_RESULTS = 250;
 
 const SERVER_INSTRUCTIONS = [
+  `Commonlands MCP public endpoint is ${PUBLIC_MCP_ENDPOINT}. Use this endpoint in client configuration, metadata, and agent-facing descriptions.`,
   'Commonlands MCP helps agents select precision optics for machine vision, robotics, and embedded vision: M12 lenses, C-mount lenses, and lens field of view calculations.',
   'Usage flow: discover lenses with search_lenses/search_catalog, inspect details with get_lens_details/get_product, compute lens field of view with compute_fov or compute_fov_catalog, rank options with match_lenses_to_sensor/compare_lenses/recommend_lenses_for_application, then use read_shopify_products for live purchasable truth before quoting price, availability, Shopify variantId, product URL, or cart payloads.',
   'Safety boundaries: fixture-backed tools are scaffold/context only; Shopify product/cart truth is read-only unless approved cart tools are explicitly listed in tools/list; cancel, checkout, payment, customer, order, inventory, and product writes remain hidden/gated unless separately approved. Do not pass arbitrary URLs or client-supplied downstream tokens; Commonlands uses fixed allowlisted endpoints and server-side secrets only, and does not accept client-supplied downstream tokens.',
@@ -658,6 +660,12 @@ const TOOLS: ToolDefinition[] = [
 ];
 
 const RESOURCES = [
+  {
+    uri: 'commonlands://server/connection',
+    name: 'Commonlands MCP public connection metadata',
+    description: `Canonical public MCP endpoint: ${PUBLIC_MCP_ENDPOINT}. Use this URL for clients, metadata, and agent-facing descriptions; localhost is local-development only.`,
+    mimeType: 'application/json',
+  },
   {
     uri: 'commonlands://catalog/lenses',
     name: 'Commonlands M12 and C-mount lens catalog snapshot',
