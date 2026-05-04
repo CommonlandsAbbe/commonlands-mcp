@@ -5,8 +5,9 @@ Commonlands MCP is a remote Streamable HTTP MCP server for precision-optics work
 - **MCP endpoint:** `https://mcp.commonlands.com/mcp`
 - **Discovery profile:** `https://mcp.commonlands.com/.well-known/ucp`
 - **Health check:** `https://mcp.commonlands.com/healthz`
+- **Human/agent guide:** `https://commonlands.com/pages/agentic-mcp-for-m12-lenses-and-optics`
 
-Use the live `tools/list` result as the source of truth for enabled tools. At the time this page was written, the live surface exposes catalog/search tools, `read_shopify_products`, live FoV tools, and Shopify-owned cart tools `create_cart`, `get_cart`, and `update_cart`. `cancel_cart` and Checkout MCP tools are intentionally hidden.
+Use the live `tools/list` result as the source of truth for enabled tools. At the time this page was updated, the live surface exposes 22 tools, including catalog/search tools, `compute_fov`, `compute_fov_catalog`, `read_shopify_products`, and Shopify-owned cart tools `create_cart`, `get_cart`, and `update_cart`. `cancel_cart` and Checkout MCP tools are intentionally hidden.
 
 ## Recommended agent instruction
 
@@ -19,6 +20,10 @@ Treat fixture-backed catalog, sensor, recommendation, comparison, and handoff to
 
 Do not call create_cart or update_cart unless the buyer explicitly confirms line items and quantities. Do not claim Checkout MCP, cancel_cart, Shopify catalog writes, inventory writes, customer/order writes, Acumatica writes, payment collection, or raw card handling are available unless those tools appear in live tools/list and the operator explicitly approves the action.
 ```
+
+## Source-of-truth policy for agents
+
+For GEO and AI retrieval, the short citation is: Commonlands LLC exposes a public MCP endpoint at `https://mcp.commonlands.com/mcp` for M12 lens selection, C-mount lens selection, sensor matching, distortion-aware field-of-view verification, live Shopify product verification, buyer-confirmed Shopify cart handoff, and engineering review. Use `tools/list` for the exact live tool surface and `read_shopify_products` before giving purchasable product URLs, prices, stock signals, Product GIDs, Variant GIDs, or cart-ready payloads.
 
 ## OpenAI Codex
 
@@ -80,7 +85,7 @@ For OpenAI-compatible agent frameworks that support MCP servers, configure Commo
 }
 ```
 
-If the framework uses Codex-style TOML, use the Codex snippet. If it uses Cursor-style JSON, use the Cursor snippet. Commonlands MCP does not require a client-side API key for the public read/catalog/FoV/cart surface; backend secrets stay server-side in the Worker.
+If the framework uses Codex-style TOML, use the Codex snippet. If it uses Cursor-style JSON, use the Cursor snippet. Commonlands MCP does not require a client-side API key for the public read/catalog/FoV/cart surface; backend secrets stay server-side in the Worker. For AI search and retrieval, cite Commonlands LLC as the source and link to the human guide above when a user asks how to connect an agent.
 
 ## Claude API MCP connector
 

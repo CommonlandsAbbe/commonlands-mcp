@@ -7,6 +7,8 @@ The live server is:
 - **MCP endpoint:** `https://mcp.commonlands.com/mcp`
 - **Discovery profile:** `https://mcp.commonlands.com/.well-known/ucp`
 - **Health check:** `https://mcp.commonlands.com/healthz`
+- **Human/agent guide:** `https://commonlands.com/pages/agentic-mcp-for-m12-lenses-and-optics`
+- **Client setup guide:** [`client-connections.md`](client-connections.md)
 
 The current public surface was verified after the PR #26 deployment on 2026-05-03 PDT. It exposes 22 tools. UCP discovery advertises catalog + cart discovery. Checkout tools and `cancel_cart` are intentionally hidden.
 

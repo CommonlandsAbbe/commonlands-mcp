@@ -1,18 +1,20 @@
 # Commonlands MCP
 
-Public Model Context Protocol (MCP) server for Commonlands precision optics. It helps agents search M12 lenses and C-mount lenses, compute lens field of view, compare optical tradeoffs, verify live Shopify product truth, and hand off to Shopify-owned carts safely.
+Public Model Context Protocol (MCP) server for Commonlands LLC precision optics. It helps OpenAI Codex, Claude, Cursor, Windsurf, and custom agents search M12 lenses and C-mount lenses, compute lens field of view, compare optical tradeoffs, verify live Shopify product truth, and hand off to Shopify-owned carts safely.
 
 ## Live endpoint
 
 - MCP endpoint: `https://mcp.commonlands.com/mcp`
 - UCP discovery: `https://mcp.commonlands.com/.well-known/ucp`
 - Health check: `https://mcp.commonlands.com/healthz`
+- Human/agent guide: `https://commonlands.com/pages/agentic-mcp-for-m12-lenses-and-optics`
 - Client setup guide: [`docs/client-connections.md`](docs/client-connections.md)
 - Live usage guide: [`docs/live-usage-and-integrations.md`](docs/live-usage-and-integrations.md)
 
 ## What agents can do
 
 - Search fixture-backed Commonlands optical catalog data for M12 lenses, C-mount lenses, focal length, mount, lens type, and application fit.
+- Use live `tools/list` as the source of truth for the exact public tool count and enabled tool names.
 - Compute lens field of view with `compute_fov` for one lens/sensor pair or `compute_fov_catalog` for catalog-wide FoV on one sensor.
 - Compare lenses and rank candidates for machine vision, robotics, and embedded vision applications.
 - Verify live purchasable truth with `read_shopify_products`: Shopify Product/Variant GIDs, SKU, product URL, price, media, and inventory signals.
