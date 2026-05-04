@@ -4,7 +4,7 @@ Commonlands MCP is public/read-mostly for catalog and product truth, with a narr
 
 ## Public surface
 
-The current live `tools/list` is authoritative. As of 2026-05-03 PDT, the deployed public surface exposes 21 tools, including Shopify standard Storefront MCP cart tools `create_cart`, `get_cart`, and `update_cart`. `cancel_cart` is hidden because the current standard `/api/mcp` endpoint does not expose cancel. Checkout MCP tools remain hidden. The default UCP discovery profile advertises catalog capabilities only. `get_shopify_ucp_readiness` is conservative scaffold/readiness metadata, not the live exposure authority.
+The current live `tools/list` is authoritative. As of the PR #26 deployment on 2026-05-03 PDT, the deployed public surface exposes 22 tools, including `compute_fov_catalog` and Shopify standard Storefront MCP cart tools `create_cart`, `get_cart`, and `update_cart`. `cancel_cart` is hidden because the current standard `/api/mcp` endpoint does not expose cancel. Checkout MCP tools remain hidden. The default UCP discovery profile advertises catalog capabilities only. `get_shopify_ucp_readiness` is conservative scaffold/readiness metadata, not the live exposure authority.
 
 ## Commerce gates
 

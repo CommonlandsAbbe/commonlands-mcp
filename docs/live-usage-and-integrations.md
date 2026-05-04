@@ -8,7 +8,7 @@ The live server is:
 - **Discovery profile:** `https://commonlands-mcp.erp-14c.workers.dev/.well-known/ucp`
 - **Health check:** `https://commonlands-mcp.erp-14c.workers.dev/healthz`
 
-The current public surface was verified on 2026-05-03 PDT. It exposes 21 tools. Checkout tools and `cancel_cart` are intentionally hidden.
+The current public surface was verified after the PR #26 deployment on 2026-05-03 PDT. It exposes 22 tools. Checkout tools and `cancel_cart` are intentionally hidden.
 
 ## The short version
 
@@ -45,7 +45,7 @@ If a buyer explicitly asks for a cart, the agent can use live Shopify Variant GI
 
 ## Current production status
 
-- **Live tool count:** 21
+- **Live tool count:** 22
 - **Live Shopify product truth:** `read_shopify_products` is configured and read-only.
 - **Live FoV backend:** `compute_fov` and `compute_fov_catalog` use the authenticated AWS Lambda/DynamoDB backend when configured. The Worker sends the backend secret server-side; agents never receive it, and returned lens records are allowlisted.
 - **Sensor specs:** `get_sensor_specs` is currently fixture-backed from the Worker sensor catalog.
@@ -78,7 +78,7 @@ These prompts are safer than bare SKU questions because they force the agent to 
 
 ## Live tool input/output table
 
-This table reflects a live `tools/list` check against the production MCP endpoint on 2026-05-03 PDT. It lists the 21 exposed tools only. Checkout tools and `cancel_cart` are intentionally absent from the live surface.
+This table reflects a live `tools/list` check against the production MCP endpoint after the PR #26 deployment on 2026-05-03 PDT. It lists the 22 exposed tools only. Checkout tools and `cancel_cart` are intentionally absent from the live surface.
 
 | Tool | Primary use | Required inputs | Optional inputs | Output shape / what to trust | Usefulness check |
 | --- | --- | --- | --- | --- | --- |
