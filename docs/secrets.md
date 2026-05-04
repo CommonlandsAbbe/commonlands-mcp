@@ -66,7 +66,7 @@ Rules:
 
 ### Shopify Cart MCP
 
-- `ENABLE_COMMERCE_MUTATION_TOOLS` non-secret explicit gate; cart tools are hidden unless set to `true`.
+- `ENABLE_COMMERCE_MUTATION_TOOLS` non-secret explicit gate; cart tools are exposed only when this is `true` and the target environment is approved/configured. Live `tools/list` is authoritative.
 - `SHOPIFY_CART_MCP_ENDPOINT` non-secret HTTPS merchant Cart MCP endpoint. Current confirmed Commonlands Storefront MCP endpoint is `https://commonlands-camera-components.myshopify.com/api/mcp`; the Worker also permits exact Commonlands merchant hosts only, not arbitrary tool-supplied endpoints.
 - `SHOPIFY_UCP_AGENT_PROFILE` optional non-secret profile URL; defaults to the live Commonlands UCP discovery URL.
 

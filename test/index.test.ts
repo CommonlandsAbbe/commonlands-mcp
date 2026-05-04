@@ -404,9 +404,9 @@ describe('Commonlands MCP Worker', () => {
         ucpCatalogVersion: '2026-04-08',
       },
       readiness: {
-        status: 'catalog_fixture_ready_commerce_mutations_disabled_by_default',
-        liveConnectors: 'not_connected',
-        cartCheckout: 'cart_checkout_mutation_tools_hidden_pending_approval',
+        status: 'catalog_fixture_ready_live_shopify_read_and_cart_proxy_configured_separately',
+        liveConnectors: 'shopify_read_only_configured_separately',
+        cartCheckout: 'cart_proxy_create_get_update_when_enabled_checkout_hidden',
         customerAccounts: 'not_implemented_requires_oauth_and_protected_customer_data',
       },
       ucpCatalog: {
@@ -612,7 +612,19 @@ describe('Commonlands MCP Worker', () => {
           handle: 'telephoto-25mm-m12-lens-cil250',
           title: 'IR Corrected 25mm M12 Lens',
           metafields: [{ namespace: 'custom', key: 'short_partnumber', valuePreview: 'CIL250' }],
-          variants: [{ sku: 'NOT-CIL250-SKU', metafields: [{ namespace: 'mm-google-shopping', key: 'mpn', valuePreview: 'CIL250' }] }],
+          variants: [
+            {
+              sku: 'NOT-CIL250-SKU',
+              metafields: [{ namespace: 'mm-google-shopping', key: 'mpn', valuePreview: 'CIL250' }],
+              recommendedCreateCartPayload: {
+                cart: {
+                  line_items: [
+                    { quantity: 1, item: { id: 'gid://shopify/ProductVariant/123' } },
+                  ],
+                },
+              },
+            },
+          ],
         },
       ],
     });
@@ -692,6 +704,13 @@ describe('Commonlands MCP Worker', () => {
         price: '49.00',
         inventoryQuantity: 10,
         storefrontCartPath: '/cart/111:1',
+        recommendedCreateCartPayload: {
+          cart: {
+            line_items: [
+              { quantity: 1, item: { id: 'gid://shopify/ProductVariant/111' } },
+            ],
+          },
+        },
       }),
     ]);
     expect(JSON.stringify(structuredContent)).not.toContain('recommend_live_shopify_lens_for_sensor');
@@ -787,6 +806,13 @@ describe('Commonlands MCP Worker', () => {
               sku: 'CIL250',
               inventoryQuantity: 42,
               inventoryTracked: true,
+              recommendedCreateCartPayload: {
+                cart: {
+                  line_items: [
+                    { quantity: 1, item: { id: 'gid://shopify/ProductVariant/123' } },
+                  ],
+                },
+              },
             },
           ],
         },
@@ -1198,7 +1224,27 @@ describe('Commonlands MCP Worker', () => {
       name: 'create_cart',
       arguments: { cart: { line_items: [{ quantity: 1, item: { id: 'gid://shopify/Product/123' } }] } },
     }, 'unsafe-cart-variant', shopifyCartEnv);
-    expect(getStructuredContent(badVariant.body)).toMatchObject({ connector: { status: 'invalid_request' } });
+    const badVariantContent = getStructuredContent(badVariant.body);
+    expect(badVariantContent).toMatchObject({ connector: { status: 'invalid_request' } });
+    expect((badVariantContent.connector as JsonObject).messages).toEqual([
+      'Invalid params: cart.line_items[0].item.id must be a Shopify ProductVariant GID from read_shopify_products. Call read_shopify_products and use variantId; numeric IDs, storefront cart paths, and gid://commonlands/... fixture IDs are not accepted.',
+    ]);
+
+    const numericVariant = await rpc('tools/call', {
+      name: 'create_cart',
+      arguments: { cart: { line_items: [{ quantity: 1, item: { id: '41702699729014' } }] } },
+    }, 'unsafe-cart-numeric-variant', shopifyCartEnv);
+    expect((getStructuredContent(numericVariant.body).connector as JsonObject).messages).toEqual([
+      'Invalid params: cart.line_items[0].item.id must be a Shopify ProductVariant GID from read_shopify_products. Call read_shopify_products and use variantId; numeric IDs, storefront cart paths, and gid://commonlands/... fixture IDs are not accepted.',
+    ]);
+
+    const fixtureVariant = await rpc('tools/call', {
+      name: 'create_cart',
+      arguments: { cart: { line_items: [{ quantity: 1, item: { id: 'gid://commonlands/ProductVariant/CIL250' } }] } },
+    }, 'unsafe-cart-fixture-variant', shopifyCartEnv);
+    expect((getStructuredContent(fixtureVariant.body).connector as JsonObject).messages).toEqual([
+      'Invalid params: cart.line_items[0].item.id must be a Shopify ProductVariant GID from read_shopify_products. Call read_shopify_products and use variantId; numeric IDs, storefront cart paths, and gid://commonlands/... fixture IDs are not accepted.',
+    ]);
 
     const badCancel = await rpc('tools/call', {
       name: 'cancel_cart',
@@ -1523,7 +1569,8 @@ describe('Commonlands MCP Worker', () => {
       mimeType: 'application/json',
     });
     expect(parsed.ucpCatalog.compatibleTools).toEqual(['search_catalog', 'lookup_catalog', 'get_product']);
-    expect(parsed.readiness.liveConnectors).toBe('not_connected');
+    expect(parsed.readiness.liveConnectors).toBe('shopify_read_only_configured_separately');
+    expect(parsed.readiness.cartCheckout).toBe('cart_proxy_create_get_update_when_enabled_checkout_hidden');
   });
 
   it('reports joined catalog snapshot status and validation without live connectors', async () => {
@@ -1992,10 +2039,14 @@ describe('Commonlands MCP Worker', () => {
       capabilities: [
         'dev.ucp.shopping.catalog.search',
         'dev.ucp.shopping.catalog.lookup',
+        'dev.ucp.shopping.cart',
       ],
     });
     expect(profile).toMatchObject({
-      metadata: { cartPersistence: 'not_advertised', cartBoundary: 'commerce_mutation_tools_hidden_pending_approval' },
+      metadata: {
+        cartPersistence: 'shopify_owned_when_cart_tools_exposed',
+        cartBoundary: 'tools_list_is_authoritative_create_get_update_cart_only_when_enabled_cancel_checkout_hidden_currently',
+      },
     });
     expect(JSON.stringify(profile)).not.toMatch(/order|customer/i);
   });

@@ -430,16 +430,16 @@ Live catalog mode depends on the Lambda supporting a bounded catalog scan when n
 {
   "schemaVersion": "shopify.ucp_readiness.v1",
   "readiness": {
-    "status": "catalog_fixture_ready_commerce_mutations_disabled_by_default",
-    "liveConnectors": "not_connected",
-    "cartCheckout": "cart_checkout_mutation_tools_hidden_pending_approval"
+    "status": "catalog_fixture_ready_live_shopify_read_and_cart_proxy_configured_separately",
+    "liveConnectors": "shopify_read_only_configured_separately",
+    "cartCheckout": "cart_proxy_create_get_update_when_enabled_checkout_hidden"
   },
   "ucpCatalog": { "compatibleTools": ["search_catalog", "lookup_catalog", "get_product"], "productCount": 5 },
-  "safeguards": ["Cart/checkout mutation tools are hidden by default pending approval and configuration."]
+  "safeguards": ["Approved cart tools create/update Shopify-owned cart state only; checkout, customer-account access, order lookup, inventory mutation, product writes, raw payment credentials, and protected customer data remain blocked."]
 }
 ```
 
-Note: the readiness text is conservative/static. The live `tools/list` is authoritative for what is currently exposed.
+Note: the readiness text is conservative/static. The live `tools/list` is authoritative for what is currently exposed. Current approved cart exposure is limited to `create_cart`, `get_cart`, and `update_cart` when configured; `cancel_cart`, checkout, customer, order, inventory, and catalog-write tools remain hidden/gated.
 
 ### `get_shopify_readonly_config_status`
 
