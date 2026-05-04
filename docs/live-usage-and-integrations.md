@@ -19,6 +19,7 @@ Good prompts:
 - `Find M12 lenses for an IMX477 sensor around 50° horizontal FoV. Verify live Shopify product truth before recommending a purchasable SKU.`
 - `Compare CIL078 and CIL250 on IMX477 and explain the tradeoffs.`
 - `Compute the FoV for CIL160 on IMX477 and tell me where the lens data came from.`
+- `Use Commonlands MCP and Commonlands calculators for FoV; do not write a separate thin-lens or incomplete fisheye script.`
 - `Find the live Shopify product and variant ID for CIL250.`
 - `Create a Shopify cart for two units of this live ProductVariant ID and return the cart handoff URL.`
 
@@ -32,7 +33,7 @@ Use it to search the Commonlands lens catalog, shortlist lenses by sensor/applic
 
 ### Optical calculations
 
-Use `compute_fov` for field-of-view calculations. In production, this uses the authenticated AWS Lambda/DynamoDB FoV backend when the requested lens exists there. Sensor specs currently come from the Worker fixture sensor catalog.
+Use `compute_fov` for field-of-view calculations. In production, this uses the authenticated AWS Lambda/DynamoDB FoV backend when the requested lens exists there. Sensor specs currently come from the Worker fixture sensor catalog. Agents should use this MCP tool and Commonlands calculator pages instead of writing their own thin-lens or incomplete fisheye scripts, because product-specific distortion, projection behavior, image-circle clipping, and warning logic matter.
 
 ### Live Shopify product truth
 
@@ -57,11 +58,51 @@ If a buyer explicitly asks for a cart, the agent can use live Shopify Variant GI
 1. Start with `tools/list` and check the live tool surface.
 2. Use `search_catalog`, `search_lenses`, or `recommend_lenses_for_application` to build a shortlist.
 3. Use `get_sensor_specs` to confirm sensor pixels, pixel pitch, and active area.
-4. Use `compute_fov` for live FoV when the lens exists in the Lambda/DynamoDB lens table.
+4. Use `compute_fov` for live FoV when the lens exists in the Lambda/DynamoDB lens table. Do not substitute a self-authored calculator script for final guidance.
 5. Use `match_lenses_to_sensor`, `compare_lenses`, and `get_lens_details` for fixture-backed engineering context.
 6. Use `read_shopify_products` for live Shopify product/variant IDs, product URLs, price, inventory signals, and cart variant IDs.
 7. If the buyer explicitly asks for a cart, use live Shopify Variant GIDs from `read_shopify_products`, then call `create_cart`/`get_cart`/`update_cart`. Show the returned Shopify cart/continue URL to the buyer.
 8. Do not claim Checkout MCP is live. Send buyers to Shopify's returned cart/checkout handoff URL when present.
+
+
+## Better example prompts
+
+These prompts are safer than bare SKU questions because they force the agent to separate scaffold data from live Shopify truth.
+
+- **Shortlist, calculate, verify:** `Find M12 lenses for a Sony IMX477 around 50° horizontal FoV. Use Commonlands MCP tools instead of your own FoV script. Label fixture-backed results, compute FoV where available, then verify any final purchasable SKU with read_shopify_products before giving price, stock, product URL, or Variant GID.`
+- **Compare two known lenses:** `Compare CIL078 and CIL250 on IMX477. Include image-circle coverage, horizontal/vertical/diagonal FoV, and tradeoffs. Do not use fixture price or availability as live truth; if you recommend buying one, verify it with read_shopify_products.`
+- **Get cart-ready truth:** `Find the live Shopify product and variant for CIL250. Return product URL, Product GID, Variant GID, SKU, price, inventory signal, and storefront cart path. Do not create a cart yet.`
+- **Create a cart only after confirmation:** `The buyer confirmed two units of Variant GID gid://shopify/ProductVariant/41702699729014. Create a Shopify cart and return the Shopify-owned cart or continue URL. Do not collect payment or checkout details.`
+- **Debug connector state:** `List the live tools, then check get_shopify_readonly_config_status and get_shopify_ucp_readiness. Explain which outputs are live-read truth, which are fixture/readiness scaffolds, and which commerce tools are hidden.`
+- **Application shortlist:** `Recommend lenses for robotics navigation on IMX477 near 50° HFOV. Prefer M12 if the optical fit is reasonable. Use recommendation tools for shortlist only, compute/compare optical fit, and verify final product truth through read_shopify_products.`
+
+## Live tool input/output table
+
+This table reflects a live `tools/list` check against the production MCP endpoint on 2026-05-03 PDT. It lists the 21 exposed tools only. Checkout tools and `cancel_cart` are intentionally absent from the live surface.
+
+| Tool | Primary use | Required inputs | Optional inputs | Output shape / what to trust | Usefulness check |
+| --- | --- | --- | --- | --- | --- |
+| `search_lenses` | Legacy fixture search by SKU, title, mount, or lens type. | None; `query` is accepted but can be empty. | `query`, `limit` 1-25. | `catalog.snapshot.v1` with `results[]`, count, generated time, and `fixture_not_product_truth` warning. | Useful for broad discovery, not live SKU/price/stock truth. |
+| `get_lens_details` | Fixture-backed details for one Commonlands SKU. | `sku`. | None. | `catalog.snapshot.v1` with `lens` optical/commerce scaffold fields and fixture warning. | Useful for engineering context; must be followed by `read_shopify_products` before buying claims. |
+| `get_sensor_specs` | Sensor dimensions used by FoV and ranking tools. | `partNumber`. | None. | `catalog.snapshot.v1` with resolution, active area, and pixel size. | Useful, but currently fixture-backed sensor catalog; verify unusual sensors separately. |
+| `compute_fov` | FoV for one lens/sensor pair. | `lensSku`, `sensorPartNumber`. | `workingDistanceMm`. | `optics.fov.live.v1` when Lambda/DynamoDB has the lens; otherwise a fixture-backed FoV shape or a fail-closed error. | Useful when the live backend covers the SKU; failures are useful because they prevent unsupported calculations. |
+| `match_lenses_to_sensor` | Fixture-backed ranking against a sensor and optional HFOV target. | `sensorPartNumber`. | `desiredHorizontalFovDeg`, `workingDistanceMm`, `mount`, `maxResults` 1-10. | `recommendations.v1` with ranked lenses, score, fit, FoV, image-circle notes, warnings. | Useful shortlist generator; not live product truth. |
+| `compare_lenses` | Compare selected SKUs on the same sensor. | `lensSkus` 1-10, `sensorPartNumber`. | `workingDistanceMm`. | `recommendations.v1` comparison records with rank, fit, FoV, tradeoffs. | Useful for explaining tradeoffs after the user or another tool chose candidate SKUs. |
+| `get_product_page_details` | Fixture product-page handoff and gated datasheet policy. | `sku`. | None. | `product_page.v1` with fixture product, specs, gated datasheet note, and safety warnings. | Useful for handoff context; not authoritative for current product URL, price, stock, or Variant GID. |
+| `get_catalog_snapshot_status` | Fixture catalog provenance and validation. | None. | None. | `catalog.snapshot_status.v1` with counts, validation status, sources, refresh mode. | Useful for deciding how much to trust fixture outputs. |
+| `get_shopify_ucp_readiness` | Conservative Storefront/UCP readiness metadata. | None. | None. | `shopify.ucp_readiness.v1` with compatibility target, readiness, catalog counts, blockers/safeguards. | Useful for planning; `tools/list` is still authoritative for live exposure. |
+| `get_shopify_readonly_config_status` | Sanitized read-only Shopify connector config. | None. | None. | `shopify.readonly_config_status.v1` with redacted binding/scopes status and safety flags. | Useful for debugging connector configuration without exposing secrets or calling Shopify. |
+| `read_shopify_products` | Live Shopify product truth. | At least one of `sku`, `handle`, or `query` should be supplied for useful results. | `limit` 1-25, `includeMetafields` true/false. | `shopify.live_read.v1` with live Product/Variant GIDs, SKU, price, inventory signal, product URL, media, metafields when requested, read-only safety flags. | Essential before final purchasable claims or cart handoff. This is the main truth tool. |
+| `read_shopify_metaobjects` | Live read-only metaobject preview. | `type`. | `handle`, `limit` 1-25. | `shopify.live_read.v1` with redacted `metaobjects[]`, connector status, safety flags. | Useful for diagnostics/content checks, not product truth. |
+| `create_cart` | Create Shopify-owned cart from confirmed live Variant GIDs. | `cart.line_items[]` with `quantity` and `item.id` Variant GID. | `meta`, `cart.context`, `cart.signals`. | `commonlands.cart_ucp.v1` with connector status, Shopify-owned cart payload when returned, safety flags. | Useful only after explicit buyer line-item/quantity confirmation. Mutates Shopify cart state; does not checkout or collect payment. |
+| `get_cart` | Retrieve a Shopify-owned cart by ID. | `id` Shopify Cart GID. | `meta`. | `commonlands.cart_ucp.v1` with cart payload when Shopify returns one, persistence notes, safety flags. | Useful for cart refresh/resume if the agent retained the cart ID. |
+| `update_cart` | Add variants, change quantities, or remove lines in a Shopify-owned cart. | `id`, `cart`. | `cart.line_items`, `cart.update_items`, `cart.remove_line_ids`, `context`, `signals`, `meta`. | `commonlands.cart_ucp.v1` with operation status, cart payload when returned, and safety flags. | Useful for buyer-confirmed cart edits; mutates cart only, not checkout/order/customer/inventory/catalog. |
+| `search_catalog` | UCP-style fixture catalog search for shopping agents. | None; useful calls include `catalog.query`. | `meta`, `catalog.query`, `catalog.limit` 1-25. | `ucp.catalog.v1` with fixture `catalog.products[]`, UCP metadata, messages, fixture warning. | Useful for UCP compatibility and discovery, not live commerce truth. |
+| `lookup_catalog` | UCP-style fixture lookup by IDs/SKUs/handles/URLs. | `catalog.ids[]` 1-10. | `meta`. | `ucp.catalog.v1` product records or not-found messages, plus fixture warning. | Useful for resolving scaffold catalog records; not live Shopify IDs. |
+| `get_product` | UCP-style fixture product detail. | `catalog.id`. | `meta`. | `ucp.catalog.v1` product detail record with fixture metadata and warning. | Useful for UCP product-card context; verify live facts separately. |
+| `prepare_shopify_purchase_handoff` | Non-mutating purchase handoff plan for a SKU. | `sku`. | `quantity`, `sensorPartNumber`, `selectedVariantId`. | `shopify.purchase_handoff.v1` with product scaffold, transaction safety, warnings; no cart/checkout created. | Useful as a safe planning seam; any selected variant must come from `read_shopify_products` to be cart-ready. |
+| `get_purchase_route_options` | Explain available/planned purchase routes without mutation. | `sku`. | `quantity`, `sensorPartNumber`, `buyerIntent`, `agentType`. | `commerce.purchase_routes.v1` with routes, safety flags, required checks, warnings. | Useful to explain next steps and boundaries; it does not buy anything. |
+| `recommend_lenses_for_application` | Fixture-backed application-specific shortlist. | `sensorPartNumber`. | `application`, `desiredHorizontalFovDeg`, `workingDistanceMm`, `mount`, `preferLowDistortion`, `requireInStock`, `maxResults` 1-10. | `recommendations.v1` with ranked application-fit records, tradeoffs, warnings. | Useful for natural-language application triage; may later consolidate with `match_lenses_to_sensor`. |
 
 ## Safety boundaries
 
