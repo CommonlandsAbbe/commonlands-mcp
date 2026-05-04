@@ -1,41 +1,79 @@
-# Live MCP user guide
+# Commonlands MCP live guide
 
-This guide explains how agents should use the live public Commonlands MCP server. It reflects the deployed tool surface verified on 2026-05-03 PDT: 21 tools on `https://commonlands-mcp.erp-14c.workers.dev/mcp`.
+Commonlands MCP lets AI agents answer lens-selection questions with Commonlands product data, optical calculations, and safe Shopify cart handoff. Use it when you want an agent to help choose a lens, compare tradeoffs, verify live product facts, or prepare a Shopify cart link without asking you to copy specs between tools.
+
+The live server is:
+
+- **MCP endpoint:** `https://commonlands-mcp.erp-14c.workers.dev/mcp`
+- **Discovery profile:** `https://commonlands-mcp.erp-14c.workers.dev/.well-known/ucp`
+- **Health check:** `https://commonlands-mcp.erp-14c.workers.dev/healthz`
+
+The current public surface was verified on 2026-05-03 PDT. It exposes 21 tools. Checkout tools and `cancel_cart` are intentionally hidden.
+
+## The short version
+
+Ask normal engineering questions. The agent should use Commonlands MCP behind the scenes.
+
+Good prompts:
+
+- `Find M12 lenses for an IMX477 sensor around 50° horizontal FoV. Verify live Shopify product truth before recommending a purchasable SKU.`
+- `Compare CIL078 and CIL250 on IMX477 and explain the tradeoffs.`
+- `Compute the FoV for CIL160 on IMX477 and tell me where the lens data came from.`
+- `Find the live Shopify product and variant ID for CIL250.`
+- `Create a Shopify cart for two units of this live ProductVariant ID and return the cart handoff URL.`
+
+The agent should not make final buying claims from fixture catalog data. It must call `read_shopify_products` before giving live price, stock, product URL, Shopify Product/Variant IDs, or cart-ready variant IDs.
+
+## What it is good at
+
+### Lens discovery
+
+Use it to search the Commonlands lens catalog, shortlist lenses by sensor/application, and compare M12 or C-mount options. Some discovery and recommendation tools still use fixture-backed catalog data, so treat them as selection aids rather than final product truth.
+
+### Optical calculations
+
+Use `compute_fov` for field-of-view calculations. In production, this uses the authenticated AWS Lambda/DynamoDB FoV backend when the requested lens exists there. Sensor specs currently come from the Worker fixture sensor catalog.
+
+### Live Shopify product truth
+
+Use `read_shopify_products` for purchasable facts: live product URLs, Shopify Product/Variant GIDs, SKUs, prices, inventory signals, media, and selected metafields. This is read-only and does not write to Shopify.
+
+### Cart handoff
+
+If a buyer explicitly asks for a cart, the agent can use live Shopify Variant GIDs from `read_shopify_products`, then call `create_cart`, `get_cart`, or `update_cart`. Cart state is stored by Shopify, not by the Commonlands Worker. The agent should show the returned Shopify cart or continue URL.
 
 ## Current production status
 
-- **Endpoint:** `https://commonlands-mcp.erp-14c.workers.dev/mcp`
-- **Discovery profile:** `https://commonlands-mcp.erp-14c.workers.dev/.well-known/ucp`
-- **Health check:** `https://commonlands-mcp.erp-14c.workers.dev/healthz`
 - **Live tool count:** 21
 - **Live Shopify product truth:** `read_shopify_products` is configured and read-only.
 - **Live FoV backend:** `compute_fov` uses the authenticated AWS Lambda/DynamoDB backend when configured. The Worker sends the backend secret server-side; agents never receive it.
 - **Sensor specs:** `get_sensor_specs` is currently fixture-backed from the Worker sensor catalog.
-- **Cart tools:** `create_cart`, `get_cart`, and `update_cart` are exposed through Shopify's standard Storefront MCP endpoint. Cart state is stored by Shopify, not by the Commonlands Worker.
+- **Cart tools:** `create_cart`, `get_cart`, and `update_cart` are exposed through Shopify's standard Storefront MCP endpoint.
 - **Checkout tools:** hidden. `create_checkout` returns `Tool not found`.
 - **Cancel cart:** hidden for the current standard Storefront MCP endpoint. `cancel_cart` returns `Tool not found`.
 
-Use `read_shopify_products` before making final purchasable claims about product URL, price, availability, Shopify Product/Variant IDs, or variant cart IDs. Fixture-backed tools are useful for discovery and engineering context, but they are not final product truth.
-
 ## Recommended agent workflow
 
-1. Start with `tools/list` and check the tool surface.
+1. Start with `tools/list` and check the live tool surface.
 2. Use `search_catalog`, `search_lenses`, or `recommend_lenses_for_application` to build a shortlist.
 3. Use `get_sensor_specs` to confirm sensor pixels, pixel pitch, and active area.
 4. Use `compute_fov` for live FoV when the lens exists in the Lambda/DynamoDB lens table.
 5. Use `match_lenses_to_sensor`, `compare_lenses`, and `get_lens_details` for fixture-backed engineering context.
 6. Use `read_shopify_products` for live Shopify product/variant IDs, product URLs, price, inventory signals, and cart variant IDs.
 7. If the buyer explicitly asks for a cart, use live Shopify Variant GIDs from `read_shopify_products`, then call `create_cart`/`get_cart`/`update_cart`. Show the returned Shopify cart/continue URL to the buyer.
-8. Do not claim checkout MCP is live. Send buyers to Shopify's returned cart/checkout handoff URL when present.
+8. Do not claim Checkout MCP is live. Send buyers to Shopify's returned cart/checkout handoff URL when present.
 
-## Example prompts
+## Safety boundaries
 
-- `Find M12 lenses for an IMX477 sensor around 50° horizontal FoV. Verify live Shopify product truth before recommending a purchasable SKU.`
-- `Compute the FoV for CIL160 on IMX477 and explain where the lens data came from.`
-- `Give me the pixel count, pixel pitch, and active area for IMX477.`
-- `Compare CIL078 and CIL250 on IMX477, but label fixture-backed data clearly.`
-- `Find the live Shopify product and variant ID for CIL250.`
-- `Create a Shopify cart for two units of this live ProductVariant ID and return the cart handoff URL.`
+- Do not invent live price, stock, product URL, Shopify ID, or variant ID from fixture tools.
+- Do not call `create_cart` or `update_cart` until the buyer has explicitly selected line items and quantities.
+- Do not claim Checkout MCP is live.
+- Do not ask users for, store, or transmit raw card numbers, CVV/CVC, passwords, payment tokens, or customer-account credentials.
+- Do not attempt Shopify product, variant, collection, tag, metafield, inventory, order, customer, discount, RFQ, Acumatica, or database writes.
+- Do not expose direct gated datasheet URLs.
+- For live FoV, agents call Commonlands MCP only. Agents must not call the AWS Lambda/API Gateway endpoint directly.
+
+## Technical reference
 
 ## Tool-by-tool usage and current outputs
 

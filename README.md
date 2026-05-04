@@ -8,7 +8,7 @@ Public Commonlands MCP server on Cloudflare Workers for lens discovery, optics w
 - UCP discovery: `https://commonlands-mcp.erp-14c.workers.dev/.well-known/ucp`
 - Health check: `https://commonlands-mcp.erp-14c.workers.dev/healthz`
 
-See [`docs/live-usage-and-integrations.md`](docs/live-usage-and-integrations.md) for recommended end-user/agent usage and smoke tests.
+See [`docs/live-usage-and-integrations.md`](docs/live-usage-and-integrations.md) for the human-first live guide, recommended agent workflow, tool reference, and smoke tests.
 
 ## Current scope
 
