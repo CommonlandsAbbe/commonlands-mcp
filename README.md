@@ -1,6 +1,6 @@
 # Commonlands MCP
 
-Public read-mostly Commonlands MCP server on Cloudflare Workers for lens discovery, optics workflows, safe commerce handoff planning, and gated Shopify commerce proxy experiments.
+Public Commonlands MCP server on Cloudflare Workers for lens discovery, optics workflows, live read-only Shopify product truth, live FoV calculation, and Shopify-owned cart handoff.
 
 ## Live endpoint
 
@@ -14,12 +14,13 @@ See [`docs/live-usage-and-integrations.md`](docs/live-usage-and-integrations.md)
 
 - `GET /healthz` returns deploy metadata.
 - `GET /.well-known/ucp` returns catalog-only discovery metadata by default.
-- `POST /mcp` supports MCP JSON-RPC tools/resources for fixture-backed lens discovery, optics calculations, product details, recommendations, and safe purchase handoff planning.
+- `POST /mcp` supports MCP JSON-RPC tools/resources. Current live `tools/list` shows 21 tools.
 - `read_shopify_products` is the live read-only Shopify product truth source for purchasable product URLs, Product/Variant GIDs, SKUs, prices, inventory signals, and metafields; `read_shopify_metaobjects` remains a supporting read-only diagnostic.
-- Cart UCP tools (`create_cart`, `get_cart`, `update_cart`, `cancel_cart`) are hidden unless `ENABLE_COMMERCE_MUTATION_TOOLS=true` and the endpoint is approved/configured.
-- Basic Checkout MCP tools (`create_checkout`, `get_checkout`) are hidden unless `ENABLE_CHECKOUT_MUTATION_TOOLS=true`; extra checkout operations (`update_checkout`, `complete_checkout`, `cancel_checkout`) require `ENABLE_EXTRA_CHECKOUT_MUTATION_TOOLS=true` and official review before use.
-- Fixture-backed catalog, recommendation, and legacy purchase-handoff flows are scaffold/status helpers only; do not use them as final truth for SKU recommendations, price, availability, Shopify IDs, variant IDs, exact product specs, or cart/checkout preparation without `read_shopify_products`.
-- No Acumatica writes, database writes, direct payment handling, raw card data, customer-account access, inventory mutations, inventory sync changes, Shopify catalog writes, or secret exposure. Commerce mutation tools are hidden by default pending approval.
+- `compute_fov` uses the authenticated AWS Lambda/DynamoDB backend when configured, with the API key kept server-side in the Worker. It falls back to fixture math only when the live backend is disabled.
+- Cart tools exposed in the current live surface: `create_cart`, `get_cart`, and `update_cart`. Cart state is owned by Shopify; the Worker is a stateless proxy.
+- `cancel_cart` and Checkout MCP tools (`create_checkout`, `get_checkout`, `update_checkout`, `complete_checkout`, `cancel_checkout`) are hidden on the current live surface.
+- Fixture-backed catalog, sensor, recommendation, comparison, and legacy purchase-handoff flows are scaffold/status helpers only; do not use them as final truth for SKU recommendations, price, availability, Shopify IDs, variant IDs, exact product specs, or cart/checkout preparation without `read_shopify_products`.
+- No Acumatica writes, database writes, direct payment handling, raw card data, customer-account access, inventory mutations, inventory sync changes, Shopify catalog writes, or secret exposure.
 
 ## Local commands
 

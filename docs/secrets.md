@@ -72,7 +72,7 @@ Rules:
 
 Rules:
 
-- Cart MCP remains hidden by default pending approval, Cloudflare protections, endpoint binding, and merchant-side availability.
+- Cart MCP tools are exposed only when explicitly approved, gated, and endpoint-bound. The current live approved standard Storefront MCP surface exposes `create_cart`, `get_cart`, and `update_cart`; `cancel_cart` remains hidden unless a validated UCP Cart MCP endpoint supports cancel semantics.
 - Cart state is stored and mutated by Shopify Cart MCP; Commonlands Worker remains stateless and stores no cart database/session/customer record.
 - Do not log returned credentials, signed URLs, or authorization material if Shopify Cart MCP ever adds authenticated transport.
 

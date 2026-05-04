@@ -1,83 +1,705 @@
-# Live MCP end-user usage guide
+# Live MCP user guide
 
-This guide is for agents and humans using the live public Commonlands MCP endpoint.
+This guide explains how agents should use the live public Commonlands MCP server. It reflects the deployed tool surface verified on 2026-05-03 PDT: 21 tools on `https://commonlands-mcp.erp-14c.workers.dev/mcp`.
 
-The current production service is public and read-mostly. Its catalog, optics, recommendation, and legacy purchase-handoff flows are fixture-backed scaffold data by default and are not authoritative for final SKU recommendations, price, availability, Shopify IDs, variant IDs, exact product specs, or cart/checkout preparation. Use `read_shopify_products` as the live read-only Shopify product truth source for purchasable facts. Cart UCP and Checkout MCP support are hidden by default behind explicit environment gates pending approval, Cloudflare protections, endpoint bindings, and merchant-side availability. They must not create RFQs, create/read customer records, apply discounts, reserve inventory, mutate inventory, write Shopify catalog data, or touch inventory sync.
+## Current production status
 
-## Endpoint
+- **Endpoint:** `https://commonlands-mcp.erp-14c.workers.dev/mcp`
+- **Discovery profile:** `https://commonlands-mcp.erp-14c.workers.dev/.well-known/ucp`
+- **Health check:** `https://commonlands-mcp.erp-14c.workers.dev/healthz`
+- **Live tool count:** 21
+- **Live Shopify product truth:** `read_shopify_products` is configured and read-only.
+- **Live FoV backend:** `compute_fov` uses the authenticated AWS Lambda/DynamoDB backend when configured. The Worker sends the backend secret server-side; agents never receive it.
+- **Sensor specs:** `get_sensor_specs` is currently fixture-backed from the Worker sensor catalog.
+- **Cart tools:** `create_cart`, `get_cart`, and `update_cart` are exposed through Shopify's standard Storefront MCP endpoint. Cart state is stored by Shopify, not by the Commonlands Worker.
+- **Checkout tools:** hidden. `create_checkout` returns `Tool not found`.
+- **Cancel cart:** hidden for the current standard Storefront MCP endpoint. `cancel_cart` returns `Tool not found`.
 
-Use the Workers.dev endpoint until Commonlands chooses the Cloudflare Business custom-hostname/proxy path.
+Use `read_shopify_products` before making final purchasable claims about product URL, price, availability, Shopify Product/Variant IDs, or variant cart IDs. Fixture-backed tools are useful for discovery and engineering context, but they are not final product truth.
 
-- MCP endpoint: `https://commonlands-mcp.erp-14c.workers.dev/mcp`
-- UCP discovery profile: `https://commonlands-mcp.erp-14c.workers.dev/.well-known/ucp`
-- Health check: `https://commonlands-mcp.erp-14c.workers.dev/healthz`
+## Recommended agent workflow
 
-Do not move `commonlands.com` DNS to Cloudflare just to get `mcp.commonlands.com`. The safe current launch path is Workers.dev.
+1. Start with `tools/list` and check the tool surface.
+2. Use `search_catalog`, `search_lenses`, or `recommend_lenses_for_application` to build a shortlist.
+3. Use `get_sensor_specs` to confirm sensor pixels, pixel pitch, and active area.
+4. Use `compute_fov` for live FoV when the lens exists in the Lambda/DynamoDB lens table.
+5. Use `match_lenses_to_sensor`, `compare_lenses`, and `get_lens_details` for fixture-backed engineering context.
+6. Use `read_shopify_products` for live Shopify product/variant IDs, product URLs, price, inventory signals, and cart variant IDs.
+7. If the buyer explicitly asks for a cart, use live Shopify Variant GIDs from `read_shopify_products`, then call `create_cart`/`get_cart`/`update_cart`. Show the returned Shopify cart/continue URL to the buyer.
+8. Do not claim checkout MCP is live. Send buyers to Shopify's returned cart/checkout handoff URL when present.
 
-## Recommended end-user usage method
+## Example prompts
 
-Use the server as a remote HTTP MCP endpoint.
+- `Find M12 lenses for an IMX477 sensor around 50° horizontal FoV. Verify live Shopify product truth before recommending a purchasable SKU.`
+- `Compute the FoV for CIL160 on IMX477 and explain where the lens data came from.`
+- `Give me the pixel count, pixel pitch, and active area for IMX477.`
+- `Compare CIL078 and CIL250 on IMX477, but label fixture-backed data clearly.`
+- `Find the live Shopify product and variant ID for CIL250.`
+- `Create a Shopify cart for two units of this live ProductVariant ID and return the cart handoff URL.`
 
-Recommended flow:
+## Tool-by-tool usage and current outputs
 
-1. Connect the agent/client to `https://commonlands-mcp.erp-14c.workers.dev/mcp` as a remote MCP server.
-2. If the client supports UCP discovery, point it at `https://commonlands-mcp.erp-14c.workers.dev/.well-known/ucp`.
-3. Ask the agent lens-selection questions in normal language.
-4. Let the agent call MCP tools for catalog search, product lookup, FoV calculation, comparison, recommendation, and purchase-route planning.
-5. Treat returned product links and engineering-review routes as handoff destinations, not as transactions.
+The output excerpts below are from live-safe calls to the production endpoint unless marked otherwise. Mutable cart tools are documented with their input contract and expected output shape; this documentation pass did **not** create or update a live cart.
 
-Good prompts:
+### `search_lenses`
 
-- `Find M12 lenses for a 1/2.8 inch sensor around 80 degrees horizontal FoV.`
-- `Compare CIL078 and CIL250 for a robotics camera application.`
-- `Recommend Commonlands lenses for low-distortion machine vision on a 1/1.8 inch sensor.`
-- `Find the Commonlands product page for CIL078 and tell me what information is still fixture-backed.`
-- `What is the safest purchase route for two CIL078 lenses for prototype evaluation?`
+**Use for:** fixture-backed legacy lens catalog search by SKU, title, mount, or lens type.
 
-## What agents should do
+**Example prompt:** `Search the Commonlands lens catalog for CIL250.`
 
-Agents should treat this MCP server primarily as an engineering/catalog intelligence endpoint. Use fixture-backed tools for broad discovery and optical scaffold context only; before final SKU recommendation, price/availability claims, variant IDs, product URLs, metafields, or cart/checkout preparation, call `read_shopify_products`. Cart and checkout tools are not part of the default public surface; they are hidden unless explicit approval, environment gates, and Shopify-owned endpoints are all present.
+**Tool call:**
 
-Recommended tool flow:
+```json
+{"name":"search_lenses","arguments":{"query":"CIL250","limit":1}}
+```
 
-1. Call `tools/list` to discover available tools.
-2. Use `search_catalog` for broad lens discovery.
-3. Use `get_product` or `lookup_catalog` for fixture SKU/product scaffold context only.
-4. Use `compute_fov`, `match_lenses_to_sensor`, `compare_lenses`, or `recommend_lenses_for_application` for optical fit and tradeoff analysis, while preserving their fixture warnings.
-5. Use `read_shopify_products` for live product URLs, Shopify Product/Variant GIDs, SKUs, prices, inventory signals, and metafields.
-6. Use `prepare_shopify_purchase_handoff` or `get_purchase_route_options` only as non-authoritative handoff scaffolds unless live variant IDs came from `read_shopify_products`.
-7. Commerce mutation tools are not part of the default public surface. Use them only if an approved environment explicitly exposes them and the buyer explicitly asks for commerce handoff.
-8. Send the buyer to the returned Commonlands product URL or engineering review path for human-visible next steps.
+**Actual output excerpt:**
 
-## Current safe boundaries
+```json
+{
+  "schemaVersion": "catalog.snapshot.v1",
+  "results": [
+    {
+      "sku": "CIL250",
+      "title": "CIL250 M12 lens",
+      "productUrl": "https://commonlands.com/products/cil250",
+      "priceUsd": 34,
+      "availability": "in_stock",
+      "eflMm": 6,
+      "imageCircleMm": 7.2
+    }
+  ],
+  "sourceWarning": { "code": "fixture_not_product_truth" }
+}
+```
 
-The live Worker must remain read-only by default. Shopify Cart UCP and Checkout MCP proxy tools are hidden pending explicit approval and configuration.
+### `get_lens_details`
 
-Allowed:
+**Use for:** fixture-backed optical/product details for one lens SKU.
 
-- Catalog search.
-- Product lookup.
-- Sensor lookup.
-- FoV and optical calculations.
-- Lens comparison.
-- Lens recommendations.
-- Snapshot/status inspection.
-- Credential-gated diagnostic Shopify Admin reads for product/variant/metaobject summaries.
-- Safe purchase-route planning that points users to pages or engineering review.
-- Catalog-only UCP discovery by default; commerce mutation proxy tools only after explicit approval and enablement.
+**Example prompt:** `Show fixture-backed engineering details for CIL250.`
 
-Not allowed:
+**Tool call:**
 
-- Cart creation or cart updates unless explicitly enabled through the approved Cart UCP gate.
-- Checkout creation unless explicitly enabled through the approved Checkout MCP gate.
-- Orders.
-- RFQs.
-- Customer/account access.
-- Inventory reservations or inventory writes.
-- Shopify product, variant, collection, tag, or metafield writes.
-- Acumatica writes.
-- Database writes or live scans.
-- Direct gated-document URLs.
+```json
+{"name":"get_lens_details","arguments":{"sku":"CIL250"}}
+```
+
+**Actual output excerpt:**
+
+```json
+{
+  "schemaVersion": "catalog.snapshot.v1",
+  "lens": {
+    "sku": "CIL250",
+    "title": "CIL250 M12 lens",
+    "eflMm": 6,
+    "fNumber": 2.4,
+    "imageCircleMm": 7.2,
+    "resolution": "5MP",
+    "datasheet": { "gated": true }
+  },
+  "sourceWarning": { "code": "fixture_not_product_truth" }
+}
+```
+
+### `get_sensor_specs`
+
+**Use for:** sensor pixel count, pixel pitch, and active area used by FoV calculations. Current source is the Worker fixture sensor catalog.
+
+**Example prompt:** `What are the IMX477 sensor dimensions for FoV input?`
+
+**Tool call:**
+
+```json
+{"name":"get_sensor_specs","arguments":{"partNumber":"IMX477"}}
+```
+
+**Actual output:**
+
+```json
+{
+  "schemaVersion": "catalog.snapshot.v1",
+  "sensor": {
+    "partNumber": "IMX477",
+    "manufacturer": "Sony",
+    "name": "Sony IMX477",
+    "resolution": { "widthPx": 4056, "heightPx": 3040 },
+    "activeAreaMm": { "width": 6.287, "height": 4.712 },
+    "pixelSizeUm": 1.55
+  }
+}
+```
+
+### `compute_fov`
+
+**Use for:** FoV for a lens/sensor pair. In production this is wired to authenticated AWS Lambda/DynamoDB when the lens exists in the Lambda table. The Lambda lens table is currently being repointed/maintained separately, so coverage can change by SKU.
+
+**Example prompt:** `Compute FoV for CIL160 on IMX477.`
+
+**Tool call:**
+
+```json
+{"name":"compute_fov","arguments":{"lensSku":"CIL160","sensorPartNumber":"IMX477"}}
+```
+
+**Actual live output excerpt:**
+
+```json
+{
+  "schemaVersion": "optics.fov.live.v1",
+  "modelVersion": "lambda-dynamodb-beta-fov-0.1.0",
+  "correctionStatus": "live_lambda_dynamodb",
+  "source": "aws-lambda-dynamodb-readonly",
+  "requested": { "lensSku": "CIL160", "sensorPartNumber": "IMX477" },
+  "sensor": {
+    "partNumber": "IMX477",
+    "hsize": 6.287,
+    "vsize": 4.712,
+    "dsize": 7.856800430200578,
+    "pixpitch": 1.55,
+    "resolution": { "widthPx": 4056, "heightPx": 3040 }
+  },
+  "count": 1,
+  "lenses": [
+    {
+      "partNum": "CIL160",
+      "efl": 16,
+      "beta": 1,
+      "image_circle": 8,
+      "hfov": 22,
+      "vfov": 17,
+      "dfov": 28,
+      "pixpitch": 1.55
+    }
+  ],
+  "errors": []
+}
+```
+
+If a SKU is missing from, or rejected by, the Lambda's current DynamoDB table, the tool fails closed with:
+
+```json
+{ "code": -32603, "message": "Live FoV backend rejected request" }
+```
+
+### `match_lenses_to_sensor`
+
+**Use for:** fixture-backed ranking of catalog lenses for a sensor and optional target FoV.
+
+**Example prompt:** `Rank lenses for IMX477 near 50° horizontal FoV.`
+
+**Tool call:**
+
+```json
+{"name":"match_lenses_to_sensor","arguments":{"sensorPartNumber":"IMX477","desiredHorizontalFovDeg":50,"maxResults":2}}
+```
+
+**Actual output excerpt:**
+
+```json
+{
+  "schemaVersion": "recommendations.v1",
+  "correctionStatus": "fixture_recommendation_scaffold",
+  "recommendations": [
+    {
+      "lens": { "sku": "CIL250", "title": "CIL250 M12 lens" },
+      "score": 71.7,
+      "rank": 1,
+      "fit": "good",
+      "fov": { "horizontalDeg": 51.3, "verticalDeg": 39.6, "diagonalDeg": 61.9 }
+    },
+    {
+      "lens": { "sku": "CIL121", "title": "CIL121 C-mount machine vision lens" },
+      "score": 67,
+      "rank": 2,
+      "fit": "conditional",
+      "fov": { "horizontalDeg": 19.3, "verticalDeg": 14.6, "diagonalDeg": 24 }
+    }
+  ],
+  "sourceWarning": { "code": "fixture_not_product_truth" }
+}
+```
+
+### `compare_lenses`
+
+**Use for:** fixture-backed comparison of selected lenses on the same sensor.
+
+**Example prompt:** `Compare CIL078 and CIL250 on IMX477.`
+
+**Tool call:**
+
+```json
+{"name":"compare_lenses","arguments":{"lensSkus":["CIL078","CIL250"],"sensorPartNumber":"IMX477"}}
+```
+
+**Actual output excerpt:**
+
+```json
+{
+  "schemaVersion": "recommendations.v1",
+  "recommendations": [
+    {
+      "lens": { "sku": "CIL078", "title": "CIL078 M12 wide-angle lens" },
+      "rank": 1,
+      "fit": "good",
+      "fov": { "horizontalDeg": 86.6, "verticalDeg": 70.5, "diagonalDeg": 99.4 }
+    },
+    {
+      "lens": { "sku": "CIL250", "title": "CIL250 M12 lens" },
+      "rank": 2,
+      "fit": "good",
+      "fov": { "horizontalDeg": 51.3, "verticalDeg": 39.6, "diagonalDeg": 61.9 }
+    }
+  ]
+}
+```
+
+### `get_product_page_details`
+
+**Use for:** fixture-backed product-page handoff details, gated datasheet policy, and optical specs.
+
+**Example prompt:** `Give me product page handoff details for CIL250.`
+
+**Tool call:**
+
+```json
+{"name":"get_product_page_details","arguments":{"sku":"CIL250"}}
+```
+
+**Actual output excerpt:**
+
+```json
+{
+  "schemaVersion": "product_page.v1",
+  "correctionStatus": "fixture_commerce_handoff",
+  "product": {
+    "sku": "CIL250",
+    "title": "CIL250 M12 lens",
+    "productUrl": "https://commonlands.com/products/cil250",
+    "priceUsd": 34,
+    "availability": "in_stock"
+  },
+  "technicalSpecifications": {
+    "mount": "M12",
+    "eflMm": 6,
+    "fNumber": 2.4,
+    "imageCircleMm": 7.2
+  },
+  "datasheet": { "gated": true }
+}
+```
+
+### `get_catalog_snapshot_status`
+
+**Use for:** fixture catalog counts, validation status, and provenance.
+
+**Example prompt:** `What is the current fixture catalog snapshot status?`
+
+**Tool call:**
+
+```json
+{"name":"get_catalog_snapshot_status","arguments":{}}
+```
+
+**Actual output excerpt:**
+
+```json
+{
+  "schemaVersion": "catalog.snapshot_status.v1",
+  "counts": { "lenses": 5, "sensors": 3, "joins": 5, "missingCommerce": 0, "missingOptical": 0, "unsafeUrls": 0 },
+  "validation": { "ok": true, "errors": [] },
+  "refresh": { "mode": "fixture_static", "liveConnectors": "not_connected" }
+}
+```
+
+### `get_shopify_ucp_readiness`
+
+**Use for:** static readiness/status for Shopify Storefront MCP/UCP catalog compatibility. Treat this as conservative scaffold/readiness metadata; use `tools/list` for the live exposed tool surface.
+
+**Example prompt:** `Is Commonlands MCP ready for Shopify UCP catalog and cart?`
+
+**Tool call:**
+
+```json
+{"name":"get_shopify_ucp_readiness","arguments":{}}
+```
+
+**Actual output excerpt:**
+
+```json
+{
+  "schemaVersion": "shopify.ucp_readiness.v1",
+  "readiness": {
+    "status": "catalog_fixture_ready_commerce_mutations_disabled_by_default",
+    "liveConnectors": "not_connected",
+    "cartCheckout": "cart_checkout_mutation_tools_hidden_pending_approval"
+  },
+  "ucpCatalog": { "compatibleTools": ["search_catalog", "lookup_catalog", "get_product"], "productCount": 5 },
+  "safeguards": ["Cart/checkout mutation tools are hidden by default pending approval and configuration."]
+}
+```
+
+Note: the readiness text is conservative/static. The live `tools/list` is authoritative for what is currently exposed.
+
+### `get_shopify_readonly_config_status`
+
+**Use for:** sanitized status of Shopify read-only bindings/scopes. Does not call Shopify and never exposes secrets.
+
+**Example prompt:** `Is the Shopify read-only connector configured safely?`
+
+**Tool call:**
+
+```json
+{"name":"get_shopify_readonly_config_status","arguments":{}}
+```
+
+**Actual output excerpt:**
+
+```json
+{
+  "schemaVersion": "shopify.readonly_config_status.v1",
+  "configured": true,
+  "bindings": { "clientId": "present", "clientSecret": "present", "shopDomain": "present", "scopes": "present" },
+  "shopDomain": { "normalizedDomain": "commonlands-camera-components.myshopify.com" },
+  "safety": {
+    "readOnly": true,
+    "writesShopify": false,
+    "createsCart": false,
+    "createsCheckout": false,
+    "mutatesInventory": false,
+    "exposesSecrets": false
+  }
+}
+```
+
+### `read_shopify_products`
+
+**Use for:** live Shopify product truth: Product/Variant GIDs, variant numeric IDs, SKU, price, inventory signals, product URL, media, and optional metafields.
+
+**Example prompt:** `Find live Shopify product truth for CIL250.`
+
+**Tool call:**
+
+```json
+{"name":"read_shopify_products","arguments":{"sku":"CIL250","limit":1,"includeMetafields":false}}
+```
+
+**Actual output excerpt:**
+
+```json
+{
+  "schemaVersion": "shopify.live_read.v1",
+  "mode": "shopify_admin_graphql_read_only",
+  "configured": true,
+  "source": { "productTruth": true, "readOnly": true, "writesShopify": false },
+  "connector": {
+    "status": "ok",
+    "messages": ["Exact Shopify SKU search returned no results; retried as safe text search for short part number/MPN metafields."]
+  },
+  "products": [
+    {
+      "id": "gid://shopify/Product/7516110946422",
+      "handle": "telephoto-25mm-m12-lens-cil250",
+      "title": "IR Corrected 25mm M12 Lens",
+      "productUrl": "https://commonlands.com/products/telephoto-25mm-m12-lens-cil250",
+      "variants": [
+        {
+          "id": "gid://shopify/ProductVariant/41702699729014",
+          "sku": "CIL250-F2.0-M12ANIR",
+          "price": "99.00",
+          "inventoryQuantity": 0,
+          "inventoryTracked": true,
+          "storefrontCartPath": "/cart/41702699729014:1"
+        }
+      ]
+    }
+  ]
+}
+```
+
+### `read_shopify_metaobjects`
+
+**Use for:** live read-only metaobject preview by type/handle. Returns redacted previews only.
+
+**Example prompt:** `Check whether lens_specification metaobjects are visible.`
+
+**Tool call:**
+
+```json
+{"name":"read_shopify_metaobjects","arguments":{"type":"lens_specification","limit":1}}
+```
+
+**Actual output excerpt:**
+
+```json
+{
+  "schemaVersion": "shopify.live_read.v1",
+  "mode": "shopify_admin_graphql_read_only",
+  "configured": true,
+  "source": { "productTruth": false, "readOnly": true, "writesShopify": false },
+  "connector": { "status": "ok", "messages": [] },
+  "metaobjects": [],
+  "safety": { "readOnly": true, "writesShopify": false, "exposesSecrets": false }
+}
+```
+
+### `create_cart`
+
+**Use for:** create a Shopify-owned cart from live Shopify ProductVariant GIDs. Current endpoint uses Shopify standard Storefront MCP; Commonlands maps this facade to Shopify's cart create-or-update behavior.
+
+**Example prompt:** `Create a Shopify cart for two units of this live variant ID.`
+
+**Tool call:**
+
+```json
+{
+  "name": "create_cart",
+  "arguments": {
+    "cart": {
+      "line_items": [
+        { "quantity": 2, "item": { "id": "gid://shopify/ProductVariant/41702699729014" } }
+      ],
+      "context": { "address_country": "US", "address_region": "CA", "postal_code": "92101" }
+    }
+  }
+}
+```
+
+**Output contract:** returns `schemaVersion: commonlands.cart_ucp.v1`, `operation: create_cart`, Shopify connector status, Shopify-owned `cart` payload when Shopify returns one, and a safety block showing no checkout/order/customer/inventory/catalog writes by Commonlands.
+
+**Important:** this guide did not execute `create_cart` because it mutates live Shopify cart state. Run only after buyer intent is explicit and the agent has live Variant GIDs from `read_shopify_products`.
+
+### `get_cart`
+
+**Use for:** retrieve/refresh a Shopify-owned cart by cart ID. Read-only from the agent perspective.
+
+**Example prompt:** `Refresh this Shopify cart ID and show the buyer the current state.`
+
+**Tool call:**
+
+```json
+{"name":"get_cart","arguments":{"id":"gid://shopify/Cart/example"}}
+```
+
+**Actual safe output with a placeholder cart ID:**
+
+```json
+{
+  "schemaVersion": "commonlands.cart_ucp.v1",
+  "mode": "shopify_cart_mcp_proxy",
+  "configured": true,
+  "operation": "get_cart",
+  "persistence": {
+    "storedIn": "shopify_cart_mcp",
+    "commonlandsWorkerState": "stateless_proxy_no_cart_storage",
+    "resumeAcrossAgentSessions": "caller_must_retain_cart_id_or_continue_url"
+  },
+  "connector": {
+    "status": "ok",
+    "endpointHost": "commonlands-camera-components.myshopify.com",
+    "messages": ["Shopify Cart MCP response did not include structuredContent.cart."]
+  },
+  "cart": null,
+  "safety": { "createsCart": false, "updatesCart": false, "createsCheckout": false, "createsOrder": false }
+}
+```
+
+### `update_cart`
+
+**Use for:** add variants, update line quantities, or remove line IDs in a Shopify-owned cart.
+
+**Example prompt:** `Change this cart line to quantity 3.`
+
+**Tool call:**
+
+```json
+{
+  "name": "update_cart",
+  "arguments": {
+    "id": "gid://shopify/Cart/cart_abc123",
+    "cart": {
+      "update_items": [
+        { "id": "gid://shopify/CartLine/line_abc123", "quantity": 3 }
+      ]
+    }
+  }
+}
+```
+
+**Output contract:** returns `schemaVersion: commonlands.cart_ucp.v1`, `operation: update_cart`, Shopify connector status, Shopify-owned `cart` payload when Shopify returns one, and safety flags. Quantity `0` removes a line; `remove_line_ids` explicitly removes line IDs.
+
+**Important:** this guide did not execute `update_cart` because it mutates live Shopify cart state.
+
+### `search_catalog`
+
+**Use for:** UCP-style fixture catalog search. Use this when an MCP/UCP shopping agent expects `search_catalog`.
+
+**Example prompt:** `Search the UCP catalog for CIL250.`
+
+**Tool call:**
+
+```json
+{"name":"search_catalog","arguments":{"catalog":{"query":"CIL250","limit":1}}}
+```
+
+**Actual output excerpt:**
+
+```json
+{
+  "schemaVersion": "ucp.catalog.v1",
+  "ucp": { "version": "2026-04-08", "capability": "search_catalog", "transport": "mcp" },
+  "catalog": {
+    "products": [
+      {
+        "id": "gid://commonlands/Product/CIL250",
+        "handle": "cil250",
+        "title": "CIL250 M12 lens",
+        "url": "https://commonlands.com/products/cil250",
+        "price_range": { "min": { "amount": 3400, "currency": "USD" } },
+        "variants": [ { "id": "gid://commonlands/ProductVariant/CIL250", "sku": "CIL250" } ]
+      }
+    ]
+  },
+  "sourceWarning": { "code": "fixture_not_product_truth" }
+}
+```
+
+### `lookup_catalog`
+
+**Use for:** UCP-style fixture lookup by product, variant, SKU, handle, or URL identifiers.
+
+**Example prompt:** `Look up CIL250 in the UCP catalog.`
+
+**Tool call:**
+
+```json
+{"name":"lookup_catalog","arguments":{"catalog":{"ids":["CIL250"]}}}
+```
+
+**Actual output excerpt:** same product shape as `search_catalog`, with `ucp.capability` set to `lookup_catalog` and one fixture product for `CIL250`.
+
+### `get_product`
+
+**Use for:** UCP-style fixture product detail by ID.
+
+**Example prompt:** `Get the UCP product record for CIL250.`
+
+**Tool call:**
+
+```json
+{"name":"get_product","arguments":{"catalog":{"id":"CIL250"}}}
+```
+
+**Actual output excerpt:** same product shape as `search_catalog`, with `ucp.capability` set to `get_product` and one fixture product for `CIL250`.
+
+### `prepare_shopify_purchase_handoff`
+
+**Use for:** non-mutating handoff planning for a SKU and quantity. It does not create a cart or checkout.
+
+**Example prompt:** `Prepare a safe purchase handoff for two CIL250 lenses.`
+
+**Tool call:**
+
+```json
+{"name":"prepare_shopify_purchase_handoff","arguments":{"sku":"CIL250","quantity":2,"sensorPartNumber":"IMX477"}}
+```
+
+**Actual output excerpt:**
+
+```json
+{
+  "schemaVersion": "shopify.purchase_handoff.v1",
+  "correctionStatus": "fixture_transaction_seam_no_mutation",
+  "quantity": 2,
+  "product": {
+    "sku": "CIL250",
+    "title": "CIL250 M12 lens",
+    "productUrl": "https://commonlands.com/products/cil250",
+    "variantId": "gid://commonlands/ProductVariant/CIL250",
+    "selectedVariantIdSource": "fixture_commonlands_gid_non_authoritative"
+  },
+  "transaction": {
+    "mode": "read_only_handoff",
+    "cartCheckout": "not_created",
+    "createsCart": false,
+    "createsCheckout": false,
+    "writesShopify": false
+  }
+}
+```
+
+### `get_purchase_route_options`
+
+**Use for:** explain safe purchase paths without mutating commerce state.
+
+**Example prompt:** `What are the safe purchase route options for two CIL250 lenses for prototype evaluation?`
+
+**Tool call:**
+
+```json
+{"name":"get_purchase_route_options","arguments":{"sku":"CIL250","quantity":2,"sensorPartNumber":"IMX477","buyerIntent":"prototype evaluation","agentType":"engineering assistant"}}
+```
+
+**Actual output excerpt:**
+
+```json
+{
+  "schemaVersion": "commerce.purchase_routes.v1",
+  "correctionStatus": "fixture_dual_channel_transaction_plan_no_mutation",
+  "product": { "sku": "CIL250", "productUrl": "https://commonlands.com/products/cil250" },
+  "routes": [
+    { "channel": "commonlands_mcp_dedicated_purchase", "status": "planned_requires_approval_and_live_connectors" },
+    { "channel": "shopify_native_checkout", "status": "planned_requires_shopify_storefront_cart" },
+    { "channel": "engineering_review_request", "status": "available_now_non_transactional" }
+  ]
+}
+```
+
+### `recommend_lenses_for_application`
+
+**Use for:** fixture-backed application-specific shortlist. This may later be consolidated into `match_lenses_to_sensor`; for now it is still live in `tools/list`.
+
+**Example prompt:** `Recommend M12 lenses for robotics navigation on IMX477 near 50° horizontal FoV.`
+
+**Tool call:**
+
+```json
+{"name":"recommend_lenses_for_application","arguments":{"sensorPartNumber":"IMX477","application":"robotics navigation","desiredHorizontalFovDeg":50,"maxResults":2}}
+```
+
+**Actual output excerpt:**
+
+```json
+{
+  "schemaVersion": "recommendations.v1",
+  "correctionStatus": "fixture_recommendation_scaffold",
+  "recommendations": [
+    {
+      "lens": { "sku": "CIL250", "title": "CIL250 M12 lens" },
+      "score": 100,
+      "rank": 1,
+      "fit": "excellent",
+      "fov": { "horizontalDeg": 51.3, "verticalDeg": 39.6, "diagonalDeg": 61.9 }
+    },
+    {
+      "lens": { "sku": "CIL350", "title": "CIL350 M12 telephoto lens" },
+      "score": 98.9,
+      "rank": 2,
+      "fit": "excellent",
+      "fov": { "horizontalDeg": 29.4, "verticalDeg": 22.2, "diagonalDeg": 36.3 }
+    }
+  ],
+  "sourceWarning": { "code": "fixture_not_product_truth" }
+}
+```
+
+## Hidden or unavailable tools
+
+These are intentionally not part of the current live tool surface:
+
+- `cancel_cart` — hidden because the current confirmed Shopify standard Storefront MCP endpoint does not expose cart cancel. Actual call result: `{ "code": -32601, "message": "Tool not found: cancel_cart" }`.
+- `create_checkout`, `get_checkout`, `update_checkout`, `complete_checkout`, `cancel_checkout` — hidden because Checkout MCP is not configured/validated. Actual `create_checkout` call result: `{ "code": -32601, "message": "Tool not found: create_checkout" }`.
 
 ## Copy-paste smoke tests
 
@@ -87,345 +709,55 @@ Health check:
 curl -s 'https://commonlands-mcp.erp-14c.workers.dev/healthz' | python3 -m json.tool
 ```
 
-Discovery profile:
+List tools:
 
 ```bash
-curl -s 'https://commonlands-mcp.erp-14c.workers.dev/.well-known/ucp' | python3 -m json.tool
+curl -s -X POST 'https://commonlands-mcp.erp-14c.workers.dev/mcp' \
+  -H 'content-type: application/json' \
+  -H 'accept: application/json' \
+  -H 'user-agent: Mozilla/5.0 commonlands-mcp-smoke' \
+  --data-binary '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | python3 -m json.tool
 ```
 
-List available tools:
+Read live Shopify product truth:
 
 ```bash
-curl -s -X POST 'https://commonlands-mcp.erp-14c.workers.dev/mcp' -H 'content-type: application/json' --data-binary '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | python3 -m json.tool
+curl -s -X POST 'https://commonlands-mcp.erp-14c.workers.dev/mcp' \
+  -H 'content-type: application/json' \
+  -H 'accept: application/json' \
+  -H 'user-agent: Mozilla/5.0 commonlands-mcp-smoke' \
+  --data-binary '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"read_shopify_products","arguments":{"sku":"CIL250","limit":1,"includeMetafields":false}}}' | python3 -m json.tool
 ```
 
-Search fixture catalog and print product titles:
+Compute live FoV for a known Lambda/DynamoDB lens:
 
 ```bash
-curl -s -X POST 'https://commonlands-mcp.erp-14c.workers.dev/mcp' -H 'content-type: application/json' --data-binary '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search_catalog","arguments":{"query":"M12 lens"}}}' | python3 -c 'import sys,json; d=json.load(sys.stdin); print("\n".join(p["title"] for p in d["result"]["structuredContent"]["catalog"]["products"]))'
+curl -s -X POST 'https://commonlands-mcp.erp-14c.workers.dev/mcp' \
+  -H 'content-type: application/json' \
+  -H 'accept: application/json' \
+  -H 'user-agent: Mozilla/5.0 commonlands-mcp-smoke' \
+  --data-binary '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"compute_fov","arguments":{"lensSku":"CIL160","sensorPartNumber":"IMX477"}}}' | python3 -m json.tool
 ```
 
-Prepare a read-only purchase handoff:
+Check that checkout is hidden:
 
 ```bash
-curl -s -X POST 'https://commonlands-mcp.erp-14c.workers.dev/mcp' -H 'content-type: application/json' --data-binary '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"prepare_shopify_purchase_handoff","arguments":{"sku":"CIL078","quantity":2}}}' | python3 -m json.tool
+curl -s -X POST 'https://commonlands-mcp.erp-14c.workers.dev/mcp' \
+  -H 'content-type: application/json' \
+  -H 'accept: application/json' \
+  -H 'user-agent: Mozilla/5.0 commonlands-mcp-smoke' \
+  --data-binary '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"create_checkout","arguments":{"cart_id":"gid://shopify/Cart/example"}}}' | python3 -m json.tool
 ```
 
-Check purchase route options:
-
-```bash
-curl -s -X POST 'https://commonlands-mcp.erp-14c.workers.dev/mcp' -H 'content-type: application/json' --data-binary '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_purchase_route_options","arguments":{"sku":"CIL078","quantity":2,"buyerIntent":"prototype evaluation","agentType":"engineering assistant"}}}' | python3 -m json.tool
-```
-
-## Current limitations
-
-The fixture catalog remains the default user-facing source. The live Worker validates the agent interface, endpoint discovery, response contracts, catalog shape, optical workflow, safe commerce handoff design, and now a narrow live Shopify read-only diagnostic seam.
-
-Current limitations:
-
-- Catalog/search/recommendation/purchase-handoff flows still use fixture data.
-- Fixture catalog product/variant IDs, price, availability, exact product specs, Shopify IDs, variant IDs, and catalog completeness are not guaranteed to match production Shopify and must not be used for final purchasable product truth.
-- `read_shopify_products` is the single obvious live product truth path for purchasable product URLs, Shopify Product/Variant GIDs, SKUs, prices, inventory signals, and metafields. `get_shopify_readonly_config_status` and `read_shopify_metaobjects` remain supporting read-only diagnostics.
-- Cart UCP tools require `ENABLE_COMMERCE_MUTATION_TOOLS=true` plus `SHOPIFY_CART_MCP_ENDPOINT`; without approval they are hidden from `tools/list` and blocked in `tools/call`.
-- Diagnostic Shopify reads require approved client credentials/scopes and may return `not_configured`, `missing_scope`, or sanitized Shopify errors if the production app/store cannot exchange a token.
-- Live DynamoDB optical reads are available only when `FOV_LIVE_BACKEND_ENABLED=true`, `FOV_LAMBDA_ENDPOINT` is the approved API Gateway URL, and `FOV_API_KEY` is configured as a Worker secret. Otherwise `compute_fov` remains fixture-backed. No AWS credentials are ever stored in the Worker.
-- No cart mutations unless explicitly enabled and routed through approved Cart UCP tools; no checkout mutations unless explicitly enabled and routed through approved Checkout MCP tools. `complete_checkout` requires the extra checkout gate and is allowed only after Shopify checkout authentication verifies buyer name, email, phone, address, and card/payment authorization. No raw payment handling, RFQs, customer records, discounts, inventory reservations, inventory sync changes, or Shopify catalog writes.
-- Datasheets remain gated; responses must not expose direct gated-document URLs.
-
-## Shopify read-only diagnostic access
-
-Commonlands has a Shopify Dev Dashboard app path for read-only catalog diagnostics. The app uses the current Shopify client credential model, not the older custom-app token reveal flow. These tools are for controlled verification and future enrichment work; they do not silently replace fixture-backed catalog results.
-
-Approved read scopes for the diagnostic integration:
-
-- `read_discovery`
-- `read_files`
-- `read_inventory`
-- `read_legal_policies`
-- `read_locations`
-- `read_marketing_integrated_campaigns`
-- `read_marketing_events`
-- `read_metaobject_definitions`
-- `read_metaobjects`
-- `read_online_store_navigation`
-- `read_online_store_pages`
-- `read_payment_terms`
-- `read_product_feeds`
-- `read_product_listings`
-- `read_products`
-- `read_shipping`
-- `read_content`
-
-These scopes remain read-only. They do not permit carts, checkouts, orders, customer records, inventory mutations, product writes, variant writes, collection writes, tag writes, or metafield writes.
-
-Diagnostic tools:
-
-- `get_shopify_readonly_config_status` reports sanitized config/scope readiness only; it never returns secret values.
-- `read_shopify_products` reads live product, variant, selected public metafield/media URL, price, inventory summary fields, normalized `id`/`numericId`, `productUrl`, and variant `storefrontCartPath` through Shopify Admin GraphQL. SKU search is the safest path; handle-only lookup uses Shopify `productByHandle`.
-- `read_shopify_metaobjects` reads metaobjects by type and optional handle, returning redacted field previews only.
-
-All diagnostic results include read-only safety flags and redact tokens/client credentials. Use them to validate connector readiness, not to make final public stock/price claims until the joined catalog snapshot is audited.
-
-## Shopify Cart MCP ordering path
-
-Cart MCP is the optional Shopify-owned first ordering step for agents after explicit approval and enablement. It lets an agent build and revise a Shopify cart before the buyer commits to checkout. It does not complete payments, create orders, create customer records, reserve inventory, or mutate product/catalog/inventory data.
-
-By default these tools are hidden from `tools/list` and return `Tool not found` from `tools/call`. When approved, configured, and enabled with `ENABLE_COMMERCE_MUTATION_TOOLS=true`, Commonlands exposes these MCP tools:
-
-- `create_cart`: create a Shopify-owned cart from selected Shopify `ProductVariant` GIDs and quantities.
-- `get_cart`: fetch the latest Shopify-owned cart state by cart ID.
-- `update_cart`: update a Shopify-owned cart. On the confirmed standard Storefront MCP endpoint, Commonlands maps `line_items` to Shopify `add_items`, `update_items` to quantity changes, and `remove_line_ids` to explicit line removals. Quantity `0` in `update_items` removes a line. If a validated UCP Cart MCP endpoint is used later, treat updates as full-state PUT semantics and send the complete intended `line_items`/context each time.
-- `cancel_cart`: UCP-only cancel path. The currently confirmed standard Storefront MCP endpoint exposes `get_cart` and `update_cart`, not cancel, so Commonlands rejects `cancel_cart` unless the endpoint is switched to a validated UCP Cart MCP endpoint.
-
-### Where cart state is stored and mutated
-
-Cart state is stored by Shopify Cart MCP, not by the Commonlands Worker. The Commonlands MCP is a stateless JSON-RPC proxy:
-
-1. The agent calls Commonlands MCP `create_cart`, `get_cart`, `update_cart`, or `cancel_cart`.
-2. Commonlands validates the request shape and safety boundaries.
-3. Commonlands forwards the request to `SHOPIFY_CART_MCP_ENDPOINT`. Current confirmed Commonlands cart path uses Shopify's standard Storefront MCP endpoint at `https://commonlands-camera-components.myshopify.com/api/mcp`; the Worker maps the Commonlands `create_cart` facade to Shopify's live `update_cart` create-or-update operation. If Shopify UCP cart at `/api/ucp/mcp` is later validated with a working agent profile, the Worker keeps a separate UCP-mode path.
-4. Shopify Cart MCP owns the cart object, line IDs, totals, messages, expiry, and `continue_url`.
-5. Commonlands returns Shopify's structured cart payload plus a persistence contract explaining that the Worker has no durable cart storage.
-
-The Worker does not keep a cart database, KV namespace, Durable Object, session cookie, customer profile, or server-side cart memory. This is deliberate: Shopify remains merchant of record and source of truth for cart totals, availability messages, expiry, and storefront handoff URL.
-
-### How carts persist across agent sessions
-
-Cart persistence is by returned identifier, not by hidden Commonlands session state.
-
-Agents must store or re-ask for one of these values across sessions:
-
-- `cart.id`, for example `gid://shopify/Cart/cart_abc123`.
-- `cart.continue_url`, the human storefront handoff URL.
-
-If an agent has the `cart.id`, it can call `get_cart` in a later session to refresh the cart until Shopify expires or cancels it. If an agent only has `continue_url`, it can send the buyer back to Shopify, but it may not be able to mutate the cart through MCP unless it also retained the cart ID. If both are lost, Commonlands MCP cannot reliably recover the cart because it does not store customer/session/cart state.
-
-Shopify's returned `expires_at` is authoritative when present. Agents should warn buyers that carts can expire or change if availability, price, or Shopify validation changes.
-
-### Cart MCP syntax examples
-
-Create a cart from a Shopify variant ID returned by `read_shopify_products`:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 10,
-  "method": "tools/call",
-  "params": {
-    "name": "create_cart",
-    "arguments": {
-      "cart": {
-        "line_items": [
-          {
-            "quantity": 2,
-            "item": { "id": "gid://shopify/ProductVariant/12345678901" }
-          }
-        ],
-        "context": {
-          "address_country": "US",
-          "address_region": "CA",
-          "postal_code": "92101"
-        }
-      }
-    }
-  }
-}
-```
-
-Refresh a cart in a later agent session:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 11,
-  "method": "tools/call",
-  "params": {
-    "name": "get_cart",
-    "arguments": {
-      "id": "gid://shopify/Cart/cart_abc123"
-    }
-  }
-}
-```
-
-Update cart contents:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 12,
-  "method": "tools/call",
-  "params": {
-    "name": "update_cart",
-    "arguments": {
-      "id": "gid://shopify/Cart/cart_abc123",
-      "cart": {
-        "line_items": [
-          {
-            "quantity": 3,
-            "item": { "id": "gid://shopify/ProductVariant/12345678901" }
-          }
-        ]
-      }
-    }
-  }
-}
-```
-
-Cancel a cart:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 13,
-  "method": "tools/call",
-  "params": {
-    "name": "cancel_cart",
-    "arguments": {
-      "id": "gid://shopify/Cart/cart_abc123",
-      "meta": {
-        "idempotency-key": "660e8400-e29b-41d4-a716-446655440001"
-      }
-    }
-  }
-}
-```
-
-### Agent ordering rules
-
-Agents may build carts only after the buyer has selected specific line items and quantities. Agents should always show the final cart summary and `continue_url` to the buyer before checkout. Payment completion, order creation, customer account access, discounts, inventory reservations, and inventory writes remain out of scope.
-
-## Shopify Checkout MCP handoff path
-
-Checkout MCP is the optional Shopify-owned checkout step after a buyer has confirmed cart or line-item intent and the checkout surface has explicit approval and enablement. It lets an agent create, refresh, revise, complete, or cancel Shopify-owned checkout state within Shopify-owned boundaries. `complete_checkout` is allowed only through Shopify Checkout MCP after the Shopify checkout phase has authenticated/verified buyer name, email, phone, address, and card/payment authorization. Commonlands never accepts raw card numbers, CVV/CVC, payment tokens, customer records, discounts, inventory reservation/mutation, inventory sync, or catalog writes.
-
-By default all checkout tools are hidden from `tools/list` and return `Tool not found` from `tools/call`. When approved, configured, and enabled with `ENABLE_CHECKOUT_MUTATION_TOOLS=true`, Commonlands exposes only the basic Checkout MCP tools:
-
-- `create_checkout`: create Shopify-owned checkout handoff state from a retained Shopify Cart gid or explicit Shopify `ProductVariant` GIDs and quantities.
-- `get_checkout`: fetch latest Shopify-owned checkout state by checkout ID.
-
-Extra checkout operations remain separately hidden. They require `ENABLE_EXTRA_CHECKOUT_MUTATION_TOOLS=true` plus official review before use:
-
-- `update_checkout`: replace allowed checkout line item/context state. Buyer, customer, address, payment, discount, and gift-card fields are rejected.
-- `complete_checkout`: finalize through Shopify Checkout MCP only after Shopify-hosted checkout authentication verifies buyer name, email, phone, address, and card/payment authorization. Requires `meta["idempotency-key"]` UUID and an `authentication` object with all verification flags true; raw card/payment fields are rejected.
-- `cancel_checkout`: cancel Shopify-owned checkout state by checkout ID. Requires `meta["idempotency-key"]` as a UUID for retry safety.
-
-### Where checkout state is stored and mutated
-
-Checkout state is stored by Shopify Checkout MCP, not by the Commonlands Worker. Commonlands validates the request shape and forwards it to `SHOPIFY_CHECKOUT_MCP_ENDPOINT`, normally a merchant endpoint such as `https://commonlands.com/api/checkout/mcp` when available. Shopify Checkout MCP owns checkout IDs, URLs, totals, validation messages, expiry, and the hosted buyer completion flow.
-
-The Worker does not keep a checkout database, KV namespace, Durable Object, session cookie, customer profile, payment record, or server-side checkout memory. Agents must retain `checkout.id` and/or `checkout.checkout_url` across sessions. If both are lost, Commonlands MCP cannot recover the checkout because it stores no customer/session/checkout state.
-
-### Checkout MCP syntax examples
-
-Create checkout handoff state from a cart ID:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 20,
-  "method": "tools/call",
-  "params": {
-    "name": "create_checkout",
-    "arguments": {
-      "checkout": {
-        "cart_id": "gid://shopify/Cart/cart_abc123",
-        "context": {
-          "address_country": "US",
-          "address_region": "CA",
-          "postal_code": "92101"
-        }
-      }
-    }
-  }
-}
-```
-
-Refresh checkout in a later agent session:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 21,
-  "method": "tools/call",
-  "params": {
-    "name": "get_checkout",
-    "arguments": {
-      "id": "gid://shopify/Checkout/chk_abc123"
-    }
-  }
-}
-```
-
-Complete checkout after Shopify authentication/authorization:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 22,
-  "method": "tools/call",
-  "params": {
-    "name": "complete_checkout",
-    "arguments": {
-      "id": "gid://shopify/Checkout/chk_abc123",
-      "meta": {
-        "idempotency-key": "660e8400-e29b-41d4-a716-446655440003"
-      },
-      "authentication": {
-        "method": "shopify_checkout_authenticated",
-        "buyerVerified": true,
-        "paymentAuthorized": true,
-        "nameVerified": true,
-        "emailVerified": true,
-        "phoneVerified": true,
-        "addressVerified": true,
-        "cardAuthorized": true,
-        "authenticatedAt": "2026-05-02T20:15:00.000Z"
-      }
-    }
-  }
-}
-```
-
-Cancel checkout state:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 22,
-  "method": "tools/call",
-  "params": {
-    "name": "cancel_checkout",
-    "arguments": {
-      "id": "gid://shopify/Checkout/chk_abc123",
-      "meta": {
-        "idempotency-key": "660e8400-e29b-41d4-a716-446655440002"
-      }
-    }
-  }
-}
-```
-
-### Agent checkout rules
-
-Agents may create checkout only after the buyer has confirmed specific line items and quantities. Authentication is not required until the checkout phase. Before calling `complete_checkout`, the agent must have Shopify Checkout MCP authentication evidence that buyer name, email, phone, address, and card/payment authorization were verified; if the checkout status is `requires_escalation` or that evidence is missing, send the buyer to the Shopify-hosted `continue_url` instead. Commonlands MCP must never collect, store, log, or proxy raw card numbers, CVV/CVC, payment tokens, passwords, or customer-account credentials.
-
-
-## How to interpret results
-
-Agents and users must label default catalog/recommendation/purchase-handoff output as fixture-backed scaffold data when discussing SKU recommendations, price, availability, Shopify IDs, variant IDs, exact product specs, or catalog completeness. Use `read_shopify_products` and cite it explicitly for live purchasable product truth.
-
-Good phrasing:
-
-- `The MCP fixture catalog includes CIL078 as a candidate.`
-- `Use the returned product URL, cart continue_url, or checkout URL as the next step; only `complete_checkout` through Shopify Checkout MCP may finalize checkout, and only after Shopify authentication/authorization verification.`
-- `Price, availability, Shopify IDs, variant IDs, product URLs, and metafields from fixture tools are non-authoritative unless read_shopify_products is explicitly cited.`
-
-Bad phrasing:
-
-- `This item is definitely in stock.`
-- `The live Shopify price is final/guaranteed...`
-- `I charged a card directly, handled raw payment credentials, created a customer record, reserved inventory, or created an RFQ for you.`
+## Safety rules for agents
+
+- Do not invent live price, stock, product URL, Shopify ID, or variant ID from fixture tools. Use `read_shopify_products`.
+- Do not call `create_cart` or `update_cart` until the buyer has explicitly selected line items and quantities.
+- Do not claim checkout MCP is live. Use Shopify cart/continue URLs for buyer handoff when available.
+- Do not ask users for, store, or transmit raw card numbers, CVV/CVC, passwords, payment tokens, or customer-account credentials.
+- Do not attempt Shopify product, variant, collection, tag, metafield, inventory, order, customer, discount, RFQ, Acumatica, or database writes.
+- Do not expose direct gated datasheet URLs.
+- For live FoV, agents call Commonlands MCP only. Agents must not call the AWS Lambda/API Gateway endpoint directly.
 
 ## Future custom domain note
 
