@@ -86,7 +86,6 @@ export function computeFov(
       eflMm: lens.eflMm,
       projectionModel: lens.projectionModel,
       coefficientCount: lens.coefficientCount,
-      ...(lens.fixtureDistortion ? { fixtureDistortion: lens.fixtureDistortion } : {}),
     },
     sensor: {
       partNumber: sensor.partNumber,

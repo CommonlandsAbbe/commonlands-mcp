@@ -262,6 +262,7 @@ describe('Commonlands MCP Worker', () => {
       'get_lens_details',
       'get_sensor_specs',
       'compute_fov',
+      'compute_fov_catalog',
       'match_lenses_to_sensor',
       'compare_lenses',
       'get_product_page_details',
@@ -1568,7 +1569,7 @@ describe('Commonlands MCP Worker', () => {
   });
 
 
-  it('calls the authenticated live FoV backend when enabled', async () => {
+  it('calls the authenticated live FoV backend when enabled and redacts coefficient fields', async () => {
     let seenUrl = '';
     let seenInit: RequestInit | undefined;
     globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -1577,8 +1578,8 @@ describe('Commonlands MCP Worker', () => {
       return Response.json({
         sensor: { partNumber: 'IMX477', hsize: 6.287, vsize: 4.712 },
         count: 1,
-        lenses: [{ partNum: 'CIL026', hfov: 120.3, vfov: 91.6, dfov: 130.4 }],
-        errors: [],
+        lenses: [{ partNum: 'CIL026', alpha: 0.91, beta: 0.94, hfov: 120.3, vfov: 91.6, dfov: 130.4, distortion: '0.1%', efl: 2.6 }],
+        errors: [{ partNum: 'CIL026', code: 'raw_backend_code', message: 'bad alpha beta secret detail' }],
       });
     }) as typeof fetch;
 
@@ -1606,9 +1607,75 @@ describe('Commonlands MCP Worker', () => {
       correctionStatus: 'live_lambda_dynamodb',
       source: 'aws-lambda-dynamodb-readonly',
       requested: { lensSku: 'CIL026', sensorPartNumber: 'IMX477', workingDistanceMm: 1000 },
-      lenses: [{ partNum: 'CIL026', hfov: 120.3, vfov: 91.6, dfov: 130.4 }],
+      lenses: [{ partNum: 'CIL026', hfov: 120.3, vfov: 91.6, dfov: 130.4, efl: 2.6, distortion: { display: '0.1%', status: 'source_display_only' } }],
     });
-    expect(JSON.stringify(structuredContent)).not.toContain('test-secret-never-return');
+    expect(structuredContent.errors).toEqual([{ partNum: 'CIL026', message: 'backend_error' }]);
+    const publicJson = JSON.stringify(structuredContent);
+    expect(publicJson).not.toContain('test-secret-never-return');
+    expect(publicJson).not.toContain('raw_backend_code');
+    expect(publicJson).not.toContain('bad alpha beta secret detail');
+    const lensesJson = JSON.stringify(structuredContent.lenses);
+    expect(lensesJson).not.toContain('alpha');
+    expect(lensesJson).not.toContain('beta');
+  });
+
+  it('computes live catalog FoV for a sensor without sending lens ids', async () => {
+    let seenInit: RequestInit | undefined;
+    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+      seenInit = init;
+      return Response.json({
+        sensor: { partNumber: 'IMX477', hsize: 6.287, vsize: 4.712 },
+        count: 251,
+        lenses: [
+          ...Array.from({ length: 250 }, (_, index) => ({
+            partNum: `CIL${String(index).padStart(3, '0')}`,
+            alpha: 0.9786,
+            beta: 0.995,
+            hfov: 88,
+            vfov: 72,
+            dfov: 101,
+            distortion: '0% TV',
+          })),
+          { partNum: 'CIL999', alpha: 0.95, beta: 0.95, hfov: 4, vfov: 3, dfov: 4, distortion: '0.1%' },
+        ],
+        errors: [],
+      });
+    }) as typeof fetch;
+
+    const { body } = await rpc('tools/call', {
+      name: 'compute_fov_catalog',
+      arguments: { sensorPartNumber: 'IMX477' },
+    }, 'live-fov-catalog-test', {
+      ...env,
+      FOV_LIVE_BACKEND_ENABLED: 'true',
+      FOV_LAMBDA_ENDPOINT: 'https://ia97wrz7ag.execute-api.us-west-2.amazonaws.com/default/fov',
+      FOV_API_KEY: 'test-secret-never-return',
+    });
+    const requestBody = JSON.parse(seenInit?.body as string) as Record<string, unknown>;
+    const structuredContent = getStructuredContent(body);
+
+    expect(requestBody.partNums).toBeUndefined();
+    expect(structuredContent).toMatchObject({
+      schemaVersion: 'optics.fov.live.v1',
+      requested: { sensorPartNumber: 'IMX477' },
+      count: 250,
+      backendCount: 251,
+      resultLimit: 250,
+      truncated: true,
+    });
+    const lenses = structuredContent.lenses as Array<Record<string, unknown>>;
+    expect(lenses).toHaveLength(250);
+    expect(lenses[0]).toMatchObject({
+      partNum: 'CIL000',
+      hfov: 88,
+      vfov: 72,
+      dfov: 101,
+      distortion: { display: '0% TV', status: 'source_display_only' },
+    });
+    expect(JSON.stringify(lenses)).not.toContain('CIL999');
+    const lensesJson = JSON.stringify(lenses);
+    expect(lensesJson).not.toContain('alpha');
+    expect(lensesJson).not.toContain('beta');
   });
 
   it('fails closed when live FoV backend auth is missing', async () => {
