@@ -49,6 +49,11 @@ export interface Env {
   FOV_LIVE_BACKEND_ENABLED?: string;
   FOV_LAMBDA_ENDPOINT?: string;
   FOV_API_KEY?: string;
+  MCP_ANALYTICS?: AnalyticsEngineDataset;
+}
+
+interface AnalyticsEngineDataset {
+  writeDataPoint(dataPoint: { blobs?: string[]; doubles?: number[]; indexes?: string[] }): void;
 }
 
 interface JsonRpcRequest {
@@ -84,6 +89,7 @@ const FOV_BACKEND_TIMEOUT_MS = 4_000;
 const FOV_BACKEND_MAX_RESPONSE_BYTES = 128 * 1024;
 const FOV_SINGLE_MAX_RESULTS = 10;
 const FOV_CATALOG_MAX_RESULTS = 250;
+const UNKNOWN_ANALYTICS_VALUE = 'unknown';
 
 const SERVER_INSTRUCTIONS = [
   `Commonlands MCP public endpoint is ${PUBLIC_MCP_ENDPOINT}. Use this endpoint in client configuration, metadata, and agent-facing descriptions.`,
@@ -726,6 +732,73 @@ function rpcResult(id: unknown, result: unknown): Response {
 
 function rpcError(id: unknown, error: JsonRpcError): Response {
   return json({ jsonrpc: '2.0', id: id ?? null, error }, { status: 200 });
+}
+
+function methodNameForTelemetry(method: unknown): string {
+  return typeof method === 'string' && method.trim() !== '' ? method.trim().slice(0, 80) : UNKNOWN_ANALYTICS_VALUE;
+}
+
+function toolNameForTelemetry(method: unknown, params: unknown): string {
+  if (method !== 'tools/call' || !isRecord(params) || typeof params.name !== 'string' || params.name.trim() === '') {
+    return UNKNOWN_ANALYTICS_VALUE;
+  }
+
+  return params.name.trim().slice(0, 80);
+}
+
+function clientNameForTelemetry(request: Request): string {
+  const explicit = request.headers.get('mcp-client-name') ?? request.headers.get('x-mcp-client') ?? request.headers.get('x-client-name');
+  if (explicit && explicit.trim() !== '') return explicit.trim().slice(0, 80);
+
+  const userAgent = request.headers.get('user-agent') ?? '';
+  if (userAgent.trim() === '') return UNKNOWN_ANALYTICS_VALUE;
+  return userAgent.split(/[\s/]/u).find(Boolean)?.slice(0, 80) ?? UNKNOWN_ANALYTICS_VALUE;
+}
+
+function responseStatusForTelemetry(response: Response): string {
+  if (response.status >= 500) return 'http_5xx';
+  if (response.status >= 400) return 'http_4xx';
+  return 'ok';
+}
+
+async function jsonRpcStatusForTelemetry(response: Response): Promise<string> {
+  if (response.status >= 400) return responseStatusForTelemetry(response);
+
+  try {
+    const body = (await response.clone().json()) as unknown;
+    if (isRecord(body) && isRecord(body.error)) {
+      const code = typeof body.error.code === 'number' ? body.error.code : 'unknown';
+      return `jsonrpc_error_${code}`;
+    }
+  } catch {
+    return responseStatusForTelemetry(response);
+  }
+
+  return 'ok';
+}
+
+async function writeMcpTelemetry(env: Env, request: Request, payload: JsonRpcRequest | null, response: Response, startedAt: number): Promise<void> {
+  if (!env.MCP_ANALYTICS) return;
+
+  try {
+    const method = methodNameForTelemetry(payload?.method);
+    env.MCP_ANALYTICS.writeDataPoint({
+      blobs: [
+        request.method,
+        new URL(request.url).pathname,
+        method,
+        toolNameForTelemetry(payload?.method, payload?.params),
+        await jsonRpcStatusForTelemetry(response),
+        clientNameForTelemetry(request),
+        env.ENVIRONMENT ?? UNKNOWN_ANALYTICS_VALUE,
+        env.VERSION ?? UNKNOWN_ANALYTICS_VALUE,
+      ],
+      doubles: [response.status, Date.now() - startedAt],
+      indexes: [method],
+    });
+  } catch {
+    // Telemetry must never block public MCP responses or expose request payloads.
+  }
 }
 
 function validateRpcRequest(payload: unknown): JsonRpcRequest | JsonRpcError {
@@ -1586,44 +1659,65 @@ function summarizeLens(lens: LensCatalogItem): Omit<LensCatalogItem, 'source' | 
 }
 
 async function handleMcp(request: Request, env: Env): Promise<Response> {
+  const startedAt = Date.now();
+  let parsedForTelemetry: JsonRpcRequest | null = null;
+  let response: Response;
+
   const contentType = request.headers.get('content-type') ?? '';
   if (!contentType.toLowerCase().includes('application/json')) {
-    return json({ error: 'unsupported_media_type' }, { status: 415 });
+    response = json({ error: 'unsupported_media_type' }, { status: 415 });
+    await writeMcpTelemetry(env, request, parsedForTelemetry, response, startedAt);
+    return response;
   }
 
   const contentLength = request.headers.get('content-length');
   if (contentLength && Number(contentLength) > MAX_MCP_BODY_BYTES) {
-    return json({ error: 'payload_too_large' }, { status: 413 });
+    response = json({ error: 'payload_too_large' }, { status: 413 });
+    await writeMcpTelemetry(env, request, parsedForTelemetry, response, startedAt);
+    return response;
   }
 
   const bodyText = await request.text();
   if (new TextEncoder().encode(bodyText).byteLength > MAX_MCP_BODY_BYTES) {
-    return json({ error: 'payload_too_large' }, { status: 413 });
+    response = json({ error: 'payload_too_large' }, { status: 413 });
+    await writeMcpTelemetry(env, request, parsedForTelemetry, response, startedAt);
+    return response;
   }
 
   let payload: unknown;
   try {
     payload = JSON.parse(bodyText);
   } catch {
-    return rpcError(null, { code: -32700, message: 'Parse error' });
+    response = rpcError(null, { code: -32700, message: 'Parse error' });
+    await writeMcpTelemetry(env, request, parsedForTelemetry, response, startedAt);
+    return response;
   }
 
   const parsed = validateRpcRequest(payload);
   if ('code' in parsed) {
     const id = isRecord(payload) ? payload.id : null;
-    return rpcError(id, parsed);
+    parsedForTelemetry = isRecord(payload) ? payload : null;
+    response = rpcError(id, parsed);
+    await writeMcpTelemetry(env, request, parsedForTelemetry, response, startedAt);
+    return response;
   }
 
-  if (parsed.method === 'initialize') return initializeResponse(parsed.id);
-  if (parsed.method === 'tools/list') return toolListResponse(parsed.id, env);
-  if (parsed.method === 'tools/call') return await toolCallResponse(parsed.id, parsed.params, env);
-  if (parsed.method === 'resources/list') return resourceListResponse(parsed.id);
-  if (parsed.method === 'resources/read') return resourceReadResponse(parsed.id, parsed.params);
+  parsedForTelemetry = parsed;
 
-  return rpcError(parsed.id, {
-    code: -32601,
-    message: `Method not found: ${parsed.method}`,
-  });
+  if (parsed.method === 'initialize') response = initializeResponse(parsed.id);
+  else if (parsed.method === 'tools/list') response = toolListResponse(parsed.id, env);
+  else if (parsed.method === 'tools/call') response = await toolCallResponse(parsed.id, parsed.params, env);
+  else if (parsed.method === 'resources/list') response = resourceListResponse(parsed.id);
+  else if (parsed.method === 'resources/read') response = resourceReadResponse(parsed.id, parsed.params);
+  else {
+    response = rpcError(parsed.id, {
+      code: -32601,
+      message: `Method not found: ${parsed.method}`,
+    });
+  }
+
+  await writeMcpTelemetry(env, request, parsedForTelemetry, response, startedAt);
+  return response;
 }
 
 assertSafePublicCatalogUrls();

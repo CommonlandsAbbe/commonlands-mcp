@@ -256,6 +256,61 @@ describe('Commonlands MCP Worker', () => {
     });
   });
 
+
+  it('writes privacy-safe MCP telemetry when Analytics Engine binding is present', async () => {
+    const writes: Array<{ blobs?: string[]; doubles?: number[]; indexes?: string[] }> = [];
+    const requestEnv: Env = {
+      ...env,
+      MCP_ANALYTICS: {
+        writeDataPoint(dataPoint) {
+          writes.push(dataPoint);
+        },
+      },
+    };
+
+    const { response, body } = await rpc(
+      'tools/call',
+      { name: 'get_sensor_specs', arguments: { partNumber: 'IMX477', secretLike: 'do-not-log' } },
+      'telemetry-tool-call',
+      requestEnv,
+    );
+
+    expect(response.status).toBe(200);
+    expect(getStructuredContent(body)).toMatchObject({ sensor: { partNumber: 'IMX477' } });
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toMatchObject({
+      blobs: ['POST', '/mcp', 'tools/call', 'get_sensor_specs', 'ok', 'unknown', 'test', '0.1.0-test'],
+      indexes: ['tools/call'],
+    });
+    expect(writes[0]?.doubles?.[0]).toBe(200);
+    expect(JSON.stringify(writes)).not.toContain('IMX477');
+    expect(JSON.stringify(writes)).not.toContain('do-not-log');
+  });
+
+  it('records JSON-RPC tool errors in telemetry without logging request arguments', async () => {
+    const writes: Array<{ blobs?: string[]; doubles?: number[]; indexes?: string[] }> = [];
+    const requestEnv: Env = {
+      ...env,
+      MCP_ANALYTICS: {
+        writeDataPoint(dataPoint) {
+          writes.push(dataPoint);
+        },
+      },
+    };
+
+    const { body } = await rpc(
+      'tools/call',
+      { name: 'create_checkout', arguments: { variantId: 'gid://shopify/ProductVariant/secret-ish' } },
+      'telemetry-disabled-checkout',
+      requestEnv,
+    );
+
+    expect(body).toMatchObject({ error: { code: -32601, message: 'Tool not found: create_checkout' } });
+    expect(writes).toHaveLength(1);
+    expect(writes[0]?.blobs).toEqual(['POST', '/mcp', 'tools/call', 'create_checkout', 'jsonrpc_error_-32601', 'unknown', 'test', '0.1.0-test']);
+    expect(JSON.stringify(writes)).not.toContain('secret-ish');
+  });
+
   it('lists Phase 1 catalog tools', async () => {
     const { body } = await rpc('tools/list');
     const result = getResult(body);
