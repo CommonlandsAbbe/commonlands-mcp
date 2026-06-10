@@ -77,6 +77,19 @@ binding = "MCP_ANALYTICS"
 dataset = "commonlands_mcp_events"
 ```
 
+After deploy, verify that telemetry is live:
+
+```bash
+curl https://mcp.commonlands.com/healthz
+curl -X POST https://mcp.commonlands.com/mcp \
+  -H 'content-type: application/json' \
+  -H 'accept: application/json, text/event-stream' \
+  -H 'mcp-client-name: telemetry-smoke' \
+  -d '{"jsonrpc":"2.0","id":"telemetry-smoke","method":"tools/list","params":{}}'
+```
+
+`/healthz` should report `"telemetry":{"analyticsEngine":"configured"}`. Then query the `commonlands_mcp_events` Analytics Engine dataset. Column order is `blob1=request method`, `blob2=path`, `blob3=MCP method`, `blob4=tool`, `blob5=status`, `blob6=client`, `blob7=environment`, `blob8=version`, `double1=HTTP status`, and `double2=duration ms`.
+
 ## Quick client setup
 
 ### Codex

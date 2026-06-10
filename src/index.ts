@@ -719,6 +719,9 @@ function health(env: Env): Response {
     environment: env.ENVIRONMENT ?? 'unknown',
     version: env.VERSION ?? SERVER_INFO.version,
     gitSha: env.GIT_SHA ?? 'unknown',
+    telemetry: {
+      analyticsEngine: env.MCP_ANALYTICS ? 'configured' : 'disabled',
+    },
   });
 }
 

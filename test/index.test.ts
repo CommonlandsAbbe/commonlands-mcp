@@ -230,6 +230,26 @@ describe('Commonlands MCP Worker', () => {
       environment: 'test',
       version: '0.1.0-test',
       gitSha: 'abc123',
+      telemetry: {
+        analyticsEngine: 'disabled',
+      },
+    });
+  });
+
+  it('reports Analytics Engine telemetry as configured when the binding exists', async () => {
+    const response = await fetchWorker('/healthz', undefined, {
+      ...env,
+      MCP_ANALYTICS: {
+        writeDataPoint() {},
+      },
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      telemetry: {
+        analyticsEngine: 'configured',
+      },
     });
   });
 
