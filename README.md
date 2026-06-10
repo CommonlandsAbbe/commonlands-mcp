@@ -90,6 +90,24 @@ curl -X POST https://mcp.commonlands.com/mcp \
 
 `/healthz` should report `"telemetry":{"analyticsEngine":"configured"}`. Then query the `commonlands_mcp_events` Analytics Engine dataset. Column order is `blob1=request method`, `blob2=path`, `blob3=MCP method`, `blob4=tool`, `blob5=status`, `blob6=client`, `blob7=environment`, `blob8=version`, `double1=HTTP status`, and `double2=duration ms`.
 
+Tool usage rollup:
+
+```bash
+curl "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/analytics_engine/sql" \
+  -H "Authorization: Bearer $CLOUDFLARE_ANALYTICS_READ_TOKEN" \
+  --data "SELECT blob4 AS tool, blob5 AS status, SUM(_sample_interval) AS calls, SUM(_sample_interval * double2) / SUM(_sample_interval) AS avg_duration_ms FROM commonlands_mcp_events WHERE timestamp >= NOW() - INTERVAL '7' DAY AND blob3 = 'tools/call' GROUP BY tool, status ORDER BY calls DESC LIMIT 50 FORMAT JSON"
+```
+
+Client/tool rollup:
+
+```bash
+curl "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/analytics_engine/sql" \
+  -H "Authorization: Bearer $CLOUDFLARE_ANALYTICS_READ_TOKEN" \
+  --data "SELECT blob6 AS client, blob4 AS tool, SUM(_sample_interval) AS calls, SUM(_sample_interval * double2) / SUM(_sample_interval) AS avg_duration_ms FROM commonlands_mcp_events WHERE timestamp >= NOW() - INTERVAL '7' DAY AND blob3 = 'tools/call' AND blob5 = 'ok' GROUP BY client, tool ORDER BY calls DESC LIMIT 100 FORMAT JSON"
+```
+
+Use `blob4` to see which MCP tools agents actually call. High-call/high-success tools are candidates for deeper investment; low-call or repeated-error tools are candidates for better descriptions, consolidation, or deprecation. Keep Cloudflare invocation logs enabled for request/response metadata, but use Analytics Engine for tool-level decisions because it captures the JSON-RPC method and tool name without storing request arguments.
+
 ## Quick client setup
 
 ### Codex
