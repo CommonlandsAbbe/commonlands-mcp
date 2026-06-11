@@ -73,6 +73,13 @@ interface ToolDefinition {
   title: string;
   description: string;
   inputSchema: Record<string, unknown>;
+  annotations?: ToolAnnotations;
+}
+
+interface ToolAnnotations {
+  title: string;
+  readOnlyHint: boolean;
+  destructiveHint: boolean;
 }
 
 const SERVER_INFO = {
@@ -81,7 +88,8 @@ const SERVER_INFO = {
 } as const;
 
 const PUBLIC_MCP_ENDPOINT = 'https://mcp.commonlands.com/mcp';
-const PROTOCOL_VERSION = '2024-11-05';
+const PROTOCOL_VERSION = '2025-11-25';
+const SUPPORTED_PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26'] as const;
 const MAX_MCP_BODY_BYTES = 64 * 1024;
 const SAFE_IDENTIFIER_PATTERN = /^[A-Z0-9-]{2,32}$/;
 const MAX_WORKING_DISTANCE_MM = 100_000;
@@ -98,6 +106,8 @@ const SERVER_INSTRUCTIONS = [
   'Commonlands MCP helps agents select precision optics for machine vision, robotics, and embedded vision: M12 lenses, C-mount lenses, and lens field of view calculations.',
   'Usage flow: discover lenses with search_lenses/search_catalog, inspect details with get_lens_details/get_product, compute lens field of view with compute_fov or compute_fov_catalog, rank options with match_lenses_to_sensor/compare_lenses/recommend_lenses_for_application, then use read_shopify_products for live purchasable truth before quoting price, availability, Shopify variantId, product URL, or cart payloads.',
   FOV_COMPUTATION_RULE,
+  'Do not run DIY optics math, interpolate catalog FoV, infer coverage, or assemble sensor-specific optical numbers outside Commonlands MCP computed responses.',
+  'Source-labeling policy: label every optical or commerce claim with its source; preserve returned provenance.method, provenance.rev, coverage class, distortion-at-field-edge status, and Shopify live-read versus fixture/source-warning distinctions.',
   'For sensor-specific lens finding, prefer compute_fov_catalog first when the user gives a sensor or target FoV; its results already include per-sensor HFOV/VFOV/DFOV, image-circle coverage signals, sanitized provenance/source metadata, and backend errors where available. Use search_lenses/search_catalog only for broad SKU/title/mount discovery.',
   'Safety boundaries: fixture-backed tools are scaffold/context only; Shopify product/cart truth is read-only unless approved cart tools are explicitly listed in tools/list; cancel, checkout, payment, customer, order, inventory, and product writes remain hidden/gated unless separately approved. Do not pass arbitrary URLs or client-supplied downstream tokens; Commonlands uses fixed allowlisted endpoints and server-side secrets only, and does not accept client-supplied downstream tokens.',
 ].join(' ');
@@ -820,9 +830,9 @@ function validateRpcRequest(payload: unknown): JsonRpcRequest | JsonRpcError {
   return payload;
 }
 
-function initializeResponse(id: unknown): Response {
+function initializeResponse(id: unknown, params: unknown): Response {
   return rpcResult(id, {
-    protocolVersion: PROTOCOL_VERSION,
+    protocolVersion: negotiateProtocolVersion(params),
     capabilities: {
       tools: {},
       resources: {},
@@ -832,12 +842,23 @@ function initializeResponse(id: unknown): Response {
   });
 }
 
+function negotiateProtocolVersion(params: unknown): string {
+  if (isRecord(params) && typeof params.protocolVersion === 'string') {
+    const requested = params.protocolVersion;
+    if (SUPPORTED_PROTOCOL_VERSIONS.includes(requested as typeof SUPPORTED_PROTOCOL_VERSIONS[number])) {
+      return requested;
+    }
+  }
+
+  return PROTOCOL_VERSION;
+}
+
 function toolListResponse(id: unknown, env: Env): Response {
   return rpcResult(id, { tools: visibleTools(env) });
 }
 
 function visibleTools(env: Env): ToolDefinition[] {
-  return TOOLS.filter((tool) => isToolEnabled(tool.name, env));
+  return TOOLS.filter((tool) => isToolEnabled(tool.name, env)).map(withToolAnnotations);
 }
 
 function isToolEnabled(name: string, env: Env): boolean {
@@ -846,6 +867,30 @@ function isToolEnabled(name: string, env: Env): boolean {
   if (name === 'create_checkout' || name === 'get_checkout') return env.ENABLE_CHECKOUT_MUTATION_TOOLS === 'true';
   if (name === 'update_checkout' || name === 'complete_checkout' || name === 'cancel_checkout') return env.ENABLE_EXTRA_CHECKOUT_MUTATION_TOOLS === 'true';
   return true;
+}
+
+const WRITE_TOOL_NAMES = new Set([
+  'create_cart',
+  'get_cart',
+  'update_cart',
+  'cancel_cart',
+  'create_checkout',
+  'get_checkout',
+  'update_checkout',
+  'complete_checkout',
+  'cancel_checkout',
+]);
+
+function withToolAnnotations(tool: ToolDefinition): ToolDefinition {
+  const writes = WRITE_TOOL_NAMES.has(tool.name);
+  return {
+    ...tool,
+    annotations: {
+      title: tool.title,
+      readOnlyHint: !writes,
+      destructiveHint: writes,
+    },
+  };
 }
 
 function resourceListResponse(id: unknown): Response {
@@ -1008,10 +1053,7 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
       return rpcError(id, { code: -32004, message: 'Lens not found' });
     }
 
-    return toolResult(id, {
-      ...computeFov(lens, sensor, workingDistanceMm),
-      sourceWarning: FIXTURE_NOT_PRODUCT_TRUTH_WARNING,
-    });
+    return toolResult(id, buildFixtureSingleFovResponse(lens, sensor, workingDistanceMm));
   }
 
   if (params.name === 'compute_fov_catalog') {
@@ -1286,6 +1328,11 @@ interface SanitizedFovLens {
   hfov?: number;
   vfov?: number;
   dfov?: number;
+  fov?: {
+    horizontalDeg?: number;
+    verticalDeg?: number;
+    diagonalDeg?: number;
+  };
   efl?: number;
   imageCircle?: number;
   lensType?: string;
@@ -1301,13 +1348,37 @@ interface SanitizedFovLens {
     diagonal?: number;
     status: 'source_display_only' | 'calculated';
   };
+  distortionAtFieldEdge?: DistortionAtFieldEdge;
   pixpitch?: number;
-  coverageClass?: 'full_sensor' | 'clipped_to_image_circle' | 'unknown';
+  coverageClass?: CoverageClass;
+  coverage?: CoverageMetadata;
   provenance?: {
     method: string;
     rev: string;
     source: string;
   };
+}
+
+type CoverageClass = 'full' | 'inscribed' | 'cropped' | 'unknown';
+
+interface CoverageMetadata {
+  class: CoverageClass;
+  pixelCounts: {
+    sensorPixels: number;
+    coveredPixels?: number;
+    croppedPixels?: number;
+    widthPx?: number;
+    heightPx?: number;
+    coveredWidthPx?: number;
+    coveredHeightPx?: number;
+  };
+}
+
+interface DistortionAtFieldEdge {
+  display?: string;
+  valuePercent?: number;
+  axis?: 'diagonal' | 'horizontal' | 'vertical' | 'max_axis';
+  status: 'source_display_only' | 'calculated' | 'unavailable';
 }
 
 async function computeFovWithLiveBackend(
@@ -1421,11 +1492,15 @@ function sanitizeFovLens(value: unknown): SanitizedFovLens | null {
   if (!value || typeof value !== 'object') return null;
   const lens = value as Record<string, unknown>;
   const partNum = firstString(lens.partNum, lens.PartNum, lens.sku, lens.SKU, lens.id);
+  const hfov = firstNumber(lens.hfov, lens.horizontalFovDeg);
+  const vfov = firstNumber(lens.vfov, lens.verticalFovDeg);
+  const dfov = firstNumber(lens.dfov, lens.diagonalFovDeg);
   const sanitized: SanitizedFovLens = {
     ...(partNum ? { partNum } : {}),
-    ...numberField('hfov', firstNumber(lens.hfov, lens.horizontalFovDeg)),
-    ...numberField('vfov', firstNumber(lens.vfov, lens.verticalFovDeg)),
-    ...numberField('dfov', firstNumber(lens.dfov, lens.diagonalFovDeg)),
+    ...numberField('hfov', hfov),
+    ...numberField('vfov', vfov),
+    ...numberField('dfov', dfov),
+    ...fovField(hfov, vfov, dfov),
     ...numberField('efl', firstNumber(lens.efl, lens.eflMm, lens.focalLengthMm)),
     ...numberField('imageCircle', firstNumber(lens.image_circle, lens.imageCircle, lens.imageCircleMm)),
     ...stringField('lensType', firstString(lens.lens_type, lens.lensType)),
@@ -1437,7 +1512,10 @@ function sanitizeFovLens(value: unknown): SanitizedFovLens | null {
     ...numberField('pixpitch', firstNumber(lens.pixpitch, lens.pixelSizeUm)),
   };
   const distortion = sanitizeDistortion(lens);
-  if (distortion) sanitized.distortion = distortion;
+  if (distortion) {
+    sanitized.distortion = distortion;
+    sanitized.distortionAtFieldEdge = summarizeDistortionAtFieldEdge(distortion);
+  }
   return sanitized;
 }
 
@@ -1457,6 +1535,57 @@ function sanitizeDistortion(lens: Record<string, unknown>): SanitizedFovLens['di
   }
   if (!display) return undefined;
   return { display, status: 'source_display_only' };
+}
+
+function fovField(
+  horizontalDeg: number | undefined,
+  verticalDeg: number | undefined,
+  diagonalDeg: number | undefined,
+): Pick<SanitizedFovLens, 'fov'> {
+  if (horizontalDeg === undefined && verticalDeg === undefined && diagonalDeg === undefined) return {};
+  return {
+    fov: {
+      ...(horizontalDeg !== undefined ? { horizontalDeg } : {}),
+      ...(verticalDeg !== undefined ? { verticalDeg } : {}),
+      ...(diagonalDeg !== undefined ? { diagonalDeg } : {}),
+    },
+  };
+}
+
+function summarizeDistortionAtFieldEdge(
+  distortion: NonNullable<SanitizedFovLens['distortion']>,
+): DistortionAtFieldEdge {
+  if (distortion.diagonal !== undefined) {
+    return {
+      ...(distortion.display ? { display: distortion.display } : {}),
+      valuePercent: distortion.diagonal,
+      axis: 'diagonal',
+      status: distortion.status,
+    };
+  }
+
+  const axes = [
+    ['horizontal', distortion.horizontal] as const,
+    ['vertical', distortion.vertical] as const,
+  ].filter((entry): entry is readonly ['horizontal' | 'vertical', number] => entry[1] !== undefined);
+  if (axes.length > 0) {
+    const [axis, value] = axes.reduce((max, entry) => Math.abs(entry[1]) > Math.abs(max[1]) ? entry : max);
+    return {
+      ...(distortion.display ? { display: distortion.display } : {}),
+      valuePercent: value,
+      axis: axes.length === 1 ? axis : 'max_axis',
+      status: distortion.status,
+    };
+  }
+
+  return {
+    ...(distortion.display ? { display: distortion.display } : {}),
+    status: distortion.status,
+  };
+}
+
+function unavailableDistortionAtFieldEdge(): DistortionAtFieldEdge {
+  return { status: 'unavailable' };
 }
 
 function sanitizeFovSensor(value: unknown, fallback: NonNullable<ReturnType<typeof getSensorByPartNumber>>): Record<string, unknown> {
@@ -1481,6 +1610,63 @@ function sanitizeFovSensor(value: unknown, fallback: NonNullable<ReturnType<type
   };
 }
 
+function buildCoverageMetadata(
+  sensor: NonNullable<ReturnType<typeof getSensorByPartNumber>>,
+  imageCircleMm: number | undefined,
+): CoverageMetadata {
+  const widthPx = sensor.resolution.widthPx;
+  const heightPx = sensor.resolution.heightPx;
+  const sensorPixels = widthPx * heightPx;
+
+  if (imageCircleMm === undefined) {
+    return {
+      class: 'unknown',
+      pixelCounts: { sensorPixels },
+    };
+  }
+
+  const sensorDiagonalMm = Math.hypot(sensor.activeAreaMm.width, sensor.activeAreaMm.height);
+  if (imageCircleMm >= sensorDiagonalMm) {
+    return {
+      class: 'full',
+      pixelCounts: {
+        sensorPixels,
+        coveredPixels: sensorPixels,
+        croppedPixels: 0,
+        widthPx,
+        heightPx,
+        coveredWidthPx: widthPx,
+        coveredHeightPx: heightPx,
+      },
+    };
+  }
+
+  const scale = Math.max(0, Math.min(1, imageCircleMm / sensorDiagonalMm));
+  const coveredWidthPx = Math.floor(widthPx * scale);
+  const coveredHeightPx = Math.floor(heightPx * scale);
+  const coveredPixels = coveredWidthPx * coveredHeightPx;
+
+  return {
+    class: 'inscribed',
+    pixelCounts: {
+      sensorPixels,
+      coveredPixels,
+      croppedPixels: sensorPixels - coveredPixels,
+      widthPx,
+      heightPx,
+      coveredWidthPx,
+      coveredHeightPx,
+    },
+  };
+}
+
+function coverageFields(coverage: CoverageMetadata): Pick<SanitizedFovLens, 'coverageClass' | 'coverage'> {
+  return {
+    coverageClass: coverage.class,
+    coverage,
+  };
+}
+
 function sanitizeFovErrors(value: unknown): Array<Record<string, unknown>> {
   if (!Array.isArray(value)) return [];
   return value.slice(0, 25).map((entry) => {
@@ -1499,18 +1685,21 @@ function sanitizeFixtureCatalogFovLens(fovResult: unknown, lens: LensCatalogItem
     fov?: { horizontalDeg?: number; verticalDeg?: number; diagonalDeg?: number };
     lens?: { eflMm?: number; imageCircleMm?: number; fNumber?: number };
     imageCircle?: { clipped?: boolean };
+    sensor?: NonNullable<ReturnType<typeof getSensorByPartNumber>>;
   };
+  const distortion = { display: lens.fixtureDistortion?.notes ?? 'fixture distortion scaffold', status: 'source_display_only' } as const;
+  const imageCircleMm = result.lens?.imageCircleMm ?? lens.imageCircleMm;
   const sanitized: SanitizedFovLens = {
     partNum: lens.sku,
     efl: result.lens?.eflMm ?? lens.eflMm,
-    imageCircle: result.lens?.imageCircleMm ?? lens.imageCircleMm,
+    imageCircle: imageCircleMm,
     lensType: lens.lensType,
     mount: lens.mount,
     resolution: lens.resolution,
     fNumber: result.lens?.fNumber ?? lens.fNumber,
     url: lens.productUrl,
-    distortion: { display: lens.fixtureDistortion?.notes ?? 'fixture distortion scaffold', status: 'source_display_only' },
-    coverageClass: result.imageCircle?.clipped ? 'clipped_to_image_circle' : 'full_sensor',
+    distortion,
+    distortionAtFieldEdge: summarizeDistortionAtFieldEdge(distortion),
     provenance: {
       method: 'fixture_parity_scaffold',
       rev: 'fixture-polynomial-fov-0.1.0',
@@ -1520,7 +1709,35 @@ function sanitizeFixtureCatalogFovLens(fovResult: unknown, lens: LensCatalogItem
   if (result.fov?.horizontalDeg !== undefined) sanitized.hfov = result.fov.horizontalDeg;
   if (result.fov?.verticalDeg !== undefined) sanitized.vfov = result.fov.verticalDeg;
   if (result.fov?.diagonalDeg !== undefined) sanitized.dfov = result.fov.diagonalDeg;
+  Object.assign(sanitized, fovField(result.fov?.horizontalDeg, result.fov?.verticalDeg, result.fov?.diagonalDeg));
+  if (result.sensor) {
+    Object.assign(sanitized, coverageFields(buildCoverageMetadata(result.sensor, imageCircleMm)));
+  }
   return sanitized;
+}
+
+function buildFixtureSingleFovResponse(
+  lens: LensCatalogItem,
+  sensor: NonNullable<ReturnType<typeof getSensorByPartNumber>>,
+  workingDistanceMm: number | undefined,
+): Record<string, unknown> {
+  const result = computeFov(lens, sensor, workingDistanceMm);
+  const coverage = buildCoverageMetadata(sensor, result.imageCircle.lensImageCircleMm);
+  const distortion = result.lens.fixtureDistortion
+    ? { display: result.lens.fixtureDistortion.notes, status: 'source_display_only' } as const
+    : undefined;
+
+  return {
+    ...result,
+    ...coverageFields(coverage),
+    distortionAtFieldEdge: distortion ? summarizeDistortionAtFieldEdge(distortion) : unavailableDistortionAtFieldEdge(),
+    provenance: {
+      method: 'fixture_parity_scaffold',
+      rev: result.modelVersion,
+      source: 'fixture-catalog',
+    },
+    sourceWarning: FIXTURE_NOT_PRODUCT_TRUTH_WARNING,
+  };
 }
 
 function addFovLensMetadata(
@@ -1528,16 +1745,15 @@ function addFovLensMetadata(
   sensor: NonNullable<ReturnType<typeof getSensorByPartNumber>>,
   provenance: SanitizedFovLens['provenance'],
 ): SanitizedFovLens[] {
-  const sensorDiagonalMm = Math.hypot(sensor.activeAreaMm.width, sensor.activeAreaMm.height);
-  return lenses.map((lens) => ({
-    ...lens,
-    coverageClass: lens.imageCircle === undefined
-      ? 'unknown'
-      : lens.imageCircle >= sensorDiagonalMm
-        ? 'full_sensor'
-        : 'clipped_to_image_circle',
-    ...(provenance ? { provenance } : {}),
-  }));
+  return lenses.map((lens) => {
+    const coverage = buildCoverageMetadata(sensor, lens.imageCircle);
+    return {
+      ...lens,
+      ...coverageFields(coverage),
+      distortionAtFieldEdge: lens.distortion ? summarizeDistortionAtFieldEdge(lens.distortion) : unavailableDistortionAtFieldEdge(),
+      ...(provenance ? { provenance } : {}),
+    };
+  });
 }
 
 function firstString(...values: unknown[]): string | undefined {
@@ -1759,7 +1975,7 @@ async function handleMcp(request: Request, env: Env): Promise<Response> {
 
   parsedForTelemetry = parsed;
 
-  if (parsed.method === 'initialize') response = initializeResponse(parsed.id);
+  if (parsed.method === 'initialize') response = initializeResponse(parsed.id, parsed.params);
   else if (parsed.method === 'tools/list') response = toolListResponse(parsed.id, env);
   else if (parsed.method === 'tools/call') response = await toolCallResponse(parsed.id, parsed.params, env);
   else if (parsed.method === 'resources/list') response = resourceListResponse(parsed.id);

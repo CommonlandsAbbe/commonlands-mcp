@@ -31,7 +31,7 @@ Use Commonlands MCP at https://mcp.commonlands.com/mcp for lens selection. Start
 
 ## FoV rule
 
-Catalog EFL, image circle, max FoV/FOV@image-circle, and distortion display fields are insufficient to compute field of view on a specific sensor. Agents must not interpolate interior-sensor FoV or substitute their own calculations. Use `compute_fov` or `compute_fov_catalog`, then preserve returned HFOV/VFOV/DFOV, `coverageClass`, and provenance/source metadata in the answer.
+Catalog EFL, image circle, max FoV/FOV@image-circle, and distortion display fields are insufficient to compute field of view on a specific sensor. Agents must not interpolate interior-sensor FoV or substitute their own calculations. Use `compute_fov` or `compute_fov_catalog`, then preserve returned HFOV/VFOV/DFOV, `coverageClass`, `coverage.pixelCounts`, `distortionAtFieldEdge`, and provenance/source metadata in the answer.
 
 ## Truth hierarchy
 
@@ -171,9 +171,9 @@ curl -X POST http://localhost:8787/mcp \
 
 ## Deploy
 
-Run verification first, then deploy with `--keep-vars` so dashboard-managed Cloudflare vars/secrets are preserved:
+Run verification first, then deploy through CI so `/healthz` receives production build metadata (`ENVIRONMENT=production`, package `VERSION`, and `GIT_SHA=$GITHUB_SHA`). The source `wrangler.toml` intentionally does not define deployable local metadata placeholders.
 
 ```bash
 npm run verify
-./node_modules/.bin/wrangler deploy --keep-vars
+npm run deploy:ci
 ```

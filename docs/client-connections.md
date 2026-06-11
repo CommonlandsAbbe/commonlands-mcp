@@ -196,7 +196,7 @@ Initialize:
 curl -X POST https://mcp.commonlands.com/mcp \
   -H 'content-type: application/json' \
   -H 'accept: application/json, text/event-stream' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"commonlands-smoke","version":"0.0.0"}}}'
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"commonlands-smoke","version":"0.0.0"}}}'
 ```
 
 List tools:

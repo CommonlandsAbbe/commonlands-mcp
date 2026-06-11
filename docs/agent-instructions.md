@@ -15,7 +15,7 @@ There is no `find_lenses` tool in the current public surface. For "find lenses f
 ## Default Lens-Selection Workflow
 
 1. Call `tools/list` and trust the live tool list over documentation.
-2. If the user names a sensor or target FoV, call `compute_fov_catalog` first. Its lens records carry per-sensor HFOV/VFOV/DFOV when available, image-circle coverage class, and provenance/source metadata.
+2. If the user names a sensor or target FoV, call `compute_fov_catalog` first. Its lens records carry per-sensor HFOV/VFOV/DFOV when available, nested `fov`, image-circle coverage class, pixel counts, field-edge distortion, and provenance/source metadata.
 3. If the user names one SKU and one sensor, call `compute_fov`.
 4. Use `search_lenses` or `search_catalog` only for broad SKU/title/mount discovery, not for sensor-specific FoV.
 5. Use `match_lenses_to_sensor`, `compare_lenses`, or `recommend_lenses_for_application` as shortlist/explanation helpers. Treat them as fixture-backed context unless the returned payload says otherwise.
@@ -35,7 +35,10 @@ If fixture context conflicts with `read_shopify_products`, use Shopify truth for
 When using `compute_fov_catalog`, prefer returned fields over derived values:
 
 - `hfov`, `vfov`, `dfov`: per-sensor horizontal, vertical, and diagonal FoV.
-- `coverageClass`: `full_sensor`, `clipped_to_image_circle`, or `unknown`.
+- `fov`: canonical per-axis FoV object with horizontal, vertical, and diagonal degree fields.
+- `coverageClass`: `full`, `inscribed`, `cropped`, or `unknown`.
+- `coverage.pixelCounts`: sensor, covered, and cropped pixel counts when the Worker can compute them.
+- `distortionAtFieldEdge`: field-edge distortion status/value/display summary.
 - `provenance`: method/rev/source metadata returned by the Worker.
 - `errors`: backend failures sanitized by part number where available.
 - `source`, `correctionStatus`, `schemaVersion`, and `modelVersion`: the payload-level source and model context.
@@ -47,7 +50,7 @@ Preserve these fields in answers when explaining why a lens was selected. Do not
 For a request like "Find M12 lenses for IMX477 around 50 degrees HFOV":
 
 1. Call `compute_fov_catalog` with `sensorPartNumber: "IMX477"`.
-2. Filter/rank returned lenses by `hfov`, `coverageClass`, mount, and backend errors.
+2. Filter/rank returned lenses by `hfov`, `coverageClass`, `coverage.pixelCounts`, mount, and backend errors.
 3. Optionally call `compare_lenses` or `match_lenses_to_sensor` for explanatory tradeoffs.
 4. Call `read_shopify_products` for the final SKU candidates.
 5. Answer with separate sections for optical fit and live purchase truth.
@@ -56,7 +59,7 @@ Good answer shape:
 
 ```text
 For IMX477, the closest optical candidates from compute_fov_catalog are:
-- CIL250: HFOV 51.3, VFOV 39.6, DFOV 61.9, coverage full_sensor, provenance fixture_parity_scaffold/fixture-polynomial-fov-0.1.0.
+- CIL250: HFOV 51.3, VFOV 39.6, DFOV 61.9, coverage inscribed with returned pixel counts, provenance fixture_parity_scaffold/fixture-polynomial-fov-0.1.0.
 - CIL078: HFOV ..., coverage ...
 
 I verified CIL250 through read_shopify_products for live URL, price, inventory signal, and Variant GID. I did not use catalog EFL/image-circle interpolation for these FoV values.

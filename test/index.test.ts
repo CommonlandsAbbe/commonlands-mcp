@@ -41,6 +41,11 @@ interface ToolSummary {
   title?: string;
   description?: string;
   inputSchema: JsonObject;
+  annotations?: {
+    title?: string;
+    readOnlyHint?: boolean;
+    destructiveHint?: boolean;
+  };
 }
 
 interface LensSummary {
@@ -257,7 +262,7 @@ describe('Commonlands MCP Worker', () => {
     const { response, body } = await rpc(
       'initialize',
       {
-        protocolVersion: '2024-11-05',
+        protocolVersion: '2025-11-25',
         capabilities: {},
         clientInfo: { name: 'vitest', version: '0.0.0' },
       },
@@ -269,10 +274,26 @@ describe('Commonlands MCP Worker', () => {
       jsonrpc: '2.0',
       id: 1,
       result: {
-        protocolVersion: '2024-11-05',
+        protocolVersion: '2025-11-25',
         serverInfo: { name: 'commonlands-mcp', version: '0.1.0' },
         capabilities: { tools: {}, resources: {} },
       },
+    });
+  });
+
+  it('negotiates stale initialize protocol requests to the latest Streamable HTTP revision', async () => {
+    const { body } = await rpc(
+      'initialize',
+      {
+        protocolVersion: '2024-11-05',
+        capabilities: {},
+        clientInfo: { name: 'legacy-smoke', version: '0.0.0' },
+      },
+      'legacy-initialize',
+    );
+
+    expect(getResult(body)).toMatchObject({
+      protocolVersion: '2025-11-25',
     });
   });
 
@@ -372,11 +393,34 @@ describe('Commonlands MCP Worker', () => {
     expect(metadataText).toMatch(/compute_fov_catalog/i);
   });
 
+  it('annotates every visible tool with display title and risk hints', async () => {
+    const { body } = await rpc('tools/list', undefined, 'annotated-tools', shopifyCartEnv);
+    const tools = getResult(body).tools as ToolSummary[];
+
+    expect(tools.length).toBeGreaterThan(20);
+    for (const tool of tools) {
+      expect(tool.annotations).toMatchObject({
+        title: tool.title,
+        readOnlyHint: expect.any(Boolean),
+        destructiveHint: expect.any(Boolean),
+      });
+    }
+
+    const cartTools = tools.filter((tool) => ['create_cart', 'get_cart', 'update_cart'].includes(tool.name));
+    expect(cartTools).toHaveLength(3);
+    for (const tool of cartTools) {
+      expect(tool.annotations).toMatchObject({
+        readOnlyHint: false,
+        destructiveHint: true,
+      });
+    }
+  });
+
   it('returns MCP initialize instructions with usage, SEO, and security metadata', async () => {
     const { body } = await rpc(
       'initialize',
       {
-        protocolVersion: '2024-11-05',
+        protocolVersion: '2025-11-25',
         capabilities: {},
         clientInfo: { name: 'vitest', version: '0.0.0' },
       },
@@ -394,6 +438,8 @@ describe('Commonlands MCP Worker', () => {
     expect(instructions).toMatch(/prefer compute_fov_catalog first/i);
     expect(instructions).toMatch(/Do not pass arbitrary URLs/i);
     expect(instructions).toMatch(/not accept client-supplied downstream tokens/i);
+    expect(instructions).toMatch(/Do not run DIY optics math/i);
+    expect(instructions).toMatch(/label every optical or commerce claim with its source/i);
   });
 
   it('only lists commerce mutation tools when explicitly enabled', async () => {
@@ -1782,14 +1828,26 @@ describe('Commonlands MCP Worker', () => {
         hfov: 120.3,
         vfov: 91.6,
         dfov: 130.4,
+        fov: {
+          horizontalDeg: 120.3,
+          verticalDeg: 91.6,
+          diagonalDeg: 130.4,
+        },
         efl: 2.6,
         coverageClass: 'unknown',
+        coverage: {
+          class: 'unknown',
+          pixelCounts: {
+            sensorPixels: expect.any(Number),
+          },
+        },
         provenance: {
           method: 'lambda_dynamodb_fov_backend',
           rev: 'lambda-dynamodb-fov-0.1.0',
           source: 'aws-lambda-dynamodb-readonly',
         },
         distortion: { display: '0.1%', status: 'source_display_only' },
+        distortionAtFieldEdge: { display: '0.1%', status: 'source_display_only' },
       }],
     });
     expect(structuredContent.errors).toEqual([{ partNum: 'CIL026', message: 'backend_error' }]);
@@ -1858,13 +1916,25 @@ describe('Commonlands MCP Worker', () => {
       hfov: 88,
       vfov: 72,
       dfov: 101,
+      fov: {
+        horizontalDeg: 88,
+        verticalDeg: 72,
+        diagonalDeg: 101,
+      },
       coverageClass: 'unknown',
+      coverage: {
+        class: 'unknown',
+        pixelCounts: {
+          sensorPixels: expect.any(Number),
+        },
+      },
       provenance: {
         method: 'lambda_dynamodb_fov_backend',
         rev: 'lambda-dynamodb-fov-0.1.0',
         source: 'aws-lambda-dynamodb-readonly',
       },
       distortion: { display: '0% TV', status: 'source_display_only' },
+      distortionAtFieldEdge: { display: '0% TV', status: 'source_display_only' },
     });
     expect(JSON.stringify(lenses)).not.toContain('CIL999');
     const lensesJson = JSON.stringify(lenses);
@@ -1892,11 +1962,27 @@ describe('Commonlands MCP Worker', () => {
 
     const lenses = structuredContent.lenses as Array<Record<string, unknown>>;
     expect(lenses[0]).toMatchObject({
-      coverageClass: expect.stringMatching(/full_sensor|clipped_to_image_circle/),
+      fov: {
+        horizontalDeg: expect.any(Number),
+        verticalDeg: expect.any(Number),
+        diagonalDeg: expect.any(Number),
+      },
+      coverageClass: expect.stringMatching(/full|inscribed/),
+      coverage: {
+        class: expect.stringMatching(/full|inscribed/),
+        pixelCounts: {
+          sensorPixels: expect.any(Number),
+          coveredPixels: expect.any(Number),
+          croppedPixels: expect.any(Number),
+        },
+      },
       provenance: {
         method: 'fixture_parity_scaffold',
         rev: 'fixture-polynomial-fov-0.1.0',
         source: 'fixture-catalog',
+      },
+      distortionAtFieldEdge: {
+        status: 'source_display_only',
       },
     });
   });
@@ -1930,6 +2016,15 @@ describe('Commonlands MCP Worker', () => {
       lens: { sku: 'CIL250', projectionModel: 'projection_polynomial_theta_even_powers' },
       sensor: { partNumber: 'IMX477' },
       imageCircle: { clipped: true, usedWidthMm: 5.761, usedHeightMm: 4.318 },
+      coverageClass: 'inscribed',
+      coverage: {
+        class: 'inscribed',
+        pixelCounts: {
+          sensorPixels: expect.any(Number),
+          coveredPixels: expect.any(Number),
+          croppedPixels: expect.any(Number),
+        },
+      },
       fov: {
         horizontalDeg: 51.3,
         verticalDeg: 39.6,
@@ -1940,6 +2035,14 @@ describe('Commonlands MCP Worker', () => {
       angularResolution: {
         horizontalPxPerDeg: 79.1,
         verticalPxPerDeg: 76.8,
+      },
+      distortionAtFieldEdge: {
+        status: expect.stringMatching(/source_display_only|unavailable/),
+      },
+      provenance: {
+        method: 'fixture_parity_scaffold',
+        rev: 'fixture-polynomial-fov-0.1.0',
+        source: 'fixture-catalog',
       },
     });
     expect(structuredContent.assumptions).toContain(
