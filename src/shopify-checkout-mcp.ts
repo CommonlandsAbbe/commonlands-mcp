@@ -62,7 +62,7 @@ type NormalizedCheckout = {
   context?: Record<string, string>;
 };
 
-const DEFAULT_AGENT_PROFILE = 'https://commonlands-mcp.erp-14c.workers.dev/.well-known/ucp';
+const DEFAULT_AGENT_PROFILE = 'https://mcp.commonlands.com/.well-known/ucp';
 const JSON_RPC_ID = 'commonlands-checkout-mcp';
 
 export async function callShopifyCheckoutMcp(

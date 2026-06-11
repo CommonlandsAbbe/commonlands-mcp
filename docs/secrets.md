@@ -66,7 +66,7 @@ Rules:
 
 ### Shopify Cart MCP
 
-- `ENABLE_COMMERCE_MUTATION_TOOLS` non-secret explicit gate; cart tools are hidden unless set to `true`.
+- `ENABLE_COMMERCE_MUTATION_TOOLS` non-secret explicit gate; cart tools are exposed only when this is `true` and the target environment is approved/configured. Live `tools/list` is authoritative.
 - `SHOPIFY_CART_MCP_ENDPOINT` non-secret HTTPS merchant Cart MCP endpoint. Current confirmed Commonlands Storefront MCP endpoint is `https://commonlands-camera-components.myshopify.com/api/mcp`; the Worker also permits exact Commonlands merchant hosts only, not arbitrary tool-supplied endpoints.
 - `SHOPIFY_UCP_AGENT_PROFILE` optional non-secret profile URL; defaults to the live Commonlands UCP discovery URL.
 
@@ -78,14 +78,14 @@ Rules:
 
 ### Shopify Checkout MCP
 
-- `ENABLE_CHECKOUT_MUTATION_TOOLS` non-secret explicit gate; basic checkout tools (`create_checkout`, `get_checkout`) are hidden unless set to `true`.
-- `ENABLE_EXTRA_CHECKOUT_MUTATION_TOOLS` non-secret explicit gate; extra checkout operations (`update_checkout`, `complete_checkout`, `cancel_checkout`) are hidden unless set to `true` and should require official review before use.
+- `ENABLE_CHECKOUT_MUTATION_TOOLS` non-secret explicit gate; basic checkout tools (`create_checkout`, `get_checkout`) are hidden unless set to `true` after the Shopify Checkout MCP endpoint is validated/configured and operator approval is recorded.
+- `ENABLE_EXTRA_CHECKOUT_MUTATION_TOOLS` non-secret explicit gate; extra checkout operations (`update_checkout`, `complete_checkout`, `cancel_checkout`) are hidden unless set to `true` after official review.
 - `SHOPIFY_CHECKOUT_MCP_ENDPOINT` non-secret HTTPS merchant Checkout MCP endpoint on `commonlands.com`, normally `https://commonlands.com/api/checkout/mcp` when available.
 - `SHOPIFY_UCP_AGENT_PROFILE` optional non-secret profile URL; defaults to the live Commonlands UCP discovery URL.
 
 Rules:
 
-- Checkout MCP remains hidden by default pending approval, Cloudflare protections, endpoint binding, and merchant-side availability.
+- Checkout MCP remains hidden on the current live surface pending approval, Cloudflare protections, endpoint binding, and merchant-side availability.
 - Checkout state is stored and mutated by Shopify Checkout MCP; Commonlands Worker remains stateless and stores no checkout database/session/customer/payment record.
 - `complete_checkout` requires Shopify-authenticated buyer/payment verification and idempotency. No raw payment credentials, customer records, discounts/gift cards, inventory reservation/mutation, inventory sync changes, product writes, metafield writes, or catalog writes are accepted by Commonlands MCP.
 - Do not log returned credentials, signed URLs, or authorization material if Shopify Checkout MCP ever adds authenticated transport.

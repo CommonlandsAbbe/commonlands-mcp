@@ -69,7 +69,7 @@ type NormalizedCart = {
   signals?: Record<string, unknown>;
 };
 
-const DEFAULT_AGENT_PROFILE = 'https://commonlands-mcp.erp-14c.workers.dev/.well-known/ucp';
+const DEFAULT_AGENT_PROFILE = 'https://mcp.commonlands.com/.well-known/ucp';
 const JSON_RPC_ID = 'commonlands-cart-ucp';
 const COMMONLANDS_SHOPIFY_HOSTS = new Set(['commonlands.com', 'commonlands-camera-components.myshopify.com']);
 const SHOPIFY_STOREFRONT_MCP_PATH = '/api/mcp';
@@ -245,7 +245,7 @@ function normalizeLineItem(value: unknown, index: number): { value: NormalizedLi
   }
   const item = value.item;
   if (!isRecord(item) || typeof item.id !== 'string' || !/^gid:\/\/shopify\/ProductVariant\/[0-9]+$/.test(item.id)) {
-    return { error: `Invalid params: cart.line_items[${index}].item.id must be a Shopify ProductVariant gid` };
+    return { error: `Invalid params: cart.line_items[${index}].item.id must be a Shopify ProductVariant GID from read_shopify_products. Call read_shopify_products and use variantId; numeric IDs, storefront cart paths, and gid://commonlands/... fixture IDs are not accepted.` };
   }
   return { value: { quantity: Math.trunc(quantity), item: { id: item.id } } };
 }

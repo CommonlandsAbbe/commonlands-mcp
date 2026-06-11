@@ -82,6 +82,17 @@ export interface ShopifyReadonlyProduct {
   media: ShopifyReadonlyMedia[];
 }
 
+export interface ShopifyCartCreateLineItemRecommendation {
+  quantity: number;
+  item: { id: string };
+}
+
+export interface ShopifyCartCreatePayloadRecommendation {
+  cart: {
+    line_items: ShopifyCartCreateLineItemRecommendation[];
+  };
+}
+
 export interface ShopifyReadonlyVariant {
   id: string;
   variantId: string;
@@ -93,6 +104,7 @@ export interface ShopifyReadonlyVariant {
   inventoryTracked?: boolean;
   inventoryItemId?: string;
   storefrontCartPath?: string;
+  recommendedCreateCartPayload?: ShopifyCartCreatePayloadRecommendation;
   metafields: ShopifyReadonlyMetafield[];
 }
 
@@ -598,6 +610,7 @@ function normalizeVariants(nodes: ProductVariantNode[], includeMetafields: boole
     assignIfPresent(normalizedVariant, 'inventoryTracked', typeof variant.inventoryItem?.tracked === 'boolean' ? variant.inventoryItem.tracked : undefined);
     assignIfPresent(normalizedVariant, 'inventoryItemId', stringOrUndefined(variant.inventoryItem?.id));
     assignIfPresent(normalizedVariant, 'storefrontCartPath', numericId ? `/cart/${numericId}:1` : undefined);
+    assignIfPresent(normalizedVariant, 'recommendedCreateCartPayload', createCartPayloadForVariant(variantId));
     return normalizedVariant;
   });
 }
@@ -700,6 +713,17 @@ function normalizeMetaobjects(nodes: MetaobjectNode[]): ShopifyReadonlyMetaobjec
     assignIfPresent(normalized, 'handle', stringOrUndefined(node.handle));
     return normalized;
   });
+}
+
+function createCartPayloadForVariant(variantId: string): ShopifyCartCreatePayloadRecommendation | undefined {
+  if (!/^gid:\/\/shopify\/ProductVariant\/[0-9]+$/.test(variantId)) return undefined;
+  return {
+    cart: {
+      line_items: [
+        { quantity: 1, item: { id: variantId } },
+      ],
+    },
+  };
 }
 
 function assignIfPresent<T extends object, K extends keyof T>(target: T, key: K, value: T[K] | undefined): void {

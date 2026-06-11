@@ -20,7 +20,7 @@ const shopifyCartEnv: Env = {
   ...shopifyReadonlyEnv,
   ENABLE_COMMERCE_MUTATION_TOOLS: 'true',
   SHOPIFY_CART_MCP_ENDPOINT: 'https://commonlands.com/api/mcp',
-  SHOPIFY_UCP_AGENT_PROFILE: 'https://commonlands-mcp.erp-14c.workers.dev/.well-known/ucp',
+  SHOPIFY_UCP_AGENT_PROFILE: 'https://mcp.commonlands.com/.well-known/ucp',
 };
 
 const shopifyCheckoutBasicEnv: Env = {
@@ -38,6 +38,8 @@ type JsonObject = Record<string, unknown>;
 
 interface ToolSummary {
   name: string;
+  title?: string;
+  description?: string;
   inputSchema: JsonObject;
 }
 
@@ -137,6 +139,8 @@ interface CatalogSnapshotStatus {
 
 interface ResourceSummary {
   uri: string;
+  name?: string;
+  description?: string;
 }
 
 async function fetchWorker(path: string, init?: RequestInit, requestEnv: Env = env): Promise<Response> {
@@ -262,6 +266,7 @@ describe('Commonlands MCP Worker', () => {
       'get_lens_details',
       'get_sensor_specs',
       'compute_fov',
+      'compute_fov_catalog',
       'match_lenses_to_sensor',
       'compare_lenses',
       'get_product_page_details',
@@ -281,6 +286,35 @@ describe('Commonlands MCP Worker', () => {
     expect(tools.map((tool) => tool.name)).not.toContain('update_checkout');
     expect(tools.map((tool) => tool.name)).not.toContain('cancel_checkout');
     expect(tools[0]?.inputSchema.type).toBe('object');
+
+    const metadataText = tools.map((tool) => `${tool.title ?? ''} ${tool.description ?? ''}`).join(' ');
+    expect(metadataText).toMatch(/M12 lenses/i);
+    expect(metadataText).toMatch(/C-mount lenses/i);
+    expect(metadataText).toMatch(/lens field of view/i);
+    expect(metadataText).toMatch(/read_shopify_products/i);
+    expect(metadataText).toMatch(/read-only/i);
+  });
+
+  it('returns MCP initialize instructions with usage, SEO, and security metadata', async () => {
+    const { body } = await rpc(
+      'initialize',
+      {
+        protocolVersion: '2024-11-05',
+        capabilities: {},
+        clientInfo: { name: 'vitest', version: '0.0.0' },
+      },
+      'initialize-metadata',
+    );
+    const result = getResult(body);
+    const instructions = result.instructions as string;
+
+    expect(instructions).toMatch(/https:\/\/mcp\.commonlands\.com\/mcp/i);
+    expect(instructions).toMatch(/M12 lenses/i);
+    expect(instructions).toMatch(/C-mount lenses/i);
+    expect(instructions).toMatch(/lens field of view/i);
+    expect(instructions).toMatch(/Use read_shopify_products/i);
+    expect(instructions).toMatch(/Do not pass arbitrary URLs/i);
+    expect(instructions).toMatch(/not accept client-supplied downstream tokens/i);
   });
 
   it('only lists commerce mutation tools when explicitly enabled', async () => {
@@ -377,9 +411,15 @@ describe('Commonlands MCP Worker', () => {
     const listed = await rpc('resources/list');
     const listedResult = getResult(listed.body);
     const resources = listedResult.resources as ResourceSummary[];
+    expect(resources.map((resource) => resource.uri)).toContain('commonlands://server/connection');
     expect(resources.map((resource) => resource.uri)).toContain('commonlands://catalog/lenses');
     expect(resources.map((resource) => resource.uri)).toContain('commonlands://catalog/snapshot-status');
     expect(resources.map((resource) => resource.uri)).toContain('commonlands://compatibility/shopify-ucp');
+    const resourceMetadataText = resources.map((resource) => `${resource.name ?? ''} ${resource.description ?? ''}`).join(' ');
+    expect(resourceMetadataText).toMatch(/https:\/\/mcp\.commonlands\.com\/mcp/i);
+    expect(resourceMetadataText).toMatch(/M12 lenses/i);
+    expect(resourceMetadataText).toMatch(/C-mount lenses/i);
+    expect(resourceMetadataText).toMatch(/lens field of view/i);
 
     const read = await rpc('resources/read', { uri: 'commonlands://catalog/lenses' });
     const readResult = getResult(read.body);
@@ -403,9 +443,9 @@ describe('Commonlands MCP Worker', () => {
         ucpCatalogVersion: '2026-04-08',
       },
       readiness: {
-        status: 'catalog_fixture_ready_commerce_mutations_disabled_by_default',
-        liveConnectors: 'not_connected',
-        cartCheckout: 'cart_checkout_mutation_tools_hidden_pending_approval',
+        status: 'catalog_fixture_ready_live_shopify_read_and_cart_proxy_configured_separately',
+        liveConnectors: 'shopify_read_only_configured_separately',
+        cartCheckout: 'cart_proxy_create_get_update_when_enabled_checkout_hidden',
         customerAccounts: 'not_implemented_requires_oauth_and_protected_customer_data',
       },
       ucpCatalog: {
@@ -611,7 +651,19 @@ describe('Commonlands MCP Worker', () => {
           handle: 'telephoto-25mm-m12-lens-cil250',
           title: 'IR Corrected 25mm M12 Lens',
           metafields: [{ namespace: 'custom', key: 'short_partnumber', valuePreview: 'CIL250' }],
-          variants: [{ sku: 'NOT-CIL250-SKU', metafields: [{ namespace: 'mm-google-shopping', key: 'mpn', valuePreview: 'CIL250' }] }],
+          variants: [
+            {
+              sku: 'NOT-CIL250-SKU',
+              metafields: [{ namespace: 'mm-google-shopping', key: 'mpn', valuePreview: 'CIL250' }],
+              recommendedCreateCartPayload: {
+                cart: {
+                  line_items: [
+                    { quantity: 1, item: { id: 'gid://shopify/ProductVariant/123' } },
+                  ],
+                },
+              },
+            },
+          ],
         },
       ],
     });
@@ -691,6 +743,13 @@ describe('Commonlands MCP Worker', () => {
         price: '49.00',
         inventoryQuantity: 10,
         storefrontCartPath: '/cart/111:1',
+        recommendedCreateCartPayload: {
+          cart: {
+            line_items: [
+              { quantity: 1, item: { id: 'gid://shopify/ProductVariant/111' } },
+            ],
+          },
+        },
       }),
     ]);
     expect(JSON.stringify(structuredContent)).not.toContain('recommend_live_shopify_lens_for_sensor');
@@ -786,6 +845,13 @@ describe('Commonlands MCP Worker', () => {
               sku: 'CIL250',
               inventoryQuantity: 42,
               inventoryTracked: true,
+              recommendedCreateCartPayload: {
+                cart: {
+                  line_items: [
+                    { quantity: 1, item: { id: 'gid://shopify/ProductVariant/123' } },
+                  ],
+                },
+              },
             },
           ],
         },
@@ -1147,7 +1213,7 @@ describe('Commonlands MCP Worker', () => {
       expect(url).toBe('https://commonlands-camera-components.myshopify.com/api/ucp/mcp');
       expect(payload.params.name).toBe('create_cart');
       expect(payload.params.arguments).toMatchObject({
-        meta: { 'ucp-agent': { profile: 'https://commonlands-mcp.erp-14c.workers.dev/.well-known/ucp' } },
+        meta: { 'ucp-agent': { profile: 'https://mcp.commonlands.com/.well-known/ucp' } },
         cart: { line_items: [{ quantity: 1, item: { id: 'gid://shopify/ProductVariant/12345678901' } }] },
       });
       return Response.json({
@@ -1197,7 +1263,27 @@ describe('Commonlands MCP Worker', () => {
       name: 'create_cart',
       arguments: { cart: { line_items: [{ quantity: 1, item: { id: 'gid://shopify/Product/123' } }] } },
     }, 'unsafe-cart-variant', shopifyCartEnv);
-    expect(getStructuredContent(badVariant.body)).toMatchObject({ connector: { status: 'invalid_request' } });
+    const badVariantContent = getStructuredContent(badVariant.body);
+    expect(badVariantContent).toMatchObject({ connector: { status: 'invalid_request' } });
+    expect((badVariantContent.connector as JsonObject).messages).toEqual([
+      'Invalid params: cart.line_items[0].item.id must be a Shopify ProductVariant GID from read_shopify_products. Call read_shopify_products and use variantId; numeric IDs, storefront cart paths, and gid://commonlands/... fixture IDs are not accepted.',
+    ]);
+
+    const numericVariant = await rpc('tools/call', {
+      name: 'create_cart',
+      arguments: { cart: { line_items: [{ quantity: 1, item: { id: '41702699729014' } }] } },
+    }, 'unsafe-cart-numeric-variant', shopifyCartEnv);
+    expect((getStructuredContent(numericVariant.body).connector as JsonObject).messages).toEqual([
+      'Invalid params: cart.line_items[0].item.id must be a Shopify ProductVariant GID from read_shopify_products. Call read_shopify_products and use variantId; numeric IDs, storefront cart paths, and gid://commonlands/... fixture IDs are not accepted.',
+    ]);
+
+    const fixtureVariant = await rpc('tools/call', {
+      name: 'create_cart',
+      arguments: { cart: { line_items: [{ quantity: 1, item: { id: 'gid://commonlands/ProductVariant/CIL250' } }] } },
+    }, 'unsafe-cart-fixture-variant', shopifyCartEnv);
+    expect((getStructuredContent(fixtureVariant.body).connector as JsonObject).messages).toEqual([
+      'Invalid params: cart.line_items[0].item.id must be a Shopify ProductVariant GID from read_shopify_products. Call read_shopify_products and use variantId; numeric IDs, storefront cart paths, and gid://commonlands/... fixture IDs are not accepted.',
+    ]);
 
     const badCancel = await rpc('tools/call', {
       name: 'cancel_cart',
@@ -1258,7 +1344,7 @@ describe('Commonlands MCP Worker', () => {
       expect(body).not.toMatch(/complete_checkout|payment|order|customer|inventory|mutation/i);
       const payload = JSON.parse(body) as { params: { arguments: { meta: Record<string, unknown>; checkout: Record<string, unknown> } } };
       expect(payload.params.arguments.meta).toMatchObject({
-        'ucp-agent': { profile: 'https://commonlands-mcp.erp-14c.workers.dev/.well-known/ucp' },
+        'ucp-agent': { profile: 'https://mcp.commonlands.com/.well-known/ucp' },
       });
       expect(payload.params.arguments.checkout).toEqual({
         cart_id: 'gid://shopify/Cart/cart_abc123',
@@ -1522,7 +1608,8 @@ describe('Commonlands MCP Worker', () => {
       mimeType: 'application/json',
     });
     expect(parsed.ucpCatalog.compatibleTools).toEqual(['search_catalog', 'lookup_catalog', 'get_product']);
-    expect(parsed.readiness.liveConnectors).toBe('not_connected');
+    expect(parsed.readiness.liveConnectors).toBe('shopify_read_only_configured_separately');
+    expect(parsed.readiness.cartCheckout).toBe('cart_proxy_create_get_update_when_enabled_checkout_hidden');
   });
 
   it('reports joined catalog snapshot status and validation without live connectors', async () => {
@@ -1568,7 +1655,7 @@ describe('Commonlands MCP Worker', () => {
   });
 
 
-  it('calls the authenticated live FoV backend when enabled', async () => {
+  it('calls the authenticated live FoV backend when enabled and redacts coefficient fields', async () => {
     let seenUrl = '';
     let seenInit: RequestInit | undefined;
     globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -1577,8 +1664,8 @@ describe('Commonlands MCP Worker', () => {
       return Response.json({
         sensor: { partNumber: 'IMX477', hsize: 6.287, vsize: 4.712 },
         count: 1,
-        lenses: [{ partNum: 'CIL026', hfov: 120.3, vfov: 91.6, dfov: 130.4 }],
-        errors: [],
+        lenses: [{ partNum: 'CIL026', alpha: 0.91, beta: 0.94, hfov: 120.3, vfov: 91.6, dfov: 130.4, distortion: '0.1%', efl: 2.6 }],
+        errors: [{ partNum: 'CIL026', code: 'raw_backend_code', message: 'bad alpha beta secret detail' }],
       });
     }) as typeof fetch;
 
@@ -1606,9 +1693,75 @@ describe('Commonlands MCP Worker', () => {
       correctionStatus: 'live_lambda_dynamodb',
       source: 'aws-lambda-dynamodb-readonly',
       requested: { lensSku: 'CIL026', sensorPartNumber: 'IMX477', workingDistanceMm: 1000 },
-      lenses: [{ partNum: 'CIL026', hfov: 120.3, vfov: 91.6, dfov: 130.4 }],
+      lenses: [{ partNum: 'CIL026', hfov: 120.3, vfov: 91.6, dfov: 130.4, efl: 2.6, distortion: { display: '0.1%', status: 'source_display_only' } }],
     });
-    expect(JSON.stringify(structuredContent)).not.toContain('test-secret-never-return');
+    expect(structuredContent.errors).toEqual([{ partNum: 'CIL026', message: 'backend_error' }]);
+    const publicJson = JSON.stringify(structuredContent);
+    expect(publicJson).not.toContain('test-secret-never-return');
+    expect(publicJson).not.toContain('raw_backend_code');
+    expect(publicJson).not.toContain('bad alpha beta secret detail');
+    const lensesJson = JSON.stringify(structuredContent.lenses);
+    expect(lensesJson).not.toContain('alpha');
+    expect(lensesJson).not.toContain('beta');
+  });
+
+  it('computes live catalog FoV for a sensor without sending lens ids', async () => {
+    let seenInit: RequestInit | undefined;
+    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+      seenInit = init;
+      return Response.json({
+        sensor: { partNumber: 'IMX477', hsize: 6.287, vsize: 4.712 },
+        count: 251,
+        lenses: [
+          ...Array.from({ length: 250 }, (_, index) => ({
+            partNum: `CIL${String(index).padStart(3, '0')}`,
+            alpha: 0.9786,
+            beta: 0.995,
+            hfov: 88,
+            vfov: 72,
+            dfov: 101,
+            distortion: '0% TV',
+          })),
+          { partNum: 'CIL999', alpha: 0.95, beta: 0.95, hfov: 4, vfov: 3, dfov: 4, distortion: '0.1%' },
+        ],
+        errors: [],
+      });
+    }) as typeof fetch;
+
+    const { body } = await rpc('tools/call', {
+      name: 'compute_fov_catalog',
+      arguments: { sensorPartNumber: 'IMX477' },
+    }, 'live-fov-catalog-test', {
+      ...env,
+      FOV_LIVE_BACKEND_ENABLED: 'true',
+      FOV_LAMBDA_ENDPOINT: 'https://ia97wrz7ag.execute-api.us-west-2.amazonaws.com/default/fov',
+      FOV_API_KEY: 'test-secret-never-return',
+    });
+    const requestBody = JSON.parse(seenInit?.body as string) as Record<string, unknown>;
+    const structuredContent = getStructuredContent(body);
+
+    expect(requestBody.partNums).toBeUndefined();
+    expect(structuredContent).toMatchObject({
+      schemaVersion: 'optics.fov.live.v1',
+      requested: { sensorPartNumber: 'IMX477' },
+      count: 250,
+      backendCount: 251,
+      resultLimit: 250,
+      truncated: true,
+    });
+    const lenses = structuredContent.lenses as Array<Record<string, unknown>>;
+    expect(lenses).toHaveLength(250);
+    expect(lenses[0]).toMatchObject({
+      partNum: 'CIL000',
+      hfov: 88,
+      vfov: 72,
+      dfov: 101,
+      distortion: { display: '0% TV', status: 'source_display_only' },
+    });
+    expect(JSON.stringify(lenses)).not.toContain('CIL999');
+    const lensesJson = JSON.stringify(lenses);
+    expect(lensesJson).not.toContain('alpha');
+    expect(lensesJson).not.toContain('beta');
   });
 
   it('fails closed when live FoV backend auth is missing', async () => {
@@ -1913,7 +2066,7 @@ describe('Commonlands MCP Worker', () => {
     expect(body).toEqual({ error: 'not_found' });
   });
 
-  it('serves a UCP discovery profile that advertises catalog capabilities only', async () => {
+  it('serves a UCP discovery profile that advertises catalog and cart discovery only', async () => {
     const response = await fetchWorker('/.well-known/ucp');
     const profile = await response.json() as Record<string, unknown>;
 
@@ -1921,14 +2074,18 @@ describe('Commonlands MCP Worker', () => {
     expect(profile).toMatchObject({
       version: '2026-04-08',
       transport: 'mcp',
-      endpoint: 'https://mcp.commonlands.test/mcp',
+      endpoint: 'https://mcp.commonlands.com/mcp',
       capabilities: [
         'dev.ucp.shopping.catalog.search',
         'dev.ucp.shopping.catalog.lookup',
+        'dev.ucp.shopping.cart',
       ],
     });
     expect(profile).toMatchObject({
-      metadata: { cartPersistence: 'not_advertised', cartBoundary: 'commerce_mutation_tools_hidden_pending_approval' },
+      metadata: {
+        cartPersistence: 'shopify_owned_when_cart_tools_exposed',
+        cartBoundary: 'tools_list_is_authoritative_create_get_update_cart_only_when_enabled_cancel_checkout_hidden_currently',
+      },
     });
     expect(JSON.stringify(profile)).not.toMatch(/order|customer/i);
   });

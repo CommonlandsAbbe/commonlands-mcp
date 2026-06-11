@@ -75,19 +75,29 @@ const SERVER_INFO = {
   version: '0.1.0',
 } as const;
 
+const PUBLIC_MCP_ENDPOINT = 'https://mcp.commonlands.com/mcp';
 const PROTOCOL_VERSION = '2024-11-05';
 const MAX_MCP_BODY_BYTES = 64 * 1024;
 const SAFE_IDENTIFIER_PATTERN = /^[A-Z0-9-]{2,32}$/;
 const MAX_WORKING_DISTANCE_MM = 100_000;
 const FOV_BACKEND_TIMEOUT_MS = 4_000;
 const FOV_BACKEND_MAX_RESPONSE_BYTES = 128 * 1024;
+const FOV_SINGLE_MAX_RESULTS = 10;
+const FOV_CATALOG_MAX_RESULTS = 250;
+
+const SERVER_INSTRUCTIONS = [
+  `Commonlands MCP public endpoint is ${PUBLIC_MCP_ENDPOINT}. Use this endpoint in client configuration, metadata, and agent-facing descriptions.`,
+  'Commonlands MCP helps agents select precision optics for machine vision, robotics, and embedded vision: M12 lenses, C-mount lenses, and lens field of view calculations.',
+  'Usage flow: discover lenses with search_lenses/search_catalog, inspect details with get_lens_details/get_product, compute lens field of view with compute_fov or compute_fov_catalog, rank options with match_lenses_to_sensor/compare_lenses/recommend_lenses_for_application, then use read_shopify_products for live purchasable truth before quoting price, availability, Shopify variantId, product URL, or cart payloads.',
+  'Safety boundaries: fixture-backed tools are scaffold/context only; Shopify product/cart truth is read-only unless approved cart tools are explicitly listed in tools/list; cancel, checkout, payment, customer, order, inventory, and product writes remain hidden/gated unless separately approved. Do not pass arbitrary URLs or client-supplied downstream tokens; Commonlands uses fixed allowlisted endpoints and server-side secrets only, and does not accept client-supplied downstream tokens.',
+].join(' ');
 
 const TOOLS: ToolDefinition[] = [
   {
     name: 'search_lenses',
     title: 'Search Commonlands lenses',
     description:
-      'Search the fixture-backed Commonlands lens catalog snapshot by SKU, title, mount, or lens type. Use read_shopify_products for live purchasable product truth.',
+      'Search the fixture-backed Commonlands lens catalog snapshot by SKU, title, mount, lens type, M12 lenses, C-mount lenses, or machine-vision application. Use read_shopify_products for live purchasable product truth.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -100,7 +110,7 @@ const TOOLS: ToolDefinition[] = [
   {
     name: 'get_lens_details',
     title: 'Get lens details',
-    description: 'Return fixture-backed public product and optical metadata for one Commonlands lens SKU. Use read_shopify_products for live product, price, availability, variant IDs, and metafields.',
+    description: 'Return fixture-backed public product and optical metadata for one Commonlands lens SKU, including mount, focal length, image circle, resolution, and machine-vision lens context. Use read_shopify_products for live product, price, availability, variant IDs, and metafields.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -113,7 +123,7 @@ const TOOLS: ToolDefinition[] = [
   {
     name: 'get_sensor_specs',
     title: 'Get sensor specs',
-    description: 'Return fixture-backed sensor dimensions and resolution for Phase 1 matching inputs.',
+    description: 'Return fixture-backed sensor dimensions, pixel pitch, and resolution for lens field of view, M12 lens, and C-mount lens matching inputs.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -127,7 +137,7 @@ const TOOLS: ToolDefinition[] = [
     name: 'compute_fov',
     title: 'Compute lens field of view',
     description:
-      'Compute field of view for a Commonlands lens and sensor pair. Uses the authenticated live FoV backend when configured; otherwise fixture-backed scaffold data. Verify purchasable facts with read_shopify_products.',
+      'Compute lens field of view for a Commonlands lens and sensor pair, including horizontal, vertical, and diagonal FoV when available. Supports M12 lenses and C-mount lenses. Uses the authenticated live FoV backend when configured; otherwise fixture-backed scaffold data. Verify purchasable facts with read_shopify_products.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -144,10 +154,29 @@ const TOOLS: ToolDefinition[] = [
     },
   },
   {
+    name: 'compute_fov_catalog',
+    title: 'Compute catalog field of view for a sensor',
+    description:
+      'Compute lens field of view for the available Commonlands M12 lens and C-mount lens catalog on one sensor. Uses the authenticated live FoV backend when configured and returns sanitized FoV/catalog fields only; raw distortion coefficients are never returned.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sensorPartNumber: { type: 'string', description: 'Sensor part number, for example IMX477.' },
+        workingDistanceMm: {
+          type: 'number',
+          exclusiveMinimum: 0,
+          description: 'Optional working distance used by backends that support scene-size estimates.',
+        },
+      },
+      required: ['sensorPartNumber'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'match_lenses_to_sensor',
     title: 'Match lenses to a sensor',
     description:
-      'Rank fixture catalog lenses for one sensor using image-circle coverage, FoV target fit, and deterministic optical tradeoffs. Not live product truth; verify purchasable facts with read_shopify_products.',
+      'Rank fixture catalog M12 lenses and C-mount lenses for one sensor using image-circle coverage, lens field of view target fit, and deterministic optical tradeoffs. Not live product truth; verify purchasable facts with read_shopify_products.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -164,7 +193,7 @@ const TOOLS: ToolDefinition[] = [
   {
     name: 'compare_lenses',
     title: 'Compare Commonlands lenses',
-    description: 'Compare selected fixture-backed lens SKUs on the same sensor with the same deterministic scoring model. Not live product truth; verify purchasable facts with read_shopify_products.',
+    description: 'Compare selected fixture-backed Commonlands M12 lens and C-mount lens SKUs on the same sensor with the same deterministic scoring model. Not live product truth; verify purchasable facts with read_shopify_products.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -611,7 +640,7 @@ const TOOLS: ToolDefinition[] = [
     name: 'recommend_lenses_for_application',
     title: 'Recommend lenses for an application',
     description:
-      'Rank fixture catalog lenses for an application note such as embedded robotics or machine-vision inspection.',
+      'Rank fixture catalog M12 lenses and C-mount lenses for an application note such as embedded robotics, machine-vision inspection, or a required lens field of view.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -632,27 +661,33 @@ const TOOLS: ToolDefinition[] = [
 
 const RESOURCES = [
   {
+    uri: 'commonlands://server/connection',
+    name: 'Commonlands MCP public connection metadata',
+    description: `Canonical public MCP endpoint: ${PUBLIC_MCP_ENDPOINT}. Use this URL for clients, metadata, and agent-facing descriptions; localhost is local-development only.`,
+    mimeType: 'application/json',
+  },
+  {
     uri: 'commonlands://catalog/lenses',
-    name: 'Commonlands lens catalog snapshot',
-    description: 'Fixture-backed Phase 1 joined lens catalog snapshot.',
+    name: 'Commonlands M12 and C-mount lens catalog snapshot',
+    description: 'Fixture-backed Phase 1 joined catalog of Commonlands M12 lenses, C-mount lenses, focal lengths, mounts, image circles, and product handoff fields.',
     mimeType: 'application/json',
   },
   {
     uri: 'commonlands://catalog/sensors',
     name: 'Commonlands sensor fixture catalog',
-    description: 'Fixture-backed Phase 1 sensor catalog for optics-tool inputs.',
+    description: 'Fixture-backed Phase 1 sensor catalog for lens field of view inputs: active area, resolution, and pixel pitch.',
     mimeType: 'application/json',
   },
   {
     uri: 'commonlands://catalog/snapshot-status',
     name: 'Commonlands joined catalog snapshot status',
-    description: 'Fixture-backed catalog validation, join counts, source provenance, and connector-readiness status.',
+    description: 'Fixture-backed catalog validation, join counts, source provenance, connector-readiness status, and product-truth boundaries for M12/C-mount lens recommendations.',
     mimeType: 'application/json',
   },
   {
     uri: 'commonlands://compatibility/shopify-ucp',
     name: 'Commonlands Shopify Storefront/UCP readiness',
-    description: 'Fixture-backed compatibility report for Shopify Storefront MCP and UCP Catalog launch planning.',
+    description: 'Compatibility report for Shopify Storefront MCP and UCP Catalog launch planning, including read-only product truth and approved Shopify-owned cart boundaries.',
     mimeType: 'application/json',
   },
 ];
@@ -713,8 +748,7 @@ function initializeResponse(id: unknown): Response {
       resources: {},
     },
     serverInfo: SERVER_INFO,
-    instructions:
-      'Commonlands MCP read-only catalog, optics, product-page handoff, and recommendation endpoint. Catalog, FoV, product details, and recommendations are fixture-backed until live DDB/Shopify adapters are configured.',
+    instructions: SERVER_INSTRUCTIONS,
   });
 }
 
@@ -897,6 +931,56 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
     return toolResult(id, {
       ...computeFov(lens, sensor, workingDistanceMm),
       sourceWarning: FIXTURE_NOT_PRODUCT_TRUTH_WARNING,
+    });
+  }
+
+  if (params.name === 'compute_fov_catalog') {
+    const sensorError = validateSafeIdentifier(args.sensorPartNumber, 'sensorPartNumber');
+    if (sensorError) return rpcError(id, sensorError);
+    const distanceError = validateOptionalPositiveNumber(args.workingDistanceMm, 'workingDistanceMm', MAX_WORKING_DISTANCE_MM);
+    if (distanceError) return rpcError(id, distanceError);
+
+    const sensorPartNumber = normalizeSafeIdentifier(args.sensorPartNumber as string);
+    const sensor = getSensorByPartNumber(sensorPartNumber);
+    if (!sensor) {
+      return rpcError(id, { code: -32004, message: 'Sensor not found' });
+    }
+
+    const workingDistanceMm = typeof args.workingDistanceMm === 'number' ? args.workingDistanceMm : undefined;
+
+    if (isFovLiveBackendEnabled(env)) {
+      const liveInput: LiveFovInput = {
+        sensorPartNumber,
+        ...(workingDistanceMm !== undefined ? { workingDistanceMm } : {}),
+      };
+      const liveResult = await computeFovWithLiveBackend(env, liveInput);
+      if ('error' in liveResult) return rpcError(id, liveResult.error);
+      return toolResult(id, liveResult.structuredContent);
+    }
+
+    return toolResult(id, {
+      schemaVersion: 'optics.fov.catalog.fixture.v1',
+      correctionStatus: 'fixture_parity_scaffold',
+      source: 'fixture-catalog',
+      requested: {
+        sensorPartNumber,
+        ...(workingDistanceMm !== undefined ? { workingDistanceMm } : {}),
+      },
+      sensor: {
+        partNumber: sensor.partNumber,
+        hsize: sensor.activeAreaMm.width,
+        vsize: sensor.activeAreaMm.height,
+        dsize: Math.hypot(sensor.activeAreaMm.width, sensor.activeAreaMm.height),
+        pixpitch: sensor.pixelSizeUm,
+        resolution: sensor.resolution,
+      },
+      count: CATALOG_SNAPSHOT.lenses.length,
+      lenses: CATALOG_SNAPSHOT.lenses.map((lens) => sanitizeFixtureCatalogFovLens(computeFov(lens, sensor, workingDistanceMm), lens)),
+      errors: [],
+      sourceWarning: FIXTURE_NOT_PRODUCT_TRUTH_WARNING,
+      assumptions: [
+        'Fixture catalog-wide FoV is scaffold data. Use live backend results and read_shopify_products before final customer-facing recommendations.',
+      ],
     });
   }
 
@@ -1100,7 +1184,7 @@ function isFovLiveBackendEnabled(env: Env): boolean {
 }
 
 interface LiveFovInput {
-  lensSku: string;
+  lensSku?: string;
   sensorPartNumber: string;
   workingDistanceMm?: number;
 }
@@ -1110,6 +1194,29 @@ interface LiveFovResponse {
   count?: unknown;
   lenses?: unknown;
   errors?: unknown;
+}
+
+interface SanitizedFovLens {
+  partNum?: string;
+  hfov?: number;
+  vfov?: number;
+  dfov?: number;
+  efl?: number;
+  imageCircle?: number;
+  lensType?: string;
+  mount?: string;
+  resolution?: string;
+  fNumber?: number;
+  ingress?: string;
+  url?: string;
+  distortion?: {
+    display?: string;
+    horizontal?: number;
+    vertical?: number;
+    diagonal?: number;
+    status: 'source_display_only' | 'calculated';
+  };
+  pixpitch?: number;
 }
 
 async function computeFovWithLiveBackend(
@@ -1136,7 +1243,7 @@ async function computeFovWithLiveBackend(
       pixpitch: sensor.pixelSizeUm,
       resolution: sensor.resolution,
     },
-    partNums: [input.lensSku],
+    ...(input.lensSku ? { partNums: [input.lensSku] } : {}),
     ...(input.workingDistanceMm !== undefined ? { workingDistanceMm: input.workingDistanceMm } : {}),
   };
 
@@ -1166,27 +1273,166 @@ async function computeFovWithLiveBackend(
     return { error: { code: response.status === 401 || response.status === 403 ? -32001 : -32603, message: 'Live FoV backend rejected request' } };
   }
 
+  const resultLimit = input.lensSku ? FOV_SINGLE_MAX_RESULTS : FOV_CATALOG_MAX_RESULTS;
+  const sanitizedLenses = sanitizeFovLenses(parsed.data.lenses, resultLimit);
+  const backendLensCount = sanitizeCount(parsed.data.count, parsed.data.lenses);
+
   return {
     structuredContent: {
       schemaVersion: 'optics.fov.live.v1',
-      modelVersion: 'lambda-dynamodb-beta-fov-0.1.0',
+      modelVersion: 'lambda-dynamodb-fov-0.1.0',
       correctionStatus: 'live_lambda_dynamodb',
       source: 'aws-lambda-dynamodb-readonly',
       requested: {
-        lensSku: input.lensSku,
+        ...(input.lensSku ? { lensSku: input.lensSku } : {}),
         sensorPartNumber: input.sensorPartNumber,
         ...(input.workingDistanceMm !== undefined ? { workingDistanceMm: input.workingDistanceMm } : {}),
       },
-      sensor: parsed.data.sensor,
-      count: parsed.data.count,
-      lenses: parsed.data.lenses,
-      errors: parsed.data.errors,
+      sensor: sanitizeFovSensor(parsed.data.sensor, sensor),
+      count: sanitizedLenses.length,
+      backendCount: backendLensCount,
+      resultLimit,
+      truncated: backendLensCount > sanitizedLenses.length,
+      lenses: sanitizedLenses,
+      errors: sanitizeFovErrors(parsed.data.errors),
       assumptions: [
         'FoV values are computed by the authenticated Commonlands AWS Lambda backend using read-only DynamoDB lens records.',
         'The MCP Worker stores backend authentication server-side; agents and users do not receive the Lambda API key.',
       ],
     },
   };
+}
+
+function sanitizeCount(count: unknown, lenses: unknown): number {
+  if (typeof count === 'number' && Number.isFinite(count) && count >= 0) return Math.trunc(count);
+  return Array.isArray(lenses) ? lenses.length : 0;
+}
+
+function sanitizeFovLenses(value: unknown, limit = FOV_SINGLE_MAX_RESULTS): SanitizedFovLens[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, limit).map(sanitizeFovLens).filter((lens): lens is SanitizedFovLens => lens !== null);
+}
+
+function sanitizeFovLens(value: unknown): SanitizedFovLens | null {
+  if (!value || typeof value !== 'object') return null;
+  const lens = value as Record<string, unknown>;
+  const partNum = firstString(lens.partNum, lens.PartNum, lens.sku, lens.SKU, lens.id);
+  const sanitized: SanitizedFovLens = {
+    ...(partNum ? { partNum } : {}),
+    ...numberField('hfov', firstNumber(lens.hfov, lens.horizontalFovDeg)),
+    ...numberField('vfov', firstNumber(lens.vfov, lens.verticalFovDeg)),
+    ...numberField('dfov', firstNumber(lens.dfov, lens.diagonalFovDeg)),
+    ...numberField('efl', firstNumber(lens.efl, lens.eflMm, lens.focalLengthMm)),
+    ...numberField('imageCircle', firstNumber(lens.image_circle, lens.imageCircle, lens.imageCircleMm)),
+    ...stringField('lensType', firstString(lens.lens_type, lens.lensType)),
+    ...stringField('mount', firstString(lens.mount)),
+    ...stringField('resolution', firstString(lens.resolution)),
+    ...numberField('fNumber', firstNumber(lens.f_num, lens.fNumber)),
+    ...stringField('ingress', firstString(lens.ingress)),
+    ...stringField('url', firstString(lens.url, lens.webpage, lens.productUrl)),
+    ...numberField('pixpitch', firstNumber(lens.pixpitch, lens.pixelSizeUm)),
+  };
+  const distortion = sanitizeDistortion(lens);
+  if (distortion) sanitized.distortion = distortion;
+  return sanitized;
+}
+
+function sanitizeDistortion(lens: Record<string, unknown>): SanitizedFovLens['distortion'] | undefined {
+  const horizontal = firstNumber(lens.horizontalDistortion, lens.hdistortion, lens.distortion_horizontal);
+  const vertical = firstNumber(lens.verticalDistortion, lens.vdistortion, lens.distortion_vertical);
+  const diagonal = firstNumber(lens.diagonalDistortion, lens.ddistortion, lens.distortion_diagonal);
+  const display = firstString(lens.distortion, lens.distortionDisplay);
+  if (horizontal !== undefined || vertical !== undefined || diagonal !== undefined) {
+    return {
+      ...(display ? { display } : {}),
+      ...(horizontal !== undefined ? { horizontal } : {}),
+      ...(vertical !== undefined ? { vertical } : {}),
+      ...(diagonal !== undefined ? { diagonal } : {}),
+      status: 'calculated',
+    };
+  }
+  if (!display) return undefined;
+  return { display, status: 'source_display_only' };
+}
+
+function sanitizeFovSensor(value: unknown, fallback: NonNullable<ReturnType<typeof getSensorByPartNumber>>): Record<string, unknown> {
+  if (!value || typeof value !== 'object') {
+    return {
+      partNumber: fallback.partNumber,
+      hsize: fallback.activeAreaMm.width,
+      vsize: fallback.activeAreaMm.height,
+      dsize: Math.hypot(fallback.activeAreaMm.width, fallback.activeAreaMm.height),
+      pixpitch: fallback.pixelSizeUm,
+      resolution: fallback.resolution,
+    };
+  }
+  const sensor = value as Record<string, unknown>;
+  return {
+    partNumber: firstString(sensor.partNumber, sensor.PartNumber) ?? fallback.partNumber,
+    ...numberField('hsize', firstNumber(sensor.hsize, sensor.hsizeMm)),
+    ...numberField('vsize', firstNumber(sensor.vsize, sensor.vsizeMm)),
+    ...numberField('dsize', firstNumber(sensor.dsize, sensor.dsizeMm)),
+    ...numberField('pixpitch', firstNumber(sensor.pixpitch, sensor.pixelSizeUm)),
+    ...stringField('resolution', firstString(sensor.resolution)),
+  };
+}
+
+function sanitizeFovErrors(value: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 25).map((entry) => {
+    if (!entry || typeof entry !== 'object') return { message: 'backend_error' };
+    const error = entry as Record<string, unknown>;
+    const partNum = firstString(error.partNum, error.PartNum, error.sku, error.id);
+    return {
+      ...(partNum && SAFE_IDENTIFIER_PATTERN.test(partNum.toUpperCase()) ? { partNum: partNum.toUpperCase() } : {}),
+      message: 'backend_error',
+    };
+  });
+}
+
+function sanitizeFixtureCatalogFovLens(fovResult: unknown, lens: LensCatalogItem): SanitizedFovLens {
+  const result = fovResult as {
+    fov?: { horizontalDeg?: number; verticalDeg?: number; diagonalDeg?: number };
+    lens?: { eflMm?: number; imageCircleMm?: number; fNumber?: number };
+  };
+  const sanitized: SanitizedFovLens = {
+    partNum: lens.sku,
+    efl: result.lens?.eflMm ?? lens.eflMm,
+    imageCircle: result.lens?.imageCircleMm ?? lens.imageCircleMm,
+    lensType: lens.lensType,
+    mount: lens.mount,
+    resolution: lens.resolution,
+    fNumber: result.lens?.fNumber ?? lens.fNumber,
+    url: lens.productUrl,
+    distortion: { display: lens.fixtureDistortion?.notes ?? 'fixture distortion scaffold', status: 'source_display_only' },
+  };
+  if (result.fov?.horizontalDeg !== undefined) sanitized.hfov = result.fov.horizontalDeg;
+  if (result.fov?.verticalDeg !== undefined) sanitized.vfov = result.fov.verticalDeg;
+  if (result.fov?.diagonalDeg !== undefined) sanitized.dfov = result.fov.diagonalDeg;
+  return sanitized;
+}
+
+function firstString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim() !== '') return value.trim();
+  }
+  return undefined;
+}
+
+function firstNumber(...values: unknown[]): number | undefined {
+  for (const value of values) {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value))) return Number(value);
+  }
+  return undefined;
+}
+
+function stringField<Key extends string>(key: Key, value: string | undefined): { [K in Key]?: string } {
+  return value === undefined ? {} : { [key]: value } as { [K in Key]?: string };
+}
+
+function numberField<Key extends string>(key: Key, value: number | undefined): { [K in Key]?: number } {
+  return value === undefined ? {} : { [key]: value } as { [K in Key]?: number };
 }
 
 function parseFovBackendEndpoint(value: string | undefined): { url: string } | { error: JsonRpcError } {

@@ -15,16 +15,14 @@ The Worker is being built in PR-sized phases:
 - Phase 8 adds fixture-backed purchase-route options for AI agents and robotics engineers, showing the future Commonlands MCP purchase surface, Shopify-native checkout path, and engineering review path without mutating commerce state.
 - Phase 9 adds credential-gated Shopify Admin GraphQL reads. `read_shopify_products` is the live read-only product truth path for purchasable product URLs, Product/Variant GIDs, SKUs, prices, inventory signals, and metafields; `read_shopify_metaobjects` remains a supporting diagnostic while fixture-backed catalog and handoff flows stay scaffold-only.
 - Phase 10 adds an explicitly scoped Shopify cart proxy for Shopify-owned cart state. With the current standard Storefront MCP `/api/mcp` endpoint, the live surface exposes `create_cart`, `get_cart`, and `update_cart`; `cancel_cart` remains hidden unless a validated UCP Cart MCP endpoint supports cancel semantics. Payment, order, customer, inventory, and catalog writes stay blocked outside Shopify checkout.
-- Phase 11 adds an explicitly scoped Shopify Checkout MCP proxy. Basic checkout tools (`create_checkout`, `get_checkout`) require `ENABLE_CHECKOUT_MUTATION_TOOLS=true`; extra checkout operations (`update_checkout`, `complete_checkout`, `cancel_checkout`) require `ENABLE_EXTRA_CHECKOUT_MUTATION_TOOLS=true` and official review before use. These tools are hidden on the current live surface. `complete_checkout` requires Shopify checkout authentication, verified buyer name/email/phone/address, card/payment authorization, and idempotency; Commonlands never accepts raw payment credentials.
+- Phase 11 contains an explicitly scoped Shopify Checkout MCP proxy in code, but it is not part of the current live public surface. Checkout requires a validated Shopify Checkout MCP endpoint, Cloudflare protections, operator approval, and `ENABLE_CHECKOUT_MUTATION_TOOLS=true` before `create_checkout`/`get_checkout` may appear. Extra checkout operations (`update_checkout`, `complete_checkout`, `cancel_checkout`) require `ENABLE_EXTRA_CHECKOUT_MUTATION_TOOLS=true` plus official review. `complete_checkout` requires Shopify checkout authentication, verified buyer name/email/phone/address, card/payment authorization, and idempotency; Commonlands never accepts raw payment credentials.
 - Later phases replace fixtures with a scheduled joined catalog snapshot and connector-backed enrichment behind tests.
 
-No live Acumatica or database behavior is implemented yet. Shopify behavior is limited to explicit diagnostic read-only tools, the approved Shopify-owned cart proxy surface, and hidden Checkout MCP proxy code that requires explicit approval/config before exposure. Checkout completion is only through Shopify Checkout MCP after Shopify-authenticated buyer/payment verification; no direct payment capture, raw card handling, customer-account, RFQ, inventory mutation, inventory sync change, or catalog write tool is implemented.
+No live Acumatica or database behavior is implemented yet. Shopify behavior is limited to explicit diagnostic read-only tools, the approved Shopify-owned cart proxy surface (`create_cart`, `get_cart`, `update_cart`), and hidden Checkout MCP proxy code that requires endpoint validation plus explicit approval/config before exposure. Checkout completion is only through Shopify Checkout MCP after Shopify-authenticated buyer/payment verification; no direct payment capture, raw card handling, customer-account, RFQ, inventory mutation, inventory sync change, or catalog write tool is implemented.
 
 ## Target endpoint
 
-Current live endpoint: `https://commonlands-mcp.erp-14c.workers.dev/mcp`.
-
-Keep the Workers.dev endpoint live for now. Do not move `commonlands.com` DNS to Cloudflare just to attach `mcp.commonlands.com`. The future clean custom-domain path is Cloudflare Business custom hostname/proxy setup.
+Current live endpoint: `https://mcp.commonlands.com/mcp`. Public docs and client snippets should use the `mcp.commonlands.com` custom domain, with discovery at `https://mcp.commonlands.com/.well-known/ucp` and health at `https://mcp.commonlands.com/healthz`.
 
 ## Source-of-truth model for later phases
 
@@ -179,12 +177,11 @@ Commonlands MCP does not store cart state in a database, KV namespace, Durable O
 
 The cart proxy validates request shape and safety boundaries before forwarding. It rejects customer/buyer fields, non-ProductVariant IDs, invalid cart IDs, and unsupported cancel requests before upstream calls. Checkout completion, payment, order creation, customer records, discounts, inventory reservation/mutation, product writes, metafield writes, Acumatica writes, database writes, and inventory sync changes remain out of scope.
 
-Phase 11 adds a narrow Shopify Checkout MCP proxy:
+Phase 11 contains a narrow Shopify Checkout MCP proxy in code, but it is not live until the endpoint is validated/configured and explicitly approved:
 
-- `create_checkout` forwards a retained Shopify Cart gid or explicit ProductVariant line items to Shopify Checkout MCP and returns Shopify-owned checkout handoff state, including checkout ID/URL/totals/messages/expiry when Shopify provides them.
-- `get_checkout` refreshes Shopify-owned checkout state by checkout ID.
-- `update_checkout` replaces allowed checkout line item/context state; buyer, customer, address, payment, discount, and gift-card fields are rejected.
-- `cancel_checkout` cancels Shopify-owned checkout state by checkout ID and requires `meta["idempotency-key"]` UUID for retry safety.
+- When enabled after approval, `create_checkout` would forward a retained Shopify Cart gid or explicit ProductVariant line items to Shopify Checkout MCP and return Shopify-owned checkout handoff state, including checkout ID/URL/totals/messages/expiry when Shopify provides them.
+- When enabled after approval, `get_checkout` would refresh Shopify-owned checkout state by checkout ID.
+- Extra checkout operations (`update_checkout`, `complete_checkout`, `cancel_checkout`) remain official-review-only; buyer, customer, address, payment, discount, and gift-card fields are rejected by the Worker before forwarding.
 
 Commonlands MCP does not store checkout state in a database, KV namespace, Durable Object, cookie, session memory, customer profile, or payment record. Shopify Checkout MCP owns checkout persistence and mutation. Agents must retain `checkout.id` and/or `checkout.checkout_url` across sessions; if both are lost, Commonlands MCP cannot recover the prior checkout.
 

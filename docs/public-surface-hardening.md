@@ -4,14 +4,14 @@ Commonlands MCP is public/read-mostly for catalog and product truth, with a narr
 
 ## Public surface
 
-The current live `tools/list` is authoritative. As of 2026-05-03 PDT, the deployed public surface exposes 21 tools, including Shopify standard Storefront MCP cart tools `create_cart`, `get_cart`, and `update_cart`. `cancel_cart` is hidden because the current standard `/api/mcp` endpoint does not expose cancel. Checkout MCP tools remain hidden. The default UCP discovery profile advertises catalog capabilities only. `get_shopify_ucp_readiness` is conservative scaffold/readiness metadata, not the live exposure authority.
+The current live `tools/list` is authoritative. As of the PR #26 deployment on 2026-05-03 PDT, the deployed public surface exposes 22 tools, including `compute_fov_catalog` and Shopify standard Storefront MCP cart tools `create_cart`, `get_cart`, and `update_cart`. `cancel_cart` is hidden because the current standard `/api/mcp` endpoint does not expose cancel. Checkout MCP tools remain hidden. The live UCP discovery profile intentionally advertises catalog + cart discovery; it does not advertise checkout. `get_shopify_ucp_readiness` is conservative scaffold/readiness metadata, not the live exposure authority.
 
 ## Commerce gates
 
 - `ENABLE_COMMERCE_MUTATION_TOOLS=true` may expose cart tools only when `SHOPIFY_CART_MCP_ENDPOINT` is approved/configured. For Shopify standard Storefront MCP `/api/mcp`, expose `create_cart`, `get_cart`, and `update_cart` only.
 - `cancel_cart` is exposed only when the configured cart endpoint supports UCP Cart MCP cancel semantics; it must stay hidden for the current standard Storefront MCP endpoint.
-- `ENABLE_CHECKOUT_MUTATION_TOOLS=true` exposes approved basic Checkout MCP tools: `create_checkout`, `get_checkout`.
-- `ENABLE_EXTRA_CHECKOUT_MUTATION_TOOLS=true` exposes extra checkout operations (`update_checkout`, `complete_checkout`, `cancel_checkout`) and should require official review before use.
+- Checkout tools are not currently live. `ENABLE_CHECKOUT_MUTATION_TOOLS=true` may expose approved basic Checkout MCP tools (`create_checkout`, `get_checkout`) only after the Shopify Checkout MCP endpoint is validated/configured and operator approval is recorded.
+- `ENABLE_EXTRA_CHECKOUT_MUTATION_TOOLS=true` may expose extra checkout operations (`update_checkout`, `complete_checkout`, `cancel_checkout`) only after official review; keep them hidden until that review is complete.
 
 Endpoint allowlist is intentionally narrow: cart and checkout proxy endpoints must be HTTPS on approved Commonlands merchant hosts (`commonlands.com` or `commonlands-camera-components.myshopify.com`) and must use expected Shopify MCP paths (`/api/mcp`, `/api/ucp/mcp`, or `/api/checkout/mcp` as appropriate).
 
