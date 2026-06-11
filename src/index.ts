@@ -90,11 +90,15 @@ const FOV_BACKEND_MAX_RESPONSE_BYTES = 128 * 1024;
 const FOV_SINGLE_MAX_RESULTS = 10;
 const FOV_CATALOG_MAX_RESULTS = 250;
 const UNKNOWN_ANALYTICS_VALUE = 'unknown';
+const FOV_COMPUTATION_RULE =
+  'FoV rule: catalog EFL, image circle, max FoV/FOV@image-circle, and distortion display fields are insufficient to compute field of view on a specific sensor; do not interpolate or estimate interior sensor FoV from those fields. Always call compute_fov for one lens/sensor pair or compute_fov_catalog for catalog-wide per-sensor HFOV/VFOV/DFOV.';
 
 const SERVER_INSTRUCTIONS = [
   `Commonlands MCP public endpoint is ${PUBLIC_MCP_ENDPOINT}. Use this endpoint in client configuration, metadata, and agent-facing descriptions.`,
   'Commonlands MCP helps agents select precision optics for machine vision, robotics, and embedded vision: M12 lenses, C-mount lenses, and lens field of view calculations.',
   'Usage flow: discover lenses with search_lenses/search_catalog, inspect details with get_lens_details/get_product, compute lens field of view with compute_fov or compute_fov_catalog, rank options with match_lenses_to_sensor/compare_lenses/recommend_lenses_for_application, then use read_shopify_products for live purchasable truth before quoting price, availability, Shopify variantId, product URL, or cart payloads.',
+  FOV_COMPUTATION_RULE,
+  'For sensor-specific lens finding, prefer compute_fov_catalog first when the user gives a sensor or target FoV; its results already include per-sensor HFOV/VFOV/DFOV, image-circle coverage signals, sanitized provenance/source metadata, and backend errors where available. Use search_lenses/search_catalog only for broad SKU/title/mount discovery.',
   'Safety boundaries: fixture-backed tools are scaffold/context only; Shopify product/cart truth is read-only unless approved cart tools are explicitly listed in tools/list; cancel, checkout, payment, customer, order, inventory, and product writes remain hidden/gated unless separately approved. Do not pass arbitrary URLs or client-supplied downstream tokens; Commonlands uses fixed allowlisted endpoints and server-side secrets only, and does not accept client-supplied downstream tokens.',
 ].join(' ');
 
@@ -103,7 +107,7 @@ const TOOLS: ToolDefinition[] = [
     name: 'search_lenses',
     title: 'Search Commonlands lenses',
     description:
-      'Search the fixture-backed Commonlands lens catalog snapshot by SKU, title, mount, lens type, M12 lenses, C-mount lenses, or machine-vision application. Use read_shopify_products for live purchasable product truth.',
+      `Search the fixture-backed Commonlands lens catalog snapshot by SKU, title, mount, lens type, M12 lenses, C-mount lenses, or machine-vision application. Use this only for broad discovery; when a sensor or target FoV is involved, call compute_fov_catalog or compute_fov instead of estimating from catalog fields. ${FOV_COMPUTATION_RULE} Use read_shopify_products for live purchasable product truth.`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -116,7 +120,7 @@ const TOOLS: ToolDefinition[] = [
   {
     name: 'get_lens_details',
     title: 'Get lens details',
-    description: 'Return fixture-backed public product and optical metadata for one Commonlands lens SKU, including mount, focal length, image circle, resolution, and machine-vision lens context. Use read_shopify_products for live product, price, availability, variant IDs, and metafields.',
+    description: `Return fixture-backed public product and optical metadata for one Commonlands lens SKU, including mount, focal length, image circle, resolution, and machine-vision lens context. These fields are not enough for sensor-specific FoV; call compute_fov for the lens/sensor pair. ${FOV_COMPUTATION_RULE} Use read_shopify_products for live product, price, availability, variant IDs, and metafields.`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -129,7 +133,7 @@ const TOOLS: ToolDefinition[] = [
   {
     name: 'get_sensor_specs',
     title: 'Get sensor specs',
-    description: 'Return fixture-backed sensor dimensions, pixel pitch, and resolution for lens field of view, M12 lens, and C-mount lens matching inputs.',
+    description: `Return fixture-backed sensor dimensions, pixel pitch, and resolution for lens field of view, M12 lens, and C-mount lens matching inputs. Use these specs as inputs to compute_fov or compute_fov_catalog, not as a reason to hand-calculate FoV. ${FOV_COMPUTATION_RULE}`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -143,7 +147,7 @@ const TOOLS: ToolDefinition[] = [
     name: 'compute_fov',
     title: 'Compute lens field of view',
     description:
-      'Compute lens field of view for a Commonlands lens and sensor pair, including horizontal, vertical, and diagonal FoV when available. Supports M12 lenses and C-mount lenses. Uses the authenticated live FoV backend when configured; otherwise fixture-backed scaffold data. Verify purchasable facts with read_shopify_products.',
+      `Compute lens field of view for a Commonlands lens and sensor pair, including horizontal, vertical, and diagonal FoV when available. This is the required path for sensor-specific FoV. Supports M12 lenses and C-mount lenses. Uses the authenticated live FoV backend when configured; otherwise fixture-backed scaffold data. ${FOV_COMPUTATION_RULE} Verify purchasable facts with read_shopify_products.`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -163,7 +167,7 @@ const TOOLS: ToolDefinition[] = [
     name: 'compute_fov_catalog',
     title: 'Compute catalog field of view for a sensor',
     description:
-      'Compute lens field of view for the available Commonlands M12 lens and C-mount lens catalog on one sensor. Uses the authenticated live FoV backend when configured and returns sanitized FoV/catalog fields only; raw distortion coefficients are never returned.',
+      `Compute lens field of view for the available Commonlands M12 lens and C-mount lens catalog on one sensor. Prefer this first for "find lenses for this sensor/target FoV" requests because each result already carries per-sensor HFOV/VFOV/DFOV and coverage/provenance context when available. Uses the authenticated live FoV backend when configured and returns sanitized FoV/catalog fields only; raw distortion coefficients are never returned. ${FOV_COMPUTATION_RULE}`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -182,7 +186,7 @@ const TOOLS: ToolDefinition[] = [
     name: 'match_lenses_to_sensor',
     title: 'Match lenses to a sensor',
     description:
-      'Rank fixture catalog M12 lenses and C-mount lenses for one sensor using image-circle coverage, lens field of view target fit, and deterministic optical tradeoffs. Not live product truth; verify purchasable facts with read_shopify_products.',
+      `Rank fixture catalog M12 lenses and C-mount lenses for one sensor using image-circle coverage, lens field of view target fit, and deterministic optical tradeoffs. Use as a shortlist helper, then call compute_fov or compute_fov_catalog for customer-facing sensor-specific FoV. ${FOV_COMPUTATION_RULE} Not live product truth; verify purchasable facts with read_shopify_products.`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -199,7 +203,7 @@ const TOOLS: ToolDefinition[] = [
   {
     name: 'compare_lenses',
     title: 'Compare Commonlands lenses',
-    description: 'Compare selected fixture-backed Commonlands M12 lens and C-mount lens SKUs on the same sensor with the same deterministic scoring model. Not live product truth; verify purchasable facts with read_shopify_products.',
+    description: `Compare selected fixture-backed Commonlands M12 lens and C-mount lens SKUs on the same sensor with the same deterministic scoring model. Use as explanatory context, then call compute_fov for final sensor-specific FoV values when precision matters. ${FOV_COMPUTATION_RULE} Not live product truth; verify purchasable facts with read_shopify_products.`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -220,7 +224,7 @@ const TOOLS: ToolDefinition[] = [
     name: 'get_product_page_details',
     title: 'Get product page details',
     description:
-      'Return fixture-backed product-page handoff details for one lens, including DynamoDB-sourced optical specs and gated datasheet policy. Use read_shopify_products for live product URL, price, availability, variant IDs, and metafields.',
+      `Return fixture-backed product-page handoff details for one lens, including DynamoDB-sourced optical specs and gated datasheet policy. Product-page/catalog optical fields are not a substitute for sensor-specific FoV; call compute_fov for the lens/sensor pair. ${FOV_COMPUTATION_RULE} Use read_shopify_products for live product URL, price, availability, variant IDs, and metafields.`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -546,7 +550,7 @@ const TOOLS: ToolDefinition[] = [
     name: 'search_catalog',
     title: 'Search UCP catalog',
     description:
-      'Fixture-backed UCP Catalog search alias for Shopify-native product discovery; no live Shopify calls or cart behavior.',
+      `Fixture-backed UCP Catalog search alias for Shopify-native product discovery; no live Shopify calls or cart behavior. Use this only for broad discovery; when a sensor or target FoV is involved, call compute_fov_catalog or compute_fov instead of estimating from catalog fields. ${FOV_COMPUTATION_RULE}`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -567,7 +571,7 @@ const TOOLS: ToolDefinition[] = [
     name: 'lookup_catalog',
     title: 'Lookup UCP catalog products',
     description:
-      'Fixture-backed UCP Catalog lookup alias for product, variant, SKU, handle, or URL identifiers; returns not-found messages instead of writes.',
+      `Fixture-backed UCP Catalog lookup alias for product, variant, SKU, handle, or URL identifiers; returns not-found messages instead of writes. Lookup records are not enough for sensor-specific FoV; call compute_fov for known lens/sensor pairs. ${FOV_COMPUTATION_RULE}`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -589,7 +593,7 @@ const TOOLS: ToolDefinition[] = [
     name: 'get_product',
     title: 'Get UCP catalog product',
     description:
-      'Fixture-backed UCP Catalog product detail alias with Commonlands optical metadata and Shopify-native handoff fields.',
+      `Fixture-backed UCP Catalog product detail alias with Commonlands optical metadata and Shopify-native handoff fields. Product optical fields are not a substitute for sensor-specific FoV; call compute_fov for the lens/sensor pair. ${FOV_COMPUTATION_RULE}`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -611,7 +615,7 @@ const TOOLS: ToolDefinition[] = [
     name: 'prepare_shopify_purchase_handoff',
     title: 'Prepare Shopify purchase handoff',
     description:
-      'Build a read-only Shopify-native purchase handoff seam for a selected lens without creating carts, checkout, orders, inventory mutations, or writes.',
+      `Build a read-only Shopify-native purchase handoff seam for a selected lens without creating carts, checkout, orders, inventory mutations, or writes. Preserve any computed FoV provenance from compute_fov/compute_fov_catalog when carrying optical context into purchase handoff. ${FOV_COMPUTATION_RULE}`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -628,7 +632,7 @@ const TOOLS: ToolDefinition[] = [
     name: 'get_purchase_route_options',
     title: 'Get purchase route options',
     description:
-      'Return safe dual-channel purchase route options for AI agents and robotics engineers across Commonlands MCP and Shopify-native channels without mutating commerce state.',
+      `Return safe dual-channel purchase route options for AI agents and robotics engineers across Commonlands MCP and Shopify-native channels without mutating commerce state. This explains commerce routes only; call compute_fov/compute_fov_catalog for sensor-specific FoV before recommending a lens. ${FOV_COMPUTATION_RULE}`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -646,7 +650,7 @@ const TOOLS: ToolDefinition[] = [
     name: 'recommend_lenses_for_application',
     title: 'Recommend lenses for an application',
     description:
-      'Rank fixture catalog M12 lenses and C-mount lenses for an application note such as embedded robotics, machine-vision inspection, or a required lens field of view.',
+      `Rank fixture catalog M12 lenses and C-mount lenses for an application note such as embedded robotics, machine-vision inspection, or a required lens field of view. Use as an application shortlist helper, then call compute_fov_catalog or compute_fov for final per-sensor HFOV/VFOV/DFOV. ${FOV_COMPUTATION_RULE}`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -1053,6 +1057,11 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
       count: CATALOG_SNAPSHOT.lenses.length,
       lenses: CATALOG_SNAPSHOT.lenses.map((lens) => sanitizeFixtureCatalogFovLens(computeFov(lens, sensor, workingDistanceMm), lens)),
       errors: [],
+      provenance: {
+        method: 'fixture_parity_scaffold',
+        rev: 'fixture-polynomial-fov-0.1.0',
+        source: 'fixture-catalog',
+      },
       sourceWarning: FIXTURE_NOT_PRODUCT_TRUTH_WARNING,
       assumptions: [
         'Fixture catalog-wide FoV is scaffold data. Use live backend results and read_shopify_products before final customer-facing recommendations.',
@@ -1293,6 +1302,12 @@ interface SanitizedFovLens {
     status: 'source_display_only' | 'calculated';
   };
   pixpitch?: number;
+  coverageClass?: 'full_sensor' | 'clipped_to_image_circle' | 'unknown';
+  provenance?: {
+    method: string;
+    rev: string;
+    source: string;
+  };
 }
 
 async function computeFovWithLiveBackend(
@@ -1350,7 +1365,15 @@ async function computeFovWithLiveBackend(
   }
 
   const resultLimit = input.lensSku ? FOV_SINGLE_MAX_RESULTS : FOV_CATALOG_MAX_RESULTS;
-  const sanitizedLenses = sanitizeFovLenses(parsed.data.lenses, resultLimit);
+  const sanitizedLenses = addFovLensMetadata(
+    sanitizeFovLenses(parsed.data.lenses, resultLimit),
+    sensor,
+    {
+      method: 'lambda_dynamodb_fov_backend',
+      rev: 'lambda-dynamodb-fov-0.1.0',
+      source: 'aws-lambda-dynamodb-readonly',
+    },
+  );
   const backendLensCount = sanitizeCount(parsed.data.count, parsed.data.lenses);
 
   return {
@@ -1371,6 +1394,11 @@ async function computeFovWithLiveBackend(
       truncated: backendLensCount > sanitizedLenses.length,
       lenses: sanitizedLenses,
       errors: sanitizeFovErrors(parsed.data.errors),
+      provenance: {
+        method: 'lambda_dynamodb_fov_backend',
+        rev: 'lambda-dynamodb-fov-0.1.0',
+        source: 'aws-lambda-dynamodb-readonly',
+      },
       assumptions: [
         'FoV values are computed by the authenticated Commonlands AWS Lambda backend using read-only DynamoDB lens records.',
         'The MCP Worker stores backend authentication server-side; agents and users do not receive the Lambda API key.',
@@ -1470,6 +1498,7 @@ function sanitizeFixtureCatalogFovLens(fovResult: unknown, lens: LensCatalogItem
   const result = fovResult as {
     fov?: { horizontalDeg?: number; verticalDeg?: number; diagonalDeg?: number };
     lens?: { eflMm?: number; imageCircleMm?: number; fNumber?: number };
+    imageCircle?: { clipped?: boolean };
   };
   const sanitized: SanitizedFovLens = {
     partNum: lens.sku,
@@ -1481,11 +1510,34 @@ function sanitizeFixtureCatalogFovLens(fovResult: unknown, lens: LensCatalogItem
     fNumber: result.lens?.fNumber ?? lens.fNumber,
     url: lens.productUrl,
     distortion: { display: lens.fixtureDistortion?.notes ?? 'fixture distortion scaffold', status: 'source_display_only' },
+    coverageClass: result.imageCircle?.clipped ? 'clipped_to_image_circle' : 'full_sensor',
+    provenance: {
+      method: 'fixture_parity_scaffold',
+      rev: 'fixture-polynomial-fov-0.1.0',
+      source: 'fixture-catalog',
+    },
   };
   if (result.fov?.horizontalDeg !== undefined) sanitized.hfov = result.fov.horizontalDeg;
   if (result.fov?.verticalDeg !== undefined) sanitized.vfov = result.fov.verticalDeg;
   if (result.fov?.diagonalDeg !== undefined) sanitized.dfov = result.fov.diagonalDeg;
   return sanitized;
+}
+
+function addFovLensMetadata(
+  lenses: SanitizedFovLens[],
+  sensor: NonNullable<ReturnType<typeof getSensorByPartNumber>>,
+  provenance: SanitizedFovLens['provenance'],
+): SanitizedFovLens[] {
+  const sensorDiagonalMm = Math.hypot(sensor.activeAreaMm.width, sensor.activeAreaMm.height);
+  return lenses.map((lens) => ({
+    ...lens,
+    coverageClass: lens.imageCircle === undefined
+      ? 'unknown'
+      : lens.imageCircle >= sensorDiagonalMm
+        ? 'full_sensor'
+        : 'clipped_to_image_circle',
+    ...(provenance ? { provenance } : {}),
+  }));
 }
 
 function firstString(...values: unknown[]): string | undefined {

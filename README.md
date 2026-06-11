@@ -8,24 +8,30 @@ Public MCP server for Commonlands precision optics. Use it to choose M12/C-mount
 - UCP discovery: `https://mcp.commonlands.com/.well-known/ucp`
 - Health check: `https://mcp.commonlands.com/healthz`
 - Client setup details: [`docs/client-connections.md`](docs/client-connections.md)
+- Agent instruction guide: [`docs/agent-instructions.md`](docs/agent-instructions.md)
 - Full live guide: [`docs/live-usage-and-integrations.md`](docs/live-usage-and-integrations.md)
 
 ## Copy-paste agent instruction
 
 ```text
-Use Commonlands MCP at https://mcp.commonlands.com/mcp for lens selection. Start with tools/list. Fixture catalog tools are only engineering context. Use compute_fov/compute_fov_catalog for field-of-view work, then call read_shopify_products before stating live price, availability, Product/Variant GIDs, URL, SKU, media, metafields, inventory, or cart payload. Only call create_cart/update_cart after the buyer confirms exact live Variant GIDs and quantities. Checkout tools are not live unless they appear in tools/list. Never ask for card data or perform Shopify catalog/inventory/order/customer writes.
+Use Commonlands MCP at https://mcp.commonlands.com/mcp for lens selection. Start with tools/list. Catalog EFL, image circle, max FoV/FOV@image-circle, and distortion display fields are insufficient to compute FoV on a specific sensor; do not interpolate or estimate sensor FoV from those fields. Use compute_fov for one lens/sensor pair or compute_fov_catalog for catalog-wide per-sensor HFOV/VFOV/DFOV. Fixture catalog tools are only engineering context. Call read_shopify_products before stating live price, availability, Product/Variant GIDs, URL, SKU, media, metafields, inventory, or cart payload. Only call create_cart/update_cart after the buyer confirms exact live Variant GIDs and quantities. Checkout tools are not live unless they appear in tools/list. Never ask for card data or perform Shopify catalog/inventory/order/customer writes.
 ```
 
 ## Agent workflow
 
 1. Call `tools/list` and trust the live list over docs.
-2. Shortlist lenses with `search_catalog`, `search_lenses`, or `recommend_lenses_for_application`.
-3. Get sensor data with `get_sensor_specs`.
-4. Calculate field of view with `compute_fov` or `compute_fov_catalog`.
-5. Compare/rank with `match_lenses_to_sensor`, `compare_lenses`, and `get_lens_details`.
-6. Verify purchasable truth with `read_shopify_products` before quoting final SKU, URL, price, availability, Shopify IDs, or cart payloads.
-7. Create/update a Shopify cart only after explicit buyer confirmation of line items and quantities.
-8. Send the buyer to Shopify's returned cart/checkout URL. Do not claim Checkout MCP is live until checkout tools appear in `tools/list`.
+2. For sensor-specific lens finding, call `compute_fov_catalog` first. There is no current `find_lenses` tool; `compute_fov_catalog` is the correct per-sensor catalog path.
+3. Use `search_catalog`, `search_lenses`, or `recommend_lenses_for_application` only for broad discovery/shortlist context.
+4. Get sensor data with `get_sensor_specs` when needed.
+5. Calculate one-lens field of view with `compute_fov`.
+6. Compare/rank with `match_lenses_to_sensor`, `compare_lenses`, and `get_lens_details`.
+7. Verify purchasable truth with `read_shopify_products` before quoting final SKU, URL, price, availability, Shopify IDs, or cart payloads.
+8. Create/update a Shopify cart only after explicit buyer confirmation of line items and quantities.
+9. Send the buyer to Shopify's returned cart/checkout URL. Do not claim Checkout MCP is live until checkout tools appear in `tools/list`.
+
+## FoV rule
+
+Catalog EFL, image circle, max FoV/FOV@image-circle, and distortion display fields are insufficient to compute field of view on a specific sensor. Agents must not interpolate interior-sensor FoV or substitute their own calculations. Use `compute_fov` or `compute_fov_catalog`, then preserve returned HFOV/VFOV/DFOV, `coverageClass`, and provenance/source metadata in the answer.
 
 ## Truth hierarchy
 

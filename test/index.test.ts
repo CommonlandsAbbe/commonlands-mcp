@@ -368,6 +368,8 @@ describe('Commonlands MCP Worker', () => {
     expect(metadataText).toMatch(/lens field of view/i);
     expect(metadataText).toMatch(/read_shopify_products/i);
     expect(metadataText).toMatch(/read-only/i);
+    expect(metadataText).toMatch(/insufficient to compute field of view on a specific sensor/i);
+    expect(metadataText).toMatch(/compute_fov_catalog/i);
   });
 
   it('returns MCP initialize instructions with usage, SEO, and security metadata', async () => {
@@ -388,6 +390,8 @@ describe('Commonlands MCP Worker', () => {
     expect(instructions).toMatch(/C-mount lenses/i);
     expect(instructions).toMatch(/lens field of view/i);
     expect(instructions).toMatch(/Use read_shopify_products/i);
+    expect(instructions).toMatch(/insufficient to compute field of view on a specific sensor/i);
+    expect(instructions).toMatch(/prefer compute_fov_catalog first/i);
     expect(instructions).toMatch(/Do not pass arbitrary URLs/i);
     expect(instructions).toMatch(/not accept client-supplied downstream tokens/i);
   });
@@ -1768,7 +1772,25 @@ describe('Commonlands MCP Worker', () => {
       correctionStatus: 'live_lambda_dynamodb',
       source: 'aws-lambda-dynamodb-readonly',
       requested: { lensSku: 'CIL026', sensorPartNumber: 'IMX477', workingDistanceMm: 1000 },
-      lenses: [{ partNum: 'CIL026', hfov: 120.3, vfov: 91.6, dfov: 130.4, efl: 2.6, distortion: { display: '0.1%', status: 'source_display_only' } }],
+      provenance: {
+        method: 'lambda_dynamodb_fov_backend',
+        rev: 'lambda-dynamodb-fov-0.1.0',
+        source: 'aws-lambda-dynamodb-readonly',
+      },
+      lenses: [{
+        partNum: 'CIL026',
+        hfov: 120.3,
+        vfov: 91.6,
+        dfov: 130.4,
+        efl: 2.6,
+        coverageClass: 'unknown',
+        provenance: {
+          method: 'lambda_dynamodb_fov_backend',
+          rev: 'lambda-dynamodb-fov-0.1.0',
+          source: 'aws-lambda-dynamodb-readonly',
+        },
+        distortion: { display: '0.1%', status: 'source_display_only' },
+      }],
     });
     expect(structuredContent.errors).toEqual([{ partNum: 'CIL026', message: 'backend_error' }]);
     const publicJson = JSON.stringify(structuredContent);
@@ -1823,6 +1845,11 @@ describe('Commonlands MCP Worker', () => {
       backendCount: 251,
       resultLimit: 250,
       truncated: true,
+      provenance: {
+        method: 'lambda_dynamodb_fov_backend',
+        rev: 'lambda-dynamodb-fov-0.1.0',
+        source: 'aws-lambda-dynamodb-readonly',
+      },
     });
     const lenses = structuredContent.lenses as Array<Record<string, unknown>>;
     expect(lenses).toHaveLength(250);
@@ -1831,12 +1858,47 @@ describe('Commonlands MCP Worker', () => {
       hfov: 88,
       vfov: 72,
       dfov: 101,
+      coverageClass: 'unknown',
+      provenance: {
+        method: 'lambda_dynamodb_fov_backend',
+        rev: 'lambda-dynamodb-fov-0.1.0',
+        source: 'aws-lambda-dynamodb-readonly',
+      },
       distortion: { display: '0% TV', status: 'source_display_only' },
     });
     expect(JSON.stringify(lenses)).not.toContain('CIL999');
     const lensesJson = JSON.stringify(lenses);
     expect(lensesJson).not.toContain('alpha');
     expect(lensesJson).not.toContain('beta');
+  });
+
+  it('returns fixture catalog FoV with per-lens coverage and provenance metadata', async () => {
+    const { body } = await rpc('tools/call', {
+      name: 'compute_fov_catalog',
+      arguments: { sensorPartNumber: 'IMX477' },
+    });
+    const structuredContent = getStructuredContent(body);
+
+    expect(structuredContent).toMatchObject({
+      schemaVersion: 'optics.fov.catalog.fixture.v1',
+      correctionStatus: 'fixture_parity_scaffold',
+      source: 'fixture-catalog',
+      provenance: {
+        method: 'fixture_parity_scaffold',
+        rev: 'fixture-polynomial-fov-0.1.0',
+        source: 'fixture-catalog',
+      },
+    });
+
+    const lenses = structuredContent.lenses as Array<Record<string, unknown>>;
+    expect(lenses[0]).toMatchObject({
+      coverageClass: expect.stringMatching(/full_sensor|clipped_to_image_circle/),
+      provenance: {
+        method: 'fixture_parity_scaffold',
+        rev: 'fixture-polynomial-fov-0.1.0',
+        source: 'fixture-catalog',
+      },
+    });
   });
 
   it('fails closed when live FoV backend auth is missing', async () => {

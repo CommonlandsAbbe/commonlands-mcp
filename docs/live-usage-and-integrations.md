@@ -35,6 +35,8 @@ Use it to search the Commonlands lens catalog, shortlist lenses by sensor/applic
 
 Use `compute_fov` for one lens/sensor pair and `compute_fov_catalog` for catalog-wide FoV on one sensor. In production, these use the authenticated AWS Lambda/DynamoDB FoV backend when configured. Sensor specs currently come from the Worker fixture sensor catalog. Agent-facing FoV responses are sanitized before return and never expose raw distortion coefficients.
 
+Catalog EFL, image circle, max FoV/FOV@image-circle, and distortion display fields are insufficient to compute field of view on a specific sensor. Agents must not interpolate interior-sensor FoV from those fields or run their own FoV scripts. For sensor-specific discovery, call `compute_fov_catalog` first and use the returned per-sensor `hfov`, `vfov`, `dfov`, `coverageClass`, and provenance/source metadata.
+
 ### Live Shopify product truth
 
 Use `read_shopify_products` for purchasable facts: live product URLs, Shopify Product/Variant GIDs, SKUs, prices, inventory signals, media, and selected metafields. This is read-only and does not write to Shopify.
@@ -56,13 +58,14 @@ If a buyer explicitly asks for a cart, the agent can use live Shopify Variant GI
 ## Recommended agent workflow
 
 1. Start with `tools/list` and check the live tool surface.
-2. Use `search_catalog`, `search_lenses`, or `recommend_lenses_for_application` to build a shortlist.
-3. Use `get_sensor_specs` to confirm sensor pixels, pixel pitch, and active area.
-4. Use `compute_fov` for one live FoV result or `compute_fov_catalog` for catalog-wide FoV when the Lambda/DynamoDB backend supports the request.
-5. Use `match_lenses_to_sensor`, `compare_lenses`, and `get_lens_details` for fixture-backed engineering context.
-6. Use `read_shopify_products` for live Shopify product/variant IDs, product URLs, price, inventory signals, and cart variant IDs.
-7. If the buyer explicitly asks for a cart, use live Shopify Variant GIDs from `read_shopify_products`, then call `create_cart`/`get_cart`/`update_cart`. Show the returned Shopify cart/continue URL to the buyer.
-8. Do not claim Checkout MCP is live. Send buyers to Shopify's returned cart/checkout handoff URL when present.
+2. For sensor-specific lens finding, call `compute_fov_catalog` first. There is no current `find_lenses` tool.
+3. Use `search_catalog`, `search_lenses`, or `recommend_lenses_for_application` only for broad discovery/shortlist context.
+4. Use `get_sensor_specs` to confirm sensor pixels, pixel pitch, and active area when needed.
+5. Use `compute_fov` for one live FoV result or `compute_fov_catalog` for catalog-wide FoV when the Lambda/DynamoDB backend supports the request.
+6. Use `match_lenses_to_sensor`, `compare_lenses`, and `get_lens_details` for fixture-backed engineering context.
+7. Use `read_shopify_products` for live Shopify product/variant IDs, product URLs, price, inventory signals, and cart variant IDs.
+8. If the buyer explicitly asks for a cart, use live Shopify Variant GIDs from `read_shopify_products`, then call `create_cart`/`get_cart`/`update_cart`. Show the returned Shopify cart/continue URL to the buyer.
+9. Do not claim Checkout MCP is live. Send buyers to Shopify's returned cart/checkout handoff URL when present.
 
 
 ## Better example prompts
