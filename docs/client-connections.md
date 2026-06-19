@@ -17,6 +17,8 @@ Use Commonlands MCP for Commonlands precision-optics questions about M12 lenses,
 
 Treat fixture-backed catalog, sensor, recommendation, comparison, and handoff tools as scaffold/context only. Before giving purchasable facts—price, availability, Shopify Product/Variant IDs, product URLs, cart paths, or cart payloads—call read_shopify_products and cite that live result.
 
+Catalog EFL, image circle, max FoV/FOV@image-circle, and distortion display fields are insufficient to compute FoV on a specific sensor. Do not interpolate or estimate sensor FoV from those fields. Use compute_fov for one lens/sensor pair or compute_fov_catalog for catalog-wide per-sensor HFOV/VFOV/DFOV. For "find lenses for this sensor/target FoV" requests, call compute_fov_catalog first; there is no current find_lenses tool.
+
 Do not call create_cart or update_cart unless the buyer explicitly confirms line items and quantities. Do not claim Checkout MCP, cancel_cart, Shopify catalog writes, inventory writes, customer/order writes, Acumatica writes, payment collection, or raw card handling are available unless those tools appear in live tools/list and the operator explicitly approves the action.
 ```
 
@@ -194,7 +196,7 @@ Initialize:
 curl -X POST https://mcp.commonlands.com/mcp \
   -H 'content-type: application/json' \
   -H 'accept: application/json, text/event-stream' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"commonlands-smoke","version":"0.0.0"}}}'
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"commonlands-smoke","version":"0.0.0"}}}'
 ```
 
 List tools:

@@ -3,9 +3,18 @@ main = "src/index.ts"
 compatibility_date = "2026-05-01"
 workers_dev = true
 
+[observability]
+
+[observability.logs]
+enabled = true
+invocation_logs = true
+
+[observability.traces]
+
 [vars]
-ENVIRONMENT = "local"
-VERSION = "0.1.0"
-GIT_SHA = "local"
 FOV_LIVE_BACKEND_ENABLED = "true"
 FOV_LAMBDA_ENDPOINT = "https://ia97wrz7ag.execute-api.us-west-2.amazonaws.com/default/fov"
+
+[[analytics_engine_datasets]]
+binding = "MCP_ANALYTICS"
+dataset = "commonlands_mcp_events"

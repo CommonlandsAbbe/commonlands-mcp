@@ -35,6 +35,8 @@ Use it to search the Commonlands lens catalog, shortlist lenses by sensor/applic
 
 Use `compute_fov` for one lens/sensor pair and `compute_fov_catalog` for catalog-wide FoV on one sensor. In production, these use the authenticated AWS Lambda/DynamoDB FoV backend when configured. Sensor specs currently come from the Worker fixture sensor catalog. Agent-facing FoV responses are sanitized before return and never expose raw distortion coefficients.
 
+Catalog EFL, image circle, max FoV/FOV@image-circle, and distortion display fields are insufficient to compute field of view on a specific sensor. Agents must not interpolate interior-sensor FoV from those fields or run their own FoV scripts. For sensor-specific discovery, call `compute_fov_catalog` first and use the returned per-sensor `hfov`, `vfov`, `dfov`, nested `fov`, `coverageClass`, `coverage.pixelCounts`, `distortionAtFieldEdge`, and provenance/source metadata.
+
 ### Live Shopify product truth
 
 Use `read_shopify_products` for purchasable facts: live product URLs, Shopify Product/Variant GIDs, SKUs, prices, inventory signals, media, and selected metafields. This is read-only and does not write to Shopify.
@@ -56,13 +58,14 @@ If a buyer explicitly asks for a cart, the agent can use live Shopify Variant GI
 ## Recommended agent workflow
 
 1. Start with `tools/list` and check the live tool surface.
-2. Use `search_catalog`, `search_lenses`, or `recommend_lenses_for_application` to build a shortlist.
-3. Use `get_sensor_specs` to confirm sensor pixels, pixel pitch, and active area.
-4. Use `compute_fov` for one live FoV result or `compute_fov_catalog` for catalog-wide FoV when the Lambda/DynamoDB backend supports the request.
-5. Use `match_lenses_to_sensor`, `compare_lenses`, and `get_lens_details` for fixture-backed engineering context.
-6. Use `read_shopify_products` for live Shopify product/variant IDs, product URLs, price, inventory signals, and cart variant IDs.
-7. If the buyer explicitly asks for a cart, use live Shopify Variant GIDs from `read_shopify_products`, then call `create_cart`/`get_cart`/`update_cart`. Show the returned Shopify cart/continue URL to the buyer.
-8. Do not claim Checkout MCP is live. Send buyers to Shopify's returned cart/checkout handoff URL when present.
+2. For sensor-specific lens finding, call `compute_fov_catalog` first. There is no current `find_lenses` tool.
+3. Use `search_catalog`, `search_lenses`, or `recommend_lenses_for_application` only for broad discovery/shortlist context.
+4. Use `get_sensor_specs` to confirm sensor pixels, pixel pitch, and active area when needed.
+5. Use `compute_fov` for one live FoV result or `compute_fov_catalog` for catalog-wide FoV when the Lambda/DynamoDB backend supports the request.
+6. Use `match_lenses_to_sensor`, `compare_lenses`, and `get_lens_details` for fixture-backed engineering context.
+7. Use `read_shopify_products` for live Shopify product/variant IDs, product URLs, price, inventory signals, and cart variant IDs.
+8. If the buyer explicitly asks for a cart, use live Shopify Variant GIDs from `read_shopify_products`, then call `create_cart`/`get_cart`/`update_cart`. Show the returned Shopify cart/continue URL to the buyer.
+9. Do not claim Checkout MCP is live. Send buyers to Shopify's returned cart/checkout handoff URL when present.
 
 
 ## Better example prompts
@@ -85,8 +88,8 @@ This table reflects a live `tools/list` check against the production MCP endpoin
 | `search_lenses` | Legacy fixture search by SKU, title, mount, or lens type. | None; `query` is accepted but can be empty. | `query`, `limit` 1-25. | `catalog.snapshot.v1` with `results[]`, count, generated time, and `fixture_not_product_truth` warning. | Useful for broad discovery, not live SKU/price/stock truth. |
 | `get_lens_details` | Fixture-backed details for one Commonlands SKU. | `sku`. | None. | `catalog.snapshot.v1` with `lens` optical/commerce scaffold fields and fixture warning. | Useful for engineering context; must be followed by `read_shopify_products` before buying claims. |
 | `get_sensor_specs` | Sensor dimensions used by FoV and ranking tools. | `partNumber`. | None. | `catalog.snapshot.v1` with resolution, active area, and pixel size. | Useful, but currently fixture-backed sensor catalog; verify unusual sensors separately. |
-| `compute_fov` | FoV for one lens/sensor pair. | `lensSku`, `sensorPartNumber`. | `workingDistanceMm`. | `optics.fov.live.v1` when Lambda/DynamoDB has the lens; otherwise a fixture-backed FoV shape or a fail-closed error. | Useful when the live backend covers the SKU; failures are useful because they prevent unsupported calculations. |
-| `compute_fov_catalog` | FoV sweep for available catalog lenses on one sensor. | `sensorPartNumber`. | `workingDistanceMm`. | Live/sanitized catalog FoV records when backend is enabled; never returns raw coefficients. | Useful for seeing coverage quickly, but still needs product verification before recommendation. |
+| `compute_fov` | FoV for one lens/sensor pair. | `lensSku`, `sensorPartNumber`. | `workingDistanceMm`. | `optics.fov.live.v1` when Lambda/DynamoDB has the lens; otherwise a fixture-backed FoV shape or a fail-closed error. Returned lens records include per-sensor HFOV/VFOV/DFOV, nested `fov`, `coverageClass`, `coverage.pixelCounts`, `distortionAtFieldEdge`, and provenance when the Worker can provide them. | Required path for sensor-specific FoV; failures are useful because they prevent unsupported calculations. |
+| `compute_fov_catalog` | FoV sweep for available catalog lenses on one sensor. | `sensorPartNumber`. | `workingDistanceMm`. | Live/sanitized catalog FoV records with per-sensor HFOV/VFOV/DFOV, nested `fov`, `coverageClass`, `coverage.pixelCounts`, `distortionAtFieldEdge`, payload/lens provenance, and sanitized errors when backend is enabled; never returns raw coefficients. | First-choice tool for sensor-specific lens finding; still needs product verification before recommendation. |
 | `match_lenses_to_sensor` | Fixture-backed ranking against a sensor and optional HFOV target. | `sensorPartNumber`. | `desiredHorizontalFovDeg`, `workingDistanceMm`, `mount`, `maxResults` 1-10. | `recommendations.v1` with ranked lenses, score, fit, FoV, image-circle notes, warnings. | Useful shortlist generator; not live product truth. |
 | `compare_lenses` | Compare selected SKUs on the same sensor. | `lensSkus` 1-10, `sensorPartNumber`. | `workingDistanceMm`. | `recommendations.v1` comparison records with rank, fit, FoV, tradeoffs. | Useful for explaining tradeoffs after the user or another tool chose candidate SKUs. |
 | `get_product_page_details` | Fixture product-page handoff and gated datasheet policy. | `sku`. | None. | `product_page.v1` with fixture product, specs, gated datasheet note, and safety warnings. | Useful for handoff context; not authoritative for current product URL, price, stock, or Variant GID. |
@@ -237,8 +240,36 @@ The output excerpts below are from live-safe calls to the production endpoint un
   "backendCount": 1,
   "resultLimit": 10,
   "truncated": false,
+  "provenance": {
+    "method": "lambda_dynamodb_fov_backend",
+    "rev": "lambda-dynamodb-fov-0.1.0",
+    "source": "aws-lambda-dynamodb-readonly"
+  },
   "lenses": [
-    { "partNum": "CIL160", "efl": 16, "hfov": 22, "vfov": 17, "dfov": 28, "pixpitch": 1.55 }
+    {
+      "partNum": "CIL160",
+      "efl": 16,
+      "hfov": 22,
+      "vfov": 17,
+      "dfov": 28,
+      "fov": { "horizontalDeg": 22, "verticalDeg": 17, "diagonalDeg": 28 },
+      "pixpitch": 1.55,
+      "coverageClass": "full",
+      "coverage": {
+        "class": "full",
+        "pixelCounts": {
+          "sensorPixels": 12330240,
+          "coveredPixels": 12330240,
+          "croppedPixels": 0
+        }
+      },
+      "distortionAtFieldEdge": { "status": "unavailable" },
+      "provenance": {
+        "method": "lambda_dynamodb_fov_backend",
+        "rev": "lambda-dynamodb-fov-0.1.0",
+        "source": "aws-lambda-dynamodb-readonly"
+      }
+    }
   ],
   "errors": []
 }
@@ -273,8 +304,31 @@ Live backend records are allowlisted by the Worker before they are returned to a
   "backendCount": 251,
   "resultLimit": 250,
   "truncated": true,
+  "provenance": {
+    "method": "lambda_dynamodb_fov_backend",
+    "rev": "lambda-dynamodb-fov-0.1.0",
+    "source": "aws-lambda-dynamodb-readonly"
+  },
   "lenses": [
-    { "partNum": "CIL034", "hfov": 88, "vfov": 72, "dfov": 101, "distortion": { "display": "0% TV", "status": "source_display_only" } }
+    {
+      "partNum": "CIL034",
+      "hfov": 88,
+      "vfov": 72,
+      "dfov": 101,
+      "fov": { "horizontalDeg": 88, "verticalDeg": 72, "diagonalDeg": 101 },
+      "coverageClass": "unknown",
+      "coverage": {
+        "class": "unknown",
+        "pixelCounts": { "sensorPixels": 12330240 }
+      },
+      "provenance": {
+        "method": "lambda_dynamodb_fov_backend",
+        "rev": "lambda-dynamodb-fov-0.1.0",
+        "source": "aws-lambda-dynamodb-readonly"
+      },
+      "distortion": { "display": "0% TV", "status": "source_display_only" },
+      "distortionAtFieldEdge": { "display": "0% TV", "status": "source_display_only" }
+    }
   ],
   "errors": []
 }

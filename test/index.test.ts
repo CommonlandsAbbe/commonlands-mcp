@@ -41,6 +41,11 @@ interface ToolSummary {
   title?: string;
   description?: string;
   inputSchema: JsonObject;
+  annotations?: {
+    title?: string;
+    readOnlyHint?: boolean;
+    destructiveHint?: boolean;
+  };
 }
 
 interface LensSummary {
@@ -230,6 +235,26 @@ describe('Commonlands MCP Worker', () => {
       environment: 'test',
       version: '0.1.0-test',
       gitSha: 'abc123',
+      telemetry: {
+        analyticsEngine: 'disabled',
+      },
+    });
+  });
+
+  it('reports Analytics Engine telemetry as configured when the binding exists', async () => {
+    const response = await fetchWorker('/healthz', undefined, {
+      ...env,
+      MCP_ANALYTICS: {
+        writeDataPoint() {},
+      },
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      telemetry: {
+        analyticsEngine: 'configured',
+      },
     });
   });
 
@@ -237,7 +262,7 @@ describe('Commonlands MCP Worker', () => {
     const { response, body } = await rpc(
       'initialize',
       {
-        protocolVersion: '2024-11-05',
+        protocolVersion: '2025-11-25',
         capabilities: {},
         clientInfo: { name: 'vitest', version: '0.0.0' },
       },
@@ -249,11 +274,82 @@ describe('Commonlands MCP Worker', () => {
       jsonrpc: '2.0',
       id: 1,
       result: {
-        protocolVersion: '2024-11-05',
+        protocolVersion: '2025-11-25',
         serverInfo: { name: 'commonlands-mcp', version: '0.1.0' },
         capabilities: { tools: {}, resources: {} },
       },
     });
+  });
+
+  it('negotiates stale initialize protocol requests to the latest Streamable HTTP revision', async () => {
+    const { body } = await rpc(
+      'initialize',
+      {
+        protocolVersion: '2024-11-05',
+        capabilities: {},
+        clientInfo: { name: 'legacy-smoke', version: '0.0.0' },
+      },
+      'legacy-initialize',
+    );
+
+    expect(getResult(body)).toMatchObject({
+      protocolVersion: '2025-11-25',
+    });
+  });
+
+
+  it('writes privacy-safe MCP telemetry when Analytics Engine binding is present', async () => {
+    const writes: Array<{ blobs?: string[]; doubles?: number[]; indexes?: string[] }> = [];
+    const requestEnv: Env = {
+      ...env,
+      MCP_ANALYTICS: {
+        writeDataPoint(dataPoint) {
+          writes.push(dataPoint);
+        },
+      },
+    };
+
+    const { response, body } = await rpc(
+      'tools/call',
+      { name: 'get_sensor_specs', arguments: { partNumber: 'IMX477', secretLike: 'do-not-log' } },
+      'telemetry-tool-call',
+      requestEnv,
+    );
+
+    expect(response.status).toBe(200);
+    expect(getStructuredContent(body)).toMatchObject({ sensor: { partNumber: 'IMX477' } });
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toMatchObject({
+      blobs: ['POST', '/mcp', 'tools/call', 'get_sensor_specs', 'ok', 'unknown', 'test', '0.1.0-test'],
+      indexes: ['tools/call'],
+    });
+    expect(writes[0]?.doubles?.[0]).toBe(200);
+    expect(JSON.stringify(writes)).not.toContain('IMX477');
+    expect(JSON.stringify(writes)).not.toContain('do-not-log');
+  });
+
+  it('records JSON-RPC tool errors in telemetry without logging request arguments', async () => {
+    const writes: Array<{ blobs?: string[]; doubles?: number[]; indexes?: string[] }> = [];
+    const requestEnv: Env = {
+      ...env,
+      MCP_ANALYTICS: {
+        writeDataPoint(dataPoint) {
+          writes.push(dataPoint);
+        },
+      },
+    };
+
+    const { body } = await rpc(
+      'tools/call',
+      { name: 'create_checkout', arguments: { variantId: 'gid://shopify/ProductVariant/secret-ish' } },
+      'telemetry-disabled-checkout',
+      requestEnv,
+    );
+
+    expect(body).toMatchObject({ error: { code: -32601, message: 'Tool not found: create_checkout' } });
+    expect(writes).toHaveLength(1);
+    expect(writes[0]?.blobs).toEqual(['POST', '/mcp', 'tools/call', 'create_checkout', 'jsonrpc_error_-32601', 'unknown', 'test', '0.1.0-test']);
+    expect(JSON.stringify(writes)).not.toContain('secret-ish');
   });
 
   it('lists Phase 1 catalog tools', async () => {
@@ -293,13 +389,38 @@ describe('Commonlands MCP Worker', () => {
     expect(metadataText).toMatch(/lens field of view/i);
     expect(metadataText).toMatch(/read_shopify_products/i);
     expect(metadataText).toMatch(/read-only/i);
+    expect(metadataText).toMatch(/insufficient to compute field of view on a specific sensor/i);
+    expect(metadataText).toMatch(/compute_fov_catalog/i);
+  });
+
+  it('annotates every visible tool with display title and risk hints', async () => {
+    const { body } = await rpc('tools/list', undefined, 'annotated-tools', shopifyCartEnv);
+    const tools = getResult(body).tools as ToolSummary[];
+
+    expect(tools.length).toBeGreaterThan(20);
+    for (const tool of tools) {
+      expect(tool.annotations).toMatchObject({
+        title: tool.title,
+        readOnlyHint: expect.any(Boolean),
+        destructiveHint: expect.any(Boolean),
+      });
+    }
+
+    const cartTools = tools.filter((tool) => ['create_cart', 'get_cart', 'update_cart'].includes(tool.name));
+    expect(cartTools).toHaveLength(3);
+    for (const tool of cartTools) {
+      expect(tool.annotations).toMatchObject({
+        readOnlyHint: false,
+        destructiveHint: true,
+      });
+    }
   });
 
   it('returns MCP initialize instructions with usage, SEO, and security metadata', async () => {
     const { body } = await rpc(
       'initialize',
       {
-        protocolVersion: '2024-11-05',
+        protocolVersion: '2025-11-25',
         capabilities: {},
         clientInfo: { name: 'vitest', version: '0.0.0' },
       },
@@ -313,8 +434,12 @@ describe('Commonlands MCP Worker', () => {
     expect(instructions).toMatch(/C-mount lenses/i);
     expect(instructions).toMatch(/lens field of view/i);
     expect(instructions).toMatch(/Use read_shopify_products/i);
+    expect(instructions).toMatch(/insufficient to compute field of view on a specific sensor/i);
+    expect(instructions).toMatch(/prefer compute_fov_catalog first/i);
     expect(instructions).toMatch(/Do not pass arbitrary URLs/i);
     expect(instructions).toMatch(/not accept client-supplied downstream tokens/i);
+    expect(instructions).toMatch(/Do not run DIY optics math/i);
+    expect(instructions).toMatch(/label every optical or commerce claim with its source/i);
   });
 
   it('only lists commerce mutation tools when explicitly enabled', async () => {
@@ -1693,7 +1818,37 @@ describe('Commonlands MCP Worker', () => {
       correctionStatus: 'live_lambda_dynamodb',
       source: 'aws-lambda-dynamodb-readonly',
       requested: { lensSku: 'CIL026', sensorPartNumber: 'IMX477', workingDistanceMm: 1000 },
-      lenses: [{ partNum: 'CIL026', hfov: 120.3, vfov: 91.6, dfov: 130.4, efl: 2.6, distortion: { display: '0.1%', status: 'source_display_only' } }],
+      provenance: {
+        method: 'lambda_dynamodb_fov_backend',
+        rev: 'lambda-dynamodb-fov-0.1.0',
+        source: 'aws-lambda-dynamodb-readonly',
+      },
+      lenses: [{
+        partNum: 'CIL026',
+        hfov: 120.3,
+        vfov: 91.6,
+        dfov: 130.4,
+        fov: {
+          horizontalDeg: 120.3,
+          verticalDeg: 91.6,
+          diagonalDeg: 130.4,
+        },
+        efl: 2.6,
+        coverageClass: 'unknown',
+        coverage: {
+          class: 'unknown',
+          pixelCounts: {
+            sensorPixels: expect.any(Number),
+          },
+        },
+        provenance: {
+          method: 'lambda_dynamodb_fov_backend',
+          rev: 'lambda-dynamodb-fov-0.1.0',
+          source: 'aws-lambda-dynamodb-readonly',
+        },
+        distortion: { display: '0.1%', status: 'source_display_only' },
+        distortionAtFieldEdge: { display: '0.1%', status: 'source_display_only' },
+      }],
     });
     expect(structuredContent.errors).toEqual([{ partNum: 'CIL026', message: 'backend_error' }]);
     const publicJson = JSON.stringify(structuredContent);
@@ -1748,6 +1903,11 @@ describe('Commonlands MCP Worker', () => {
       backendCount: 251,
       resultLimit: 250,
       truncated: true,
+      provenance: {
+        method: 'lambda_dynamodb_fov_backend',
+        rev: 'lambda-dynamodb-fov-0.1.0',
+        source: 'aws-lambda-dynamodb-readonly',
+      },
     });
     const lenses = structuredContent.lenses as Array<Record<string, unknown>>;
     expect(lenses).toHaveLength(250);
@@ -1756,12 +1916,75 @@ describe('Commonlands MCP Worker', () => {
       hfov: 88,
       vfov: 72,
       dfov: 101,
+      fov: {
+        horizontalDeg: 88,
+        verticalDeg: 72,
+        diagonalDeg: 101,
+      },
+      coverageClass: 'unknown',
+      coverage: {
+        class: 'unknown',
+        pixelCounts: {
+          sensorPixels: expect.any(Number),
+        },
+      },
+      provenance: {
+        method: 'lambda_dynamodb_fov_backend',
+        rev: 'lambda-dynamodb-fov-0.1.0',
+        source: 'aws-lambda-dynamodb-readonly',
+      },
       distortion: { display: '0% TV', status: 'source_display_only' },
+      distortionAtFieldEdge: { display: '0% TV', status: 'source_display_only' },
     });
     expect(JSON.stringify(lenses)).not.toContain('CIL999');
     const lensesJson = JSON.stringify(lenses);
     expect(lensesJson).not.toContain('alpha');
     expect(lensesJson).not.toContain('beta');
+  });
+
+  it('returns fixture catalog FoV with per-lens coverage and provenance metadata', async () => {
+    const { body } = await rpc('tools/call', {
+      name: 'compute_fov_catalog',
+      arguments: { sensorPartNumber: 'IMX477' },
+    });
+    const structuredContent = getStructuredContent(body);
+
+    expect(structuredContent).toMatchObject({
+      schemaVersion: 'optics.fov.catalog.fixture.v1',
+      correctionStatus: 'fixture_parity_scaffold',
+      source: 'fixture-catalog',
+      provenance: {
+        method: 'fixture_parity_scaffold',
+        rev: 'fixture-polynomial-fov-0.1.0',
+        source: 'fixture-catalog',
+      },
+    });
+
+    const lenses = structuredContent.lenses as Array<Record<string, unknown>>;
+    expect(lenses[0]).toMatchObject({
+      fov: {
+        horizontalDeg: expect.any(Number),
+        verticalDeg: expect.any(Number),
+        diagonalDeg: expect.any(Number),
+      },
+      coverageClass: expect.stringMatching(/full|inscribed/),
+      coverage: {
+        class: expect.stringMatching(/full|inscribed/),
+        pixelCounts: {
+          sensorPixels: expect.any(Number),
+          coveredPixels: expect.any(Number),
+          croppedPixels: expect.any(Number),
+        },
+      },
+      provenance: {
+        method: 'fixture_parity_scaffold',
+        rev: 'fixture-polynomial-fov-0.1.0',
+        source: 'fixture-catalog',
+      },
+      distortionAtFieldEdge: {
+        status: 'source_display_only',
+      },
+    });
   });
 
   it('fails closed when live FoV backend auth is missing', async () => {
@@ -1793,6 +2016,15 @@ describe('Commonlands MCP Worker', () => {
       lens: { sku: 'CIL250', projectionModel: 'projection_polynomial_theta_even_powers' },
       sensor: { partNumber: 'IMX477' },
       imageCircle: { clipped: true, usedWidthMm: 5.761, usedHeightMm: 4.318 },
+      coverageClass: 'inscribed',
+      coverage: {
+        class: 'inscribed',
+        pixelCounts: {
+          sensorPixels: expect.any(Number),
+          coveredPixels: expect.any(Number),
+          croppedPixels: expect.any(Number),
+        },
+      },
       fov: {
         horizontalDeg: 51.3,
         verticalDeg: 39.6,
@@ -1803,6 +2035,14 @@ describe('Commonlands MCP Worker', () => {
       angularResolution: {
         horizontalPxPerDeg: 79.1,
         verticalPxPerDeg: 76.8,
+      },
+      distortionAtFieldEdge: {
+        status: expect.stringMatching(/source_display_only|unavailable/),
+      },
+      provenance: {
+        method: 'fixture_parity_scaffold',
+        rev: 'fixture-polynomial-fov-0.1.0',
+        source: 'fixture-catalog',
       },
     });
     expect(structuredContent.assumptions).toContain(
