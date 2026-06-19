@@ -177,3 +177,7 @@ Run verification first, then deploy through CI so `/healthz` receives production
 npm run verify
 npm run deploy:ci
 ```
+
+For an approved manual deploy, `npm run deploy` runs `scripts/deploy.mjs`,
+which deploys with `--keep-vars` and injects the same production build
+metadata. `npm run deploy:raw` is the unwrapped Wrangler deploy command.

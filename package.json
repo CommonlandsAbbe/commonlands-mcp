@@ -5,8 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "deploy": "node scripts/deploy.mjs",
     "deploy:ci": "wrangler deploy --keep-vars --var ENVIRONMENT:production --var VERSION:$npm_package_version --var GIT_SHA:${GITHUB_SHA:-$(git rev-parse --short HEAD)}",
+    "deploy:raw": "wrangler deploy",
     "lint": "eslint .",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
