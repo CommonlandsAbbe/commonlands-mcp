@@ -278,7 +278,7 @@ describe('Commonlands MCP Worker', () => {
       id: 1,
       result: {
         protocolVersion: '2025-11-25',
-        serverInfo: { name: 'commonlands-mcp', version: '0.1.2' },
+        serverInfo: { name: 'commonlands-mcp', version: '0.1.3' },
         capabilities: { tools: {}, resources: {} },
       },
     });
@@ -2028,6 +2028,94 @@ describe('Commonlands MCP Worker', () => {
     expect(body).toMatchObject({
       error: { code: -32603, message: 'Live FoV backend is missing authentication configuration' },
     });
+  });
+
+  const liveRankingEnv: Env = {
+    ...env,
+    FOV_LIVE_BACKEND_ENABLED: 'true',
+    FOV_LAMBDA_ENDPOINT: 'https://ia97wrz7ag.execute-api.us-west-2.amazonaws.com/default/fov',
+    FOV_API_KEY: '***',
+  };
+
+  const liveLambdaCatalog = {
+    sensor: { partNumber: 'IMX477' },
+    count: 2,
+    lenses: [
+      {
+        partNum: 'CIL250',
+        hfov: 14,
+        vfov: 11,
+        dfov: 18,
+        efl: 25,
+        image_circle: 9.4,
+        lens_type: 'Telephoto',
+        mount: 'M12',
+        resolution: '10MP',
+        f_num: 2,
+        url: 'https://commonlands.com/products/ir-corrected-25mm-m12-lens-cil250',
+      },
+      {
+        partNum: 'CIL078',
+        hfov: 87,
+        vfov: 70,
+        dfov: 110,
+        efl: 2.8,
+        image_circle: 6.6,
+        lens_type: 'Wide',
+        mount: 'M12',
+        resolution: '5MP',
+        f_num: 2.4,
+        url: 'https://commonlands.com/products/cil078',
+      },
+    ],
+    errors: [],
+  };
+
+  it('ranks lenses from the LIVE backend specs, not the fixture', async () => {
+    globalThis.fetch = (async () => Response.json(liveLambdaCatalog)) as typeof fetch;
+
+    const { body } = await rpc(
+      'tools/call',
+      { name: 'match_lenses_to_sensor', arguments: { sensorPartNumber: 'IMX477', desiredHorizontalFovDeg: 14, maxResults: 5 } },
+      'live-rank',
+      liveRankingEnv,
+    );
+    const sc = getStructuredContent(body);
+
+    expect(sc.correctionStatus).toBe('live_lambda_dynamodb_ranking');
+    const recs = sc.recommendations as Array<JsonObject>;
+    expect(recs.length).toBeGreaterThan(0);
+    const top = recs[0] as JsonObject;
+    // CIL250 is the 14-degree target match; its live EFL (25mm) must be reflected,
+    // proving the data came from the live backend and not the fixture.
+    expect((top.lens as JsonObject).sku).toBe('CIL250');
+    expect((top.lens as JsonObject).eflMm).toBe(25);
+    expect((top.lens as JsonObject).mount).toBe('M12');
+    expect((top.fov as JsonObject).horizontalDeg).toBe(14);
+    expect((top.lens as JsonObject).availability).toBe('unknown');
+  });
+
+  it('compares lenses from LIVE data and errors on a SKU absent from the live catalog', async () => {
+    globalThis.fetch = (async () => Response.json(liveLambdaCatalog)) as typeof fetch;
+
+    const ok = await rpc(
+      'tools/call',
+      { name: 'compare_lenses', arguments: { lensSkus: ['CIL250', 'CIL078'], sensorPartNumber: 'IMX477' } },
+      'live-compare',
+      liveRankingEnv,
+    );
+    const recs = getStructuredContent(ok.body).recommendations as Array<JsonObject>;
+    expect(recs.map((r) => (r.lens as JsonObject).sku).sort()).toEqual(['CIL078', 'CIL250']);
+    expect(recs.find((r) => (r.lens as JsonObject).sku === 'CIL250')?.['lens']).toMatchObject({ eflMm: 25 });
+
+    globalThis.fetch = (async () => Response.json(liveLambdaCatalog)) as typeof fetch;
+    const missing = await rpc(
+      'tools/call',
+      { name: 'compare_lenses', arguments: { lensSkus: ['NOPE'], sensorPartNumber: 'IMX477' } },
+      'live-compare-missing',
+      liveRankingEnv,
+    );
+    expect(missing.body).toMatchObject({ error: { code: -32004, message: 'Lens not found: NOPE' } });
   });
 
   it('computes fixture-backed distortion-aware FoV and angular resolution', async () => {
