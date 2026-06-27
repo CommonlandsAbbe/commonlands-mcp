@@ -102,7 +102,7 @@ interface ToolAnnotations {
 
 const SERVER_INFO = {
   name: 'commonlands-mcp',
-  version: '0.1.3',
+  version: '0.1.4',
 } as const;
 
 const PUBLIC_MCP_ENDPOINT = 'https://mcp.commonlands.com/mcp';
@@ -115,6 +115,9 @@ const FOV_BACKEND_TIMEOUT_MS = 4_000;
 const FOV_BACKEND_MAX_RESPONSE_BYTES = 128 * 1024;
 const FOV_SINGLE_MAX_RESULTS = 10;
 const FOV_CATALOG_MAX_RESULTS = 250;
+// Reference sensor used only to enumerate the live lens catalog for spec/text search
+// (lens specs and type are sensor-independent). IMX477 is always present in the table.
+const SEARCH_REFERENCE_SENSOR = 'IMX477';
 const UNKNOWN_ANALYTICS_VALUE = 'unknown';
 const FOV_COMPUTATION_RULE =
   'FoV rule: catalog EFL, image circle, max FoV/FOV@image-circle, and distortion display fields are insufficient to compute field of view on a specific sensor; do not interpolate or estimate interior sensor FoV from those fields. Always call compute_fov for one lens/sensor pair or compute_fov_catalog for catalog-wide per-sensor HFOV/VFOV/DFOV.';
@@ -1058,6 +1061,27 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
   if (params.name === 'search_lenses') {
     const query = typeof args.query === 'string' ? args.query : '';
     const limit = typeof args.limit === 'number' ? args.limit : 10;
+
+    // Live search: enumerate the full live lens catalog and tokenized-match against
+    // SKU, mount, lens type, and resolution. This makes lens_type queries work, e.g.
+    // "telephoto" returns every lens with lensType Telephoto, keyed by clean part number.
+    if (isFovLiveBackendEnabled(env)) {
+      const sensor = await resolveSensor(env, SEARCH_REFERENCE_SENSOR);
+      if (sensor) {
+        const live = await fetchLiveLensCatalog(env, sensor);
+        if (!('error' in live)) {
+          const results = searchLiveLenses(live.lenses, query, limit);
+          return toolResult(id, {
+            schemaVersion: CATALOG_SNAPSHOT.schemaVersion,
+            generatedAt: CATALOG_SNAPSHOT.generatedAt,
+            results,
+            count: results.length,
+            source: 'live-lambda-dynamodb-lens-catalog',
+          });
+        }
+      }
+    }
+
     const results = searchLenses(query, limit).map(summarizeLens);
     return toolResult(id, {
       schemaVersion: CATALOG_SNAPSHOT.schemaVersion,
@@ -2132,6 +2156,38 @@ function recommendationError(id: unknown, error: unknown): Response {
     return rpcError(id, { code: -32004, message });
   }
   return rpcError(id, { code: -32603, message: 'Internal recommendation error' });
+}
+
+// Tokenized search over the live lens catalog. Every whitespace-separated query term
+// must appear in the lens's searchable text (SKU, mount, lens type, resolution), in
+// any order, so a lens_type query like "telephoto" returns every Telephoto lens.
+function searchLiveLenses(
+  lenses: LiveLensInput[],
+  query: string,
+  limit: number,
+): Array<Record<string, unknown>> {
+  const safeLimit = Math.min(Math.max(Math.trunc(limit) || 10, 1), 50);
+  const tokens = query.trim().toLowerCase().split(/\s+/u).filter(Boolean);
+
+  const matched = tokens.length === 0
+    ? lenses
+    : lenses.filter((lens) => {
+        const searchable = [lens.sku, lens.mount, lens.lensType, lens.resolution]
+          .join(' ')
+          .toLowerCase();
+        return tokens.every((token) => searchable.includes(token));
+      });
+
+  return matched.slice(0, safeLimit).map((lens) => ({
+    sku: lens.sku,
+    mount: lens.mount,
+    lensType: lens.lensType,
+    eflMm: lens.eflMm,
+    fNumber: lens.fNumber,
+    imageCircleMm: lens.imageCircleMm,
+    resolution: lens.resolution,
+    productUrl: lens.productUrl,
+  }));
 }
 
 function summarizeLens(lens: LensCatalogItem): Omit<LensCatalogItem, 'source' | 'fixtureDistortion'> {
