@@ -156,7 +156,7 @@ const TOOLS: ToolDefinition[] = [
   {
     name: 'get_sensor_specs',
     title: 'Get sensor specs',
-    description: `Return fixture-backed sensor dimensions, pixel pitch, and resolution for lens field of view, M12 lens, and C-mount lens matching inputs. Use these specs as inputs to compute_fov or compute_fov_catalog, not as a reason to hand-calculate FoV. ${FOV_COMPUTATION_RULE}`,
+    description: `Return sensor dimensions, pixel pitch, and resolution for lens field of view, M12 lens, and C-mount lens matching inputs. In production this uses the read-only live sensor table when configured, with fixture fallback when unavailable. Use these specs as inputs to compute_fov or compute_fov_catalog, not as a reason to hand-calculate FoV. ${FOV_COMPUTATION_RULE}`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -707,8 +707,8 @@ const RESOURCES = [
   },
   {
     uri: 'commonlands://catalog/sensors',
-    name: 'Commonlands sensor fixture catalog',
-    description: 'Fixture-backed Phase 1 sensor catalog for lens field of view inputs: active area, resolution, and pixel pitch.',
+    name: 'Commonlands sensor catalog',
+    description: 'Sensor catalog for lens field of view inputs: active area, resolution, and pixel pitch. Tool calls prefer the read-only live sensor table when configured, with fixture fallback when unavailable.',
     mimeType: 'application/json',
   },
   {

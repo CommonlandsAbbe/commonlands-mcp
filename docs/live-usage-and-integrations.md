@@ -33,7 +33,7 @@ Use it to search the Commonlands lens catalog, shortlist lenses by sensor/applic
 
 ### Optical calculations
 
-Use `compute_fov` for one lens/sensor pair and `compute_fov_catalog` for catalog-wide FoV on one sensor. In production, these use the authenticated AWS Lambda/DynamoDB FoV backend when configured. Sensor specs currently come from the Worker fixture sensor catalog. Agent-facing FoV responses are sanitized before return and never expose raw distortion coefficients.
+Use `compute_fov` for one lens/sensor pair and `compute_fov_catalog` for catalog-wide FoV on one sensor. In production, these use the authenticated AWS Lambda/DynamoDB FoV backend when configured. Sensor specs come from the read-only live sensor table when configured, with fixture fallback when unavailable. Agent-facing FoV responses are sanitized before return and never expose raw distortion coefficients.
 
 Catalog EFL, image circle, max FoV/FOV@image-circle, and distortion display fields are insufficient to compute field of view on a specific sensor. Agents must not interpolate interior-sensor FoV from those fields or run their own FoV scripts. For sensor-specific discovery, call `compute_fov_catalog` first and use the returned per-sensor `hfov`, `vfov`, `dfov`, nested `fov`, `coverageClass`, `coverage.pixelCounts`, `distortionAtFieldEdge`, and provenance/source metadata.
 
@@ -50,7 +50,7 @@ If a buyer explicitly asks for a cart, the agent can use live Shopify Variant GI
 - **Live tool count:** 22
 - **Live Shopify product truth:** `read_shopify_products` is configured and read-only.
 - **Live FoV backend:** `compute_fov` and `compute_fov_catalog` use the authenticated AWS Lambda/DynamoDB backend when configured. The Worker sends the backend secret server-side; agents never receive it, and returned lens records are allowlisted.
-- **Sensor specs:** `get_sensor_specs` is currently fixture-backed from the Worker sensor catalog.
+- **Sensor specs:** `get_sensor_specs` prefers the read-only live sensor table when configured and falls back to the Worker fixture sensor catalog when unavailable.
 - **Cart tools:** `create_cart`, `get_cart`, and `update_cart` are exposed through Shopify's standard Storefront MCP endpoint.
 - **Checkout tools:** hidden. `create_checkout` returns `Tool not found`; checkout still needs a validated Shopify Checkout MCP endpoint, Cloudflare protections, and explicit approval before exposure.
 - **Cancel cart:** hidden for the current standard Storefront MCP endpoint. `cancel_cart` returns `Tool not found` unless a validated UCP Cart MCP endpoint with cancel semantics is configured later.
@@ -87,7 +87,7 @@ This table reflects a live `tools/list` check against the production MCP endpoin
 | --- | --- | --- | --- | --- | --- |
 | `search_lenses` | Legacy fixture search by SKU, title, mount, or lens type. | None; `query` is accepted but can be empty. | `query`, `limit` 1-25. | `catalog.snapshot.v1` with `results[]`, count, generated time, and `fixture_not_product_truth` warning. | Useful for broad discovery, not live SKU/price/stock truth. |
 | `get_lens_details` | Fixture-backed details for one Commonlands SKU. | `sku`. | None. | `catalog.snapshot.v1` with `lens` optical/commerce scaffold fields and fixture warning. | Useful for engineering context; must be followed by `read_shopify_products` before buying claims. |
-| `get_sensor_specs` | Sensor dimensions used by FoV and ranking tools. | `partNumber`. | None. | `catalog.snapshot.v1` with resolution, active area, and pixel size. | Useful, but currently fixture-backed sensor catalog; verify unusual sensors separately. |
+| `get_sensor_specs` | Sensor dimensions used by FoV and ranking tools. | `partNumber`. | None. | `catalog.snapshot.v1` with resolution, active area, and pixel size. | Primary path for sensor specs; production prefers the read-only live sensor table when configured, with fixture fallback when unavailable. |
 | `compute_fov` | FoV for one lens/sensor pair. | `lensSku`, `sensorPartNumber`. | `workingDistanceMm`. | `optics.fov.live.v1` when Lambda/DynamoDB has the lens; otherwise a fixture-backed FoV shape or a fail-closed error. Returned lens records include per-sensor HFOV/VFOV/DFOV, nested `fov`, `coverageClass`, `coverage.pixelCounts`, `distortionAtFieldEdge`, and provenance when the Worker can provide them. | Required path for sensor-specific FoV; failures are useful because they prevent unsupported calculations. |
 | `compute_fov_catalog` | FoV sweep for available catalog lenses on one sensor. | `sensorPartNumber`. | `workingDistanceMm`. | Live/sanitized catalog FoV records with per-sensor HFOV/VFOV/DFOV, nested `fov`, `coverageClass`, `coverage.pixelCounts`, `distortionAtFieldEdge`, payload/lens provenance, and sanitized errors when backend is enabled; never returns raw coefficients. | First-choice tool for sensor-specific lens finding; still needs product verification before recommendation. |
 | `match_lenses_to_sensor` | Fixture-backed ranking against a sensor and optional HFOV target. | `sensorPartNumber`. | `desiredHorizontalFovDeg`, `workingDistanceMm`, `mount`, `maxResults` 1-10. | `recommendations.v1` with ranked lenses, score, fit, FoV, image-circle notes, warnings. | Useful shortlist generator; not live product truth. |
@@ -188,7 +188,7 @@ The output excerpts below are from live-safe calls to the production endpoint un
 
 ### `get_sensor_specs`
 
-**Use for:** sensor pixel count, pixel pitch, and active area used by FoV calculations. Current source is the Worker fixture sensor catalog.
+**Use for:** sensor pixel count, pixel pitch, and active area used by FoV calculations. Production prefers the read-only live sensor table when configured, with fixture fallback when unavailable.
 
 **Example prompt:** `What are the IMX477 sensor dimensions for FoV input?`
 
