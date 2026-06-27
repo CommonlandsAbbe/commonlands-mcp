@@ -2698,8 +2698,8 @@ describe('Commonlands MCP Worker', () => {
       return Response.json({
         Items: [
           {
-            id: { S: 'uuid-1' },
-            sensortype: { S: 'IMX577' },
+            id: { S: 'IMX577' },
+            sensortype: { S: 'Rolling' },
             sensormfg: { S: 'Sony' },
             sensorhpix: { N: '4056' },
             sensorvpix: { N: '3040' },
@@ -2723,6 +2723,7 @@ describe('Commonlands MCP Worker', () => {
       manufacturer: 'Sony',
       resolution: { widthPx: 4056, heightPx: 3040 },
       pixelSizeUm: 1.55,
+      shutterType: 'Rolling',
     });
     // Active-area mm derived from pixels * pitch.
     const sensor = structuredContent.sensor as { activeAreaMm: { width: number; height: number } };
@@ -2742,8 +2743,8 @@ describe('Commonlands MCP Worker', () => {
     globalThis.fetch = (async () =>
       Response.json({
         Items: [
-          { id: { S: 'u1' }, sensortype: { S: 'IMX477' }, sensormfg: { S: 'Sony' }, sensorhpix: { N: '4056' }, sensorvpix: { N: '3040' }, sensorpitch: { N: '1.55' } },
-          { id: { S: 'u2' }, sensortype: { S: 'AR0521' }, sensormfg: { S: 'onsemi' }, sensorhpix: { N: '2592' }, sensorvpix: { N: '1944' }, sensorpitch: { N: '2.2' } },
+          { id: { S: 'IMX477' }, sensortype: { S: 'Rolling' }, sensormfg: { S: 'Sony' }, sensorhpix: { N: '4056' }, sensorvpix: { N: '3040' }, sensorpitch: { N: '1.55' } },
+          { id: { S: 'AR0521' }, sensortype: { S: 'Global' }, sensormfg: { S: 'onsemi' }, sensorhpix: { N: '2592' }, sensorvpix: { N: '1944' }, sensorpitch: { N: '2.2' } },
         ],
       })) as typeof fetch;
 
@@ -2757,6 +2758,8 @@ describe('Commonlands MCP Worker', () => {
     expect(body).toMatchObject({ error: { code: -32004 } });
     const data = (body.error as JsonObject).data as JsonObject;
     expect(data.availableSensorPartNumbers).toEqual(['IMX477', 'AR0521']);
+    expect(data.availableSensorPartNumbers).not.toContain('Rolling');
+    expect(data.availableSensorPartNumbers).not.toContain('Global');
   });
 
   it('falls back to the fixture when the sensor store is not configured', async () => {

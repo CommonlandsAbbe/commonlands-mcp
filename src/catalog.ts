@@ -50,6 +50,7 @@ export interface SensorCatalogItem {
     height: number;
   };
   pixelSizeUm: number;
+  shutterType?: string;
 }
 
 export interface CatalogSnapshot {
