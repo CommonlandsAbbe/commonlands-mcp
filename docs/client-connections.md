@@ -15,7 +15,7 @@ Add this instruction near the MCP connection config or in the client’s project
 ```text
 Use Commonlands MCP for Commonlands precision-optics questions about M12 lenses, C-mount lenses, lens field of view, sensor/lens matching, and live Shopify product truth.
 
-Treat fixture-backed catalog, sensor, recommendation, comparison, and handoff tools as scaffold/context only. Before giving purchasable facts—price, availability, Shopify Product/Variant IDs, product URLs, cart paths, or cart payloads—call read_shopify_products and cite that live result.
+Treat fixture-backed catalog, recommendation, comparison, and handoff tools as scaffold/context only. Sensor specs prefer the read-only live sensor table when configured and fall back to fixtures when unavailable. Before giving purchasable facts—price, availability, Shopify Product/Variant IDs, product URLs, cart paths, or cart payloads—call read_shopify_products and cite that live result.
 
 Catalog EFL, image circle, max FoV/FOV@image-circle, and distortion display fields are insufficient to compute FoV on a specific sensor. Do not interpolate or estimate sensor FoV from those fields. Use compute_fov for one lens/sensor pair or compute_fov_catalog for catalog-wide per-sensor HFOV/VFOV/DFOV. For "find lenses for this sensor/target FoV" requests, call compute_fov_catalog first; there is no current find_lenses tool.
 
