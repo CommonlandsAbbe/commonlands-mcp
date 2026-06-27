@@ -22,8 +22,12 @@ import { callShopifyCheckoutMcp, type CheckoutOperation } from './shopify-checko
 import { readShopifyMetaobjects, readShopifyProducts } from './shopify-read-adapter';
 import {
   compareLenses,
+  compareLensesLive,
   matchLensesToSensor,
+  matchLensesToSensorLive,
   recommendLensesForApplication,
+  recommendLensesForApplicationLive,
+  type LiveLensInput,
   type LensRecommendation,
 } from './recommendations';
 import { getShopifyReadonlyStatus } from './shopify-readonly-status';
@@ -98,7 +102,7 @@ interface ToolAnnotations {
 
 const SERVER_INFO = {
   name: 'commonlands-mcp',
-  version: '0.1.2',
+  version: '0.1.3',
 } as const;
 
 const PUBLIC_MCP_ENDPOINT = 'https://mcp.commonlands.com/mcp';
@@ -1199,6 +1203,14 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
 
     const input = buildRecommendationInput(args);
     try {
+      if (isFovLiveBackendEnabled(env)) {
+        const sensor = await resolveSensor(env, input.sensorPartNumber);
+        if (!sensor) return rpcError(id, await sensorNotFoundErrorAsync(env, input.sensorPartNumber));
+        const live = await fetchLiveLensCatalog(env, sensor, input.workingDistanceMm);
+        if ('error' in live) return rpcError(id, live.error);
+        const recommendations = matchLensesToSensorLive(live.lenses, input);
+        return recommendationToolResult(id, input.sensorPartNumber, recommendations, 'live');
+      }
       const recommendations = matchLensesToSensor(input);
       return recommendationToolResult(id, input.sensorPartNumber, recommendations);
     } catch (error) {
@@ -1222,6 +1234,14 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
       ...(typeof args.workingDistanceMm === 'number' ? { workingDistanceMm: args.workingDistanceMm } : {}),
     };
     try {
+      if (isFovLiveBackendEnabled(env)) {
+        const sensor = await resolveSensor(env, input.sensorPartNumber);
+        if (!sensor) return rpcError(id, await sensorNotFoundErrorAsync(env, input.sensorPartNumber));
+        const live = await fetchLiveLensCatalog(env, sensor, input.workingDistanceMm);
+        if ('error' in live) return rpcError(id, live.error);
+        const recommendations = compareLensesLive(live.lenses, input);
+        return recommendationToolResult(id, input.sensorPartNumber, recommendations, 'live');
+      }
       const recommendations = compareLenses(input);
       return recommendationToolResult(id, input.sensorPartNumber, recommendations);
     } catch (error) {
@@ -1348,6 +1368,14 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
       ...(typeof args.requireInStock === 'boolean' ? { requireInStock: args.requireInStock } : {}),
     };
     try {
+      if (isFovLiveBackendEnabled(env)) {
+        const sensor = await resolveSensor(env, input.sensorPartNumber);
+        if (!sensor) return rpcError(id, await sensorNotFoundErrorAsync(env, input.sensorPartNumber));
+        const live = await fetchLiveLensCatalog(env, sensor, input.workingDistanceMm);
+        if ('error' in live) return rpcError(id, live.error);
+        const recommendations = recommendLensesForApplicationLive(live.lenses, input);
+        return recommendationToolResult(id, input.sensorPartNumber, recommendations, 'live');
+      }
       const recommendations = recommendLensesForApplication(input);
       return recommendationToolResult(id, input.sensorPartNumber, recommendations);
     } catch (error) {
@@ -1473,6 +1501,81 @@ interface DistortionAtFieldEdge {
   valuePercent?: number;
   axis?: 'diagonal' | 'horizontal' | 'vertical' | 'max_axis';
   status: 'source_display_only' | 'calculated' | 'unavailable';
+}
+
+// Fetch the full live lens catalog (FoV backend, catalog mode) and normalize each
+// entry into the LiveLensInput shape the ranking tools consume. This is the product
+// truth source that replaces the scrambled fixture for ranking/comparison.
+async function fetchLiveLensCatalog(
+  env: Env,
+  sensor: SensorCatalogItem,
+  workingDistanceMm?: number,
+): Promise<{ lenses: LiveLensInput[] } | { error: JsonRpcError }> {
+  const result = await computeFovWithLiveBackend(env, {
+    sensorPartNumber: sensor.partNumber,
+    sensor,
+    ...(workingDistanceMm !== undefined ? { workingDistanceMm } : {}),
+  });
+  if ('error' in result) return { error: result.error };
+
+  const rawLenses = Array.isArray(result.structuredContent.lenses)
+    ? (result.structuredContent.lenses as SanitizedFovLens[])
+    : [];
+
+  const lenses: LiveLensInput[] = [];
+  for (const raw of rawLenses) {
+    const mapped = toLiveLensInput(raw, sensor);
+    if (mapped) lenses.push(mapped);
+  }
+  return { lenses };
+}
+
+function toLiveLensInput(raw: SanitizedFovLens, sensor: SensorCatalogItem): LiveLensInput | null {
+  if (!raw.partNum || !raw.fov || typeof raw.fov.horizontalDeg !== 'number') return null;
+
+  const horizontalDeg = raw.fov.horizontalDeg;
+  const verticalDeg = raw.fov.verticalDeg ?? 0;
+  const diagonalDeg = raw.fov.diagonalDeg ?? 0;
+  const imageCircleMm = typeof raw.imageCircle === 'number' ? raw.imageCircle : 0;
+
+  // Derive clipping from the sensor's diagonal vs the lens image circle, since the
+  // sanitized backend payload does not carry coverage. This matches the fixture path's
+  // clipping semantics so live and fixture scoring stay consistent.
+  const sensorDiagonalMm = Math.hypot(sensor.activeAreaMm.width, sensor.activeAreaMm.height);
+  const clipped = imageCircleMm > 0 && sensorDiagonalMm > imageCircleMm;
+  const widthPx = sensor.resolution.widthPx;
+  const heightPx = sensor.resolution.heightPx;
+
+  return {
+    sku: raw.partNum,
+    mount: raw.mount ?? 'unknown',
+    lensType: raw.lensType ?? 'lens',
+    eflMm: typeof raw.efl === 'number' ? raw.efl : 0,
+    fNumber: typeof raw.fNumber === 'number' ? raw.fNumber : 0,
+    imageCircleMm,
+    // The backend does not return a separate max-FoV ceiling; the diagonal FoV is a
+    // reasonable proxy for the wide/fisheye penalty used in scoring.
+    maxFovDeg: diagonalDeg,
+    productUrl: raw.url ?? '',
+    resolution: raw.resolution ?? 'unknown',
+    fov: {
+      horizontalDeg,
+      verticalDeg,
+      diagonalDeg,
+    },
+    imageCircle: {
+      clipped,
+      usedWidthMm: 0,
+      usedHeightMm: 0,
+      usedDiagonalMm: 0,
+      lensImageCircleMm: imageCircleMm,
+    },
+    angularResolution: {
+      horizontalPxPerDeg: horizontalDeg > 0 ? Math.round((widthPx / horizontalDeg) * 10) / 10 : 0,
+      verticalPxPerDeg: verticalDeg > 0 ? Math.round((heightPx / verticalDeg) * 10) / 10 : 0,
+    },
+    warnings: [],
+  };
 }
 
 async function computeFovWithLiveBackend(
@@ -1949,7 +2052,21 @@ function recommendationToolResult(
   id: unknown,
   sensorPartNumber: string,
   recommendations: LensRecommendation[],
+  source: 'fixture' | 'live' = 'fixture',
 ): Response {
+  if (source === 'live') {
+    return toolResult(id, {
+      schemaVersion: 'recommendations.v1',
+      correctionStatus: 'live_lambda_dynamodb_ranking',
+      source: 'aws-lambda-dynamodb-readonly',
+      sensor: { partNumber: sensorPartNumber.trim().toUpperCase() },
+      recommendations,
+      assumptions: [
+        'Ranking uses live FoV-backend specs and field-of-view for real catalog part numbers. It still excludes live Shopify stock, price, availability, and variant IDs. Use read_shopify_products for live purchasable product truth before final SKU, cart, or checkout decisions.',
+        'Scores are deterministic engineering heuristics for shortlist generation, not final optical design approval.',
+      ],
+    });
+  }
   return toolResult(id, {
     schemaVersion: 'recommendations.v1',
     correctionStatus: 'fixture_recommendation_scaffold',

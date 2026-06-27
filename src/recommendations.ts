@@ -45,6 +45,25 @@ export interface CompareLensesInput {
   workingDistanceMm?: number;
 }
 
+// Normalized lens record sourced from the LIVE FoV backend (AWS Lambda + DynamoDB
+// lens catalog). Carries the real specs and the backend's already-computed FoV, so
+// the ranking tools score against product truth instead of the scrambled fixture.
+export interface LiveLensInput {
+  sku: string;
+  mount: string;
+  lensType: string;
+  eflMm: number;
+  fNumber: number;
+  imageCircleMm: number;
+  maxFovDeg: number;
+  productUrl: string;
+  resolution: string;
+  fov: FovResult['fov'];
+  imageCircle: FovResult['imageCircle'];
+  angularResolution: FovResult['angularResolution'];
+  warnings: string[];
+}
+
 export function matchLensesToSensor(input: MatchLensesInput): LensRecommendation[] {
   const sensor = requireSensor(input.sensorPartNumber);
   const maxResults = clampMaxResults(input.maxResults);
@@ -79,6 +98,111 @@ export function compareLenses(input: CompareLensesInput): LensRecommendation[] {
     })
     .sort(sortRecommendations)
     .map((recommendation, index) => ({ ...recommendation, rank: index + 1 }));
+}
+
+// ----------------------------------------------------------------------------
+// LIVE-backed ranking (preferred). Consumes lens records from the live FoV backend
+// so specs and FoV reflect product truth. Scoring logic mirrors the fixture path;
+// only the data source differs. Availability is unknown (the FoV backend has no
+// stock signal); use read_shopify_products for live availability.
+// ----------------------------------------------------------------------------
+
+export function matchLensesToSensorLive(
+  lenses: LiveLensInput[],
+  input: MatchLensesInput,
+): LensRecommendation[] {
+  const maxResults = clampMaxResults(input.maxResults);
+  return lenses
+    .filter((lens) => (input.mount ? lens.mount.toLowerCase() === input.mount.trim().toLowerCase() : true))
+    .map((lens) => scoreLiveLens(lens, input))
+    .sort(sortRecommendations)
+    .slice(0, maxResults)
+    .map((recommendation, index) => ({ ...recommendation, rank: index + 1 }));
+}
+
+export function recommendLensesForApplicationLive(
+  lenses: LiveLensInput[],
+  input: RecommendApplicationInput,
+): LensRecommendation[] {
+  const base = matchLensesToSensorLive(lenses, { ...input, maxResults: lenses.length || 1 });
+  return base
+    .map((recommendation) => applyApplicationPreferences(recommendation, input))
+    .sort(sortRecommendations)
+    .slice(0, clampMaxResults(input.maxResults))
+    .map((recommendation, index) => ({ ...recommendation, rank: index + 1 }));
+}
+
+export function compareLensesLive(
+  lenses: LiveLensInput[],
+  input: CompareLensesInput,
+): LensRecommendation[] {
+  const bySku = new Map(lenses.map((lens) => [lens.sku.toUpperCase(), lens]));
+  const uniqueSkus = [...new Set(input.lensSkus.map((sku) => sku.trim().toUpperCase()))];
+  return uniqueSkus
+    .map((sku) => {
+      const lens = bySku.get(sku);
+      if (!lens) throw new Error(`Lens not found: ${sku}`);
+      return scoreLiveLens(lens, {
+        sensorPartNumber: input.sensorPartNumber,
+        ...(input.workingDistanceMm !== undefined ? { workingDistanceMm: input.workingDistanceMm } : {}),
+      });
+    })
+    .sort(sortRecommendations)
+    .map((recommendation, index) => ({ ...recommendation, rank: index + 1 }));
+}
+
+function scoreLiveLens(lens: LiveLensInput, input: MatchLensesInput): LensRecommendation {
+  let score = 100;
+  const tradeoffs: string[] = [];
+  const warnings = [...lens.warnings];
+
+  if (lens.imageCircle.clipped) {
+    score -= 30;
+    tradeoffs.push('Sensor active area exceeds lens image circle; FoV uses clipped sensor dimensions.');
+  } else {
+    score += 8;
+    tradeoffs.push('Lens image circle covers the full sensor active area.');
+  }
+
+  if (input.desiredHorizontalFovDeg !== undefined) {
+    const delta = Math.abs(lens.fov.horizontalDeg - input.desiredHorizontalFovDeg);
+    score -= Math.min(delta * 1.8, 45);
+    if (delta <= 5) tradeoffs.push('Horizontal FoV is within 5° of target.');
+    else if (delta <= 15) tradeoffs.push('Horizontal FoV is close but may need working-distance adjustment.');
+    else tradeoffs.push('Horizontal FoV is far from target; validate before sampling.');
+  }
+
+  // Live backend carries no stock signal; availability is unknown here.
+  tradeoffs.push('Availability is not included in FoV data; verify with read_shopify_products.');
+
+  if (lens.maxFovDeg > 100) {
+    score -= 6;
+    tradeoffs.push('Wide/fisheye-style candidate (high max FoV); expect more distortion at the edge.');
+  }
+
+  return {
+    lens: {
+      sku: lens.sku,
+      title: `${lens.sku} ${lens.mount} ${lens.lensType}`.trim(),
+      handle: lens.sku.toLowerCase(),
+      productUrl: lens.productUrl,
+      mount: lens.mount,
+      lensType: lens.lensType,
+      eflMm: lens.eflMm,
+      fNumber: lens.fNumber,
+      imageCircleMm: lens.imageCircleMm,
+      maxFovDeg: lens.maxFovDeg,
+      availability: 'unknown',
+    },
+    score: round(Math.max(0, Math.min(100, score)), 1),
+    rank: 0,
+    fit: fitFromScore(score),
+    fov: lens.fov,
+    imageCircle: lens.imageCircle,
+    angularResolution: lens.angularResolution,
+    tradeoffs,
+    warnings,
+  };
 }
 
 function scoreLens(

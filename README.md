@@ -37,7 +37,8 @@ Catalog EFL, image circle, max FoV/FOV@image-circle, and distortion display fiel
 
 1. `read_shopify_products` = live Shopify product truth.
 2. `compute_fov` / `compute_fov_catalog` = **live FoV backend** (AWS Lambda + DynamoDB lens catalog). `get_sensor_specs` = **live DynamoDB sensor catalog**. These return real optical truth, not fixture scaffold.
-3. Fixture catalog/recommendation/comparison/product-page tools = useful engineering context, not final commerce truth. If the live backend is ever unconfigured, FoV tools fail closed and sensor lookups fall back to a small reference fixture.
+3. Ranking tools (`match_lenses_to_sensor`, `recommend_lenses_for_application`, `compare_lenses`) rank against **live FoV-backend specs and field of view** when the live backend is enabled, so they use real per-SKU specs (EFL, mount, image circle, FoV). They still exclude live Shopify stock/price/variant IDs; use `read_shopify_products` for purchasable truth. If the live backend is unconfigured they fall back to fixture scaffold.
+4. The remaining fixture catalog/product-page tools = useful engineering context, not final commerce truth. If the live backend is ever unconfigured, FoV tools fail closed and sensor lookups fall back to a small reference fixture.
 
 If fixture data conflicts with `read_shopify_products` or the live FoV/sensor backends, use the live truth.
 
