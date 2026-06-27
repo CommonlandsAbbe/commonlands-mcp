@@ -2350,7 +2350,7 @@ describe('Commonlands MCP Worker', () => {
     expect(data.requestedPartNumber).toBe('IMX577');
   });
 
-  it('sends an explicit lens list to the live FoV backend in catalog mode', async () => {
+  it('sends fixture lens ids in catalog mode when the backend scan is not enabled', async () => {
     const liveEnv: Env = {
       ...env,
       FOV_LIVE_BACKEND_ENABLED: 'true',
@@ -2382,6 +2382,40 @@ describe('Commonlands MCP Worker', () => {
     const partNums = capturedBody?.partNums as unknown[];
     expect(Array.isArray(partNums)).toBe(true);
     expect(partNums.length).toBeGreaterThan(0);
+  });
+
+  it('omits partNums in catalog mode when the backend scans the full lens table', async () => {
+    const liveEnv: Env = {
+      ...env,
+      FOV_LIVE_BACKEND_ENABLED: 'true',
+      FOV_BACKEND_SCANS_FULL_CATALOG: 'true',
+      FOV_LAMBDA_ENDPOINT: 'https://ia97wrz7ag.execute-api.us-west-2.amazonaws.com/default/fov',
+      FOV_API_KEY: '***',
+    };
+
+    let capturedBody: JsonObject | undefined;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      capturedBody = JSON.parse(String(init?.body ?? '{}')) as JsonObject;
+      return new Response(
+        JSON.stringify({ sensor: { partNumber: 'IMX477' }, count: 0, lenses: [], errors: [] }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    }) as typeof fetch;
+
+    try {
+      await rpc(
+        'tools/call',
+        { name: 'compute_fov_catalog', arguments: { sensorPartNumber: 'IMX477' } },
+        'live-fov-catalog-scan',
+        liveEnv,
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    // Single-lens mode is unaffected; only catalog mode defers to the backend scan.
+    expect(capturedBody?.partNums).toBeUndefined();
   });
 
   it('surfaces the upstream HTTP status when the live FoV backend rejects a request', async () => {

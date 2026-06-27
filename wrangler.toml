@@ -17,6 +17,11 @@ invocation_logs = true
 [vars]
 FOV_LIVE_BACKEND_ENABLED = "true"
 FOV_LAMBDA_ENDPOINT = "https://ia97wrz7ag.execute-api.us-west-2.amazonaws.com/default/fov"
+# When "true", compute_fov_catalog omits partNums so the FoV Lambda scans its full
+# DynamoDB lens table (covers the entire live catalog, not the in-code fixture).
+# REQUIRES ALLOW_LENS_SCAN=true on the Lambda. Set to "false" to fall back to
+# sending the fixture SKUs if the Lambda scan is ever disabled.
+FOV_BACKEND_SCANS_FULL_CATALOG = "true"
 # Live sensor catalog (DynamoDB). Non-secret config lives here; credentials
 # (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY) are Worker secrets set via the
 # Cloudflare dashboard or `wrangler secret put`, never committed.
