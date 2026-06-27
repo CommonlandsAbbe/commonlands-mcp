@@ -7,3 +7,7 @@ coverage/
 .env.*
 !.env.example
 .DS_Store
+
+# MCP registry DNS auth keypair (never commit)
+registry-key.pem
+*.pem
