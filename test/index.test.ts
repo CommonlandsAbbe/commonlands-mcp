@@ -278,7 +278,7 @@ describe('Commonlands MCP Worker', () => {
       id: 1,
       result: {
         protocolVersion: '2025-11-25',
-        serverInfo: { name: 'commonlands-mcp', version: '0.1.3' },
+        serverInfo: { name: 'commonlands-mcp', version: '0.1.4' },
         capabilities: { tools: {}, resources: {} },
       },
     });
@@ -2093,6 +2093,32 @@ describe('Commonlands MCP Worker', () => {
     expect((top.lens as JsonObject).mount).toBe('M12');
     expect((top.fov as JsonObject).horizontalDeg).toBe(14);
     expect((top.lens as JsonObject).availability).toBe('unknown');
+  });
+
+  it('searches the LIVE catalog by lens type (telephoto returns all Telephoto lenses)', async () => {
+    const typeCatalog = {
+      sensor: { partNumber: 'IMX477' },
+      count: 3,
+      lenses: [
+        { partNum: 'CIL250', hfov: 14, vfov: 11, dfov: 18, efl: 25, image_circle: 9.4, lens_type: 'Telephoto', mount: 'M12', resolution: '10MP', f_num: 2, url: 'https://commonlands.com/products/a' },
+        { partNum: 'CIL900', hfov: 9, vfov: 7, dfov: 12, efl: 35, image_circle: 9, lens_type: 'Telephoto', mount: 'M12', resolution: '10MP', f_num: 2.4, url: 'https://commonlands.com/products/b' },
+        { partNum: 'CIL078', hfov: 87, vfov: 70, dfov: 110, efl: 2.8, image_circle: 6.6, lens_type: 'Wide-Angle', mount: 'M12', resolution: '5MP', f_num: 2.4, url: 'https://commonlands.com/products/c' },
+      ],
+      errors: [],
+    };
+    globalThis.fetch = (async () => Response.json(typeCatalog)) as typeof fetch;
+
+    const { body } = await rpc(
+      'tools/call',
+      { name: 'search_lenses', arguments: { query: 'telephoto', limit: 25 } },
+      'live-search-type',
+      liveRankingEnv,
+    );
+    const sc = getStructuredContent(body);
+    expect(sc.source).toBe('live-lambda-dynamodb-lens-catalog');
+    const skus = (sc.results as Array<JsonObject>).map((r) => r.sku);
+    expect(skus).toEqual(['CIL250', 'CIL900']);
+    expect(skus).not.toContain('CIL078');
   });
 
   it('compares lenses from LIVE data and errors on a SKU absent from the live catalog', async () => {
