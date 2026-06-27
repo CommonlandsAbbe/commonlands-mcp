@@ -2,6 +2,7 @@ import {
   assertSafePublicCatalogUrls,
   CATALOG_SNAPSHOT,
   FIXTURE_NOT_PRODUCT_TRUTH_WARNING,
+  getKnownSensorPartNumbers,
   getLensBySku,
   getSensorByPartNumber,
   searchLenses,
@@ -66,6 +67,7 @@ interface JsonRpcRequest {
 interface JsonRpcError {
   code: number;
   message: string;
+  data?: unknown;
 }
 
 interface ToolDefinition {
@@ -84,7 +86,7 @@ interface ToolAnnotations {
 
 const SERVER_INFO = {
   name: 'commonlands-mcp',
-  version: '0.1.0',
+  version: '0.1.1',
 } as const;
 
 const PUBLIC_MCP_ENDPOINT = 'https://mcp.commonlands.com/mcp';
@@ -818,6 +820,25 @@ async function writeMcpTelemetry(env: Env, request: Request, payload: JsonRpcReq
   }
 }
 
+// Build a generalizable "sensor not found" error. The fixture only carries a small
+// set of reference sensors; agents routinely ask for parts outside it (IMX577, etc.).
+// Returning the available part numbers in `data` lets callers self-correct instead of
+// retrying blindly. Do NOT hardcode one-off sensors here — the list is derived from the
+// snapshot so it stays correct as the catalog grows.
+function sensorNotFoundError(requested?: string): JsonRpcError {
+  const available = getKnownSensorPartNumbers();
+  const suffix = typeof requested === 'string' && requested.trim() !== '' ? `: ${requested}` : '';
+  return {
+    code: -32004,
+    message: `Sensor not found${suffix}`,
+    data: {
+      requestedPartNumber: typeof requested === 'string' ? requested : null,
+      availableSensorPartNumbers: available,
+      hint: 'This MCP exposes a fixed reference-sensor set. Use one of availableSensorPartNumbers, or provide explicit sensor dimensions to the FoV tools.',
+    },
+  };
+}
+
 function validateRpcRequest(payload: unknown): JsonRpcRequest | JsonRpcError {
   if (!isRecord(payload)) {
     return { code: -32600, message: 'Invalid Request' };
@@ -828,6 +849,23 @@ function validateRpcRequest(payload: unknown): JsonRpcRequest | JsonRpcError {
   }
 
   return payload;
+}
+
+// A JSON-RPC notification is a request with no id. The MCP client also namespaces
+// lifecycle notifications under notifications/* (for example notifications/initialized,
+// notifications/cancelled). Either signal means "do not send a response object".
+function isJsonRpcNotification(request: JsonRpcRequest): boolean {
+  if (typeof request.method === 'string' && request.method.startsWith('notifications/')) {
+    return true;
+  }
+  return request.id === undefined;
+}
+
+function acceptedNotification(): Response {
+  return new Response(null, {
+    status: 202,
+    headers: { 'content-type': 'application/json; charset=utf-8' },
+  });
 }
 
 function initializeResponse(id: unknown, params: unknown): Response {
@@ -1010,7 +1048,7 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
 
     const sensor = getSensorByPartNumber(args.partNumber);
     if (!sensor) {
-      return rpcError(id, { code: -32004, message: `Sensor not found: ${args.partNumber}` });
+      return rpcError(id, sensorNotFoundError(args.partNumber));
     }
 
     return toolResult(id, {
@@ -1032,7 +1070,7 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
     const sensorPartNumber = normalizeSafeIdentifier(args.sensorPartNumber as string);
     const sensor = getSensorByPartNumber(sensorPartNumber);
     if (!sensor) {
-      return rpcError(id, { code: -32004, message: 'Sensor not found' });
+      return rpcError(id, sensorNotFoundError(sensorPartNumber));
     }
 
     const workingDistanceMm = typeof args.workingDistanceMm === 'number' ? args.workingDistanceMm : undefined;
@@ -1065,7 +1103,7 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
     const sensorPartNumber = normalizeSafeIdentifier(args.sensorPartNumber as string);
     const sensor = getSensorByPartNumber(sensorPartNumber);
     if (!sensor) {
-      return rpcError(id, { code: -32004, message: 'Sensor not found' });
+      return rpcError(id, sensorNotFoundError(sensorPartNumber));
     }
 
     const workingDistanceMm = typeof args.workingDistanceMm === 'number' ? args.workingDistanceMm : undefined;
@@ -1405,7 +1443,13 @@ async function computeFovWithLiveBackend(
       pixpitch: sensor.pixelSizeUm,
       resolution: sensor.resolution,
     },
-    ...(input.lensSku ? { partNums: [input.lensSku] } : {}),
+    // Single mode targets one SKU; catalog mode must still send an explicit lens list
+    // so the backend is not forced to fall back to a full-table scan (which it refuses
+    // unless ALLOW_LENS_SCAN is enabled, returning 400 missing_lenses). Derive the list
+    // from the catalog snapshot so it stays correct as the catalog grows.
+    partNums: input.lensSku
+      ? [input.lensSku]
+      : CATALOG_SNAPSHOT.lenses.map((lens) => lens.sku).slice(0, FOV_CATALOG_MAX_RESULTS),
     ...(input.workingDistanceMm !== undefined ? { workingDistanceMm: input.workingDistanceMm } : {}),
   };
 
@@ -1432,7 +1476,19 @@ async function computeFovWithLiveBackend(
   }
 
   if (!response.ok) {
-    return { error: { code: response.status === 401 || response.status === 403 ? -32001 : -32603, message: 'Live FoV backend rejected request' } };
+    const isAuth = response.status === 401 || response.status === 403;
+    return {
+      error: {
+        code: isAuth ? -32001 : -32603,
+        message: isAuth
+          ? 'Live FoV backend rejected request: authentication failed'
+          : `Live FoV backend rejected request (upstream HTTP ${response.status})`,
+        data: {
+          upstreamStatus: response.status,
+          stage: 'live_fov_backend_response',
+        },
+      },
+    };
   }
 
   const resultLimit = input.lensSku ? FOV_SINGLE_MAX_RESULTS : FOV_CATALOG_MAX_RESULTS;
@@ -1974,6 +2030,16 @@ async function handleMcp(request: Request, env: Env): Promise<Response> {
   }
 
   parsedForTelemetry = parsed;
+
+  // JSON-RPC notifications carry no id and MUST NOT receive a response object.
+  // Per the MCP lifecycle the client sends notifications/initialized (and may send
+  // other notifications/*) after initialize; acknowledge with 202 and an empty body
+  // instead of replying "Method not found".
+  if (isJsonRpcNotification(parsed)) {
+    response = acceptedNotification();
+    await writeMcpTelemetry(env, request, parsedForTelemetry, response, startedAt);
+    return response;
+  }
 
   if (parsed.method === 'initialize') response = initializeResponse(parsed.id, parsed.params);
   else if (parsed.method === 'tools/list') response = toolListResponse(parsed.id, env);

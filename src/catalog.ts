@@ -241,6 +241,13 @@ export function getSensorByPartNumber(partNumber: string): SensorCatalogItem | u
   );
 }
 
+// Part numbers of every sensor present in the current catalog snapshot. Used to
+// build actionable "sensor not found" errors so callers can self-correct without
+// guessing. Stays generalizable: derived from the snapshot, never a hardcoded list.
+export function getKnownSensorPartNumbers(): string[] {
+  return CATALOG_SNAPSHOT.sensors.map((sensor) => sensor.partNumber);
+}
+
 export function assertSafePublicCatalogUrls(snapshot: CatalogSnapshot = CATALOG_SNAPSHOT): void {
   for (const lens of snapshot.lenses) {
     assertAllowedUrl(lens.productUrl, ['commonlands.com']);
