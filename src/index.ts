@@ -56,6 +56,7 @@ export interface Env {
   FOV_LIVE_BACKEND_ENABLED?: string;
   FOV_LAMBDA_ENDPOINT?: string;
   FOV_API_KEY?: string;
+  FOV_BACKEND_SCANS_FULL_CATALOG?: string;
   SENSOR_DDB_TABLE?: string;
   SENSOR_DDB_REGION?: string;
   AWS_ACCESS_KEY_ID?: string;
@@ -1391,6 +1392,14 @@ function isFovLiveBackendEnabled(env: Env): boolean {
   return env.FOV_LIVE_BACKEND_ENABLED === 'true';
 }
 
+// When true, catalog-mode compute_fov_catalog omits partNums and lets the FoV
+// backend scan its full DynamoDB lens table (requires ALLOW_LENS_SCAN on the
+// Lambda). When false, the Worker sends the in-code fixture SKUs as a fallback so
+// the request still resolves. Keeps Worker and Lambda lens-scan config in lockstep.
+function fovBackendScansFullCatalog(env: Env): boolean {
+  return env.FOV_BACKEND_SCANS_FULL_CATALOG === 'true';
+}
+
 interface LiveFovInput {
   lensSku?: string;
   sensorPartNumber: string;
@@ -1490,13 +1499,16 @@ async function computeFovWithLiveBackend(
       pixpitch: sensor.pixelSizeUm,
       resolution: sensor.resolution,
     },
-    // Single mode targets one SKU; catalog mode must still send an explicit lens list
-    // so the backend is not forced to fall back to a full-table scan (which it refuses
-    // unless ALLOW_LENS_SCAN is enabled, returning 400 missing_lenses). Derive the list
-    // from the catalog snapshot so it stays correct as the catalog grows.
-    partNums: input.lensSku
-      ? [input.lensSku]
-      : CATALOG_SNAPSHOT.lenses.map((lens) => lens.sku).slice(0, FOV_CATALOG_MAX_RESULTS),
+    // Single mode targets one SKU. Catalog mode prefers the backend's full lens table
+    // (the Lambda scans its DynamoDB lens catalog when no partNums are sent and
+    // ALLOW_LENS_SCAN is enabled), so FoV covers the whole live catalog rather than the
+    // small in-code fixture. When the backend scan is not enabled, fall back to sending
+    // the fixture SKUs so the request still resolves instead of 400 missing_lenses.
+    ...(input.lensSku
+      ? { partNums: [input.lensSku] }
+      : fovBackendScansFullCatalog(env)
+        ? {}
+        : { partNums: CATALOG_SNAPSHOT.lenses.map((lens) => lens.sku).slice(0, FOV_CATALOG_MAX_RESULTS) }),
     ...(input.workingDistanceMm !== undefined ? { workingDistanceMm: input.workingDistanceMm } : {}),
   };
 
