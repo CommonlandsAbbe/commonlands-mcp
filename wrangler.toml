@@ -2,6 +2,9 @@ name = "commonlands-mcp"
 main = "src/index.ts"
 compatibility_date = "2026-05-01"
 workers_dev = true
+# Pin the account so wrangler does not call /memberships (which an account-scoped
+# API token cannot access, surfacing as auth error 9106). Account ID is not secret.
+account_id = "14ca1f93f046023d8a189dc7b61032c0"
 
 [observability]
 
