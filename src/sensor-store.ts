@@ -69,13 +69,14 @@ function ddbNumber(item: DdbItem, key: string): number | undefined {
 /**
  * Map a raw DynamoDB sensor row into the catalog shape.
  *
- * Table attributes (Commonlands SensorData-*): sensortype (part number, e.g.
- * "IMX477"), sensormfg (manufacturer), sensorhpix / sensorvpix (active pixel
- * counts), sensorpitch (pixel pitch in microns). Active-area mm is derived as
- * pixels * pitch, which is what the FoV math consumes.
+ * Table attributes (Commonlands SensorData-*): id (partition key, holds the part
+ * number e.g. "ISX031"/"IMX477"), sensormfg (manufacturer), sensorhpix / sensorvpix
+ * (active pixel counts), sensorpitch (pixel pitch in microns), sensortype (shutter
+ * type, e.g. "Rolling"/"Global"). Active-area mm is derived as pixels * pitch, which
+ * is what the FoV math consumes.
  */
 function mapSensorItem(item: DdbItem): SensorCatalogItem | null {
-  const partNumber = ddbString(item, 'sensortype');
+  const partNumber = ddbString(item, 'id');
   const widthPx = ddbNumber(item, 'sensorhpix');
   const heightPx = ddbNumber(item, 'sensorvpix');
   const pixelSizeUm = ddbNumber(item, 'sensorpitch');
@@ -85,6 +86,7 @@ function mapSensorItem(item: DdbItem): SensorCatalogItem | null {
   }
 
   const manufacturer = ddbString(item, 'sensormfg') ?? 'unknown';
+  const shutterType = ddbString(item, 'sensortype');
   const widthMm = (widthPx * pixelSizeUm) / MICRONS_PER_MM;
   const heightMm = (heightPx * pixelSizeUm) / MICRONS_PER_MM;
 
@@ -98,6 +100,7 @@ function mapSensorItem(item: DdbItem): SensorCatalogItem | null {
       height: Number(heightMm.toFixed(4)),
     },
     pixelSizeUm,
+    ...(shutterType ? { shutterType } : {}),
   };
 }
 
