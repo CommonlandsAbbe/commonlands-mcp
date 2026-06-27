@@ -275,7 +275,7 @@ describe('Commonlands MCP Worker', () => {
       id: 1,
       result: {
         protocolVersion: '2025-11-25',
-        serverInfo: { name: 'commonlands-mcp', version: '0.1.0' },
+        serverInfo: { name: 'commonlands-mcp', version: '0.1.1' },
         capabilities: { tools: {}, resources: {} },
       },
     });
@@ -1860,7 +1860,7 @@ describe('Commonlands MCP Worker', () => {
     expect(lensesJson).not.toContain('beta');
   });
 
-  it('computes live catalog FoV for a sensor without sending lens ids', async () => {
+  it('computes live catalog FoV for a sensor and sends the catalog lens ids', async () => {
     let seenInit: RequestInit | undefined;
     globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
       seenInit = init;
@@ -1895,7 +1895,11 @@ describe('Commonlands MCP Worker', () => {
     const requestBody = JSON.parse(seenInit?.body as string) as Record<string, unknown>;
     const structuredContent = getStructuredContent(body);
 
-    expect(requestBody.partNums).toBeUndefined();
+    // Catalog mode must send an explicit lens list so the backend never has to fall
+    // back to a full-table scan (which it refuses with 400 missing_lenses). This is the
+    // root cause of the prod 100%-error rate on compute_fov_catalog.
+    expect(Array.isArray(requestBody.partNums)).toBe(true);
+    expect((requestBody.partNums as unknown[]).length).toBeGreaterThan(0);
     expect(structuredContent).toMatchObject({
       schemaVersion: 'optics.fov.live.v1',
       requested: { sensorPartNumber: 'IMX477' },
@@ -2276,6 +2280,177 @@ describe('Commonlands MCP Worker', () => {
       id: 'tools/call',
       error: { code: -32601, message: 'Tool not found: missing_tool' },
     });
+  });
+
+  it('acknowledges notifications/initialized with 202 and no response body', async () => {
+    const response = await fetchWorker('/mcp', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
+    });
+
+    expect(response.status).toBe(202);
+    expect(await response.text()).toBe('');
+  });
+
+  it('treats any id-less request as a notification rather than method-not-found', async () => {
+    const response = await fetchWorker('/mcp', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/cancelled', params: {} }),
+    });
+
+    expect(response.status).toBe(202);
+    expect(await response.text()).toBe('');
+  });
+
+  it('records accepted notifications as ok telemetry, not an error code', async () => {
+    const writes: Array<{ blobs?: string[]; doubles?: number[]; indexes?: string[] }> = [];
+    const requestEnv: Env = {
+      ...env,
+      MCP_ANALYTICS: {
+        writeDataPoint(dataPoint) {
+          writes.push(dataPoint);
+        },
+      },
+    };
+
+    const response = await fetchWorker('/mcp', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
+    }, requestEnv);
+
+    expect(response.status).toBe(202);
+    expect(writes).toHaveLength(1);
+    expect(writes[0]?.blobs?.[2]).toBe('notifications/initialized');
+    expect(writes[0]?.blobs?.[4]).toBe('ok');
+  });
+
+  it('returns an actionable error with available sensors when a sensor is not found', async () => {
+    const { body } = await rpc('tools/call', {
+      name: 'get_sensor_specs',
+      arguments: { partNumber: 'IMX577' },
+    });
+
+    expect(body).toMatchObject({
+      jsonrpc: '2.0',
+      error: {
+        code: -32004,
+        message: 'Sensor not found: IMX577',
+      },
+    });
+
+    const data = (body.error as JsonObject).data as JsonObject;
+    expect(Array.isArray(data.availableSensorPartNumbers)).toBe(true);
+    expect(data.availableSensorPartNumbers).toContain('IMX477');
+    expect(data.requestedPartNumber).toBe('IMX577');
+  });
+
+  it('sends an explicit lens list to the live FoV backend in catalog mode', async () => {
+    const liveEnv: Env = {
+      ...env,
+      FOV_LIVE_BACKEND_ENABLED: 'true',
+      FOV_LAMBDA_ENDPOINT: 'https://ia97wrz7ag.execute-api.us-west-2.amazonaws.com/default/fov',
+      FOV_API_KEY: '***',
+    };
+
+    let capturedBody: JsonObject | undefined;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      capturedBody = JSON.parse(String(init?.body ?? '{}')) as JsonObject;
+      return new Response(
+        JSON.stringify({ sensor: { partNumber: 'IMX477' }, count: 0, lenses: [], errors: [] }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    }) as typeof fetch;
+
+    try {
+      await rpc(
+        'tools/call',
+        { name: 'compute_fov_catalog', arguments: { sensorPartNumber: 'IMX477' } },
+        'live-fov-catalog',
+        liveEnv,
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const partNums = capturedBody?.partNums as unknown[];
+    expect(Array.isArray(partNums)).toBe(true);
+    expect(partNums.length).toBeGreaterThan(0);
+  });
+
+  it('surfaces the upstream HTTP status when the live FoV backend rejects a request', async () => {
+    const liveEnv: Env = {
+      ...env,
+      FOV_LIVE_BACKEND_ENABLED: 'true',
+      FOV_LAMBDA_ENDPOINT: 'https://ia97wrz7ag.execute-api.us-west-2.amazonaws.com/default/fov',
+      FOV_API_KEY: 'wrong-key',
+    };
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ error: 'unauthorized' }), {
+        status: 401,
+        headers: { 'content-type': 'application/json' },
+      })) as typeof fetch;
+
+    try {
+      const { body } = await rpc(
+        'tools/call',
+        { name: 'compute_fov_catalog', arguments: { sensorPartNumber: 'IMX477' } },
+        'live-fov-reject',
+        liveEnv,
+      );
+
+      expect(body).toMatchObject({
+        jsonrpc: '2.0',
+        error: { code: -32001 },
+      });
+      expect((body.error as JsonObject).message).toMatch(/authentication failed/i);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('surfaces the upstream HTTP status even when the live FoV backend rejection is not JSON', async () => {
+    const liveEnv: Env = {
+      ...env,
+      FOV_LIVE_BACKEND_ENABLED: 'true',
+      FOV_LAMBDA_ENDPOINT: 'https://ia97wrz7ag.execute-api.us-west-2.amazonaws.com/default/fov',
+      FOV_API_KEY: 'wrong-key',
+    };
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response('Bad gateway', {
+        status: 502,
+        headers: { 'content-type': 'text/plain' },
+      })) as typeof fetch;
+
+    try {
+      const { body } = await rpc(
+        'tools/call',
+        { name: 'compute_fov_catalog', arguments: { sensorPartNumber: 'IMX477' } },
+        'live-fov-non-json-reject',
+        liveEnv,
+      );
+
+      expect(body).toMatchObject({
+        jsonrpc: '2.0',
+        error: {
+          code: -32603,
+          data: {
+            upstreamStatus: 502,
+            stage: 'live_fov_backend_response',
+          },
+        },
+      });
+      expect((body.error as JsonObject).message).toContain('upstream HTTP 502');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it('rejects oversized MCP request bodies before parsing JSON', async () => {
