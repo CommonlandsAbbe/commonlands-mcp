@@ -275,7 +275,7 @@ describe('Commonlands MCP Worker', () => {
       id: 1,
       result: {
         protocolVersion: '2025-11-25',
-        serverInfo: { name: 'commonlands-mcp', version: '0.1.0' },
+        serverInfo: { name: 'commonlands-mcp', version: '0.1.1' },
         capabilities: { tools: {}, resources: {} },
       },
     });
@@ -2409,6 +2409,45 @@ describe('Commonlands MCP Worker', () => {
         error: { code: -32001 },
       });
       expect((body.error as JsonObject).message).toMatch(/authentication failed/i);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('surfaces the upstream HTTP status even when the live FoV backend rejection is not JSON', async () => {
+    const liveEnv: Env = {
+      ...env,
+      FOV_LIVE_BACKEND_ENABLED: 'true',
+      FOV_LAMBDA_ENDPOINT: 'https://ia97wrz7ag.execute-api.us-west-2.amazonaws.com/default/fov',
+      FOV_API_KEY: 'wrong-key',
+    };
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response('Bad gateway', {
+        status: 502,
+        headers: { 'content-type': 'text/plain' },
+      })) as typeof fetch;
+
+    try {
+      const { body } = await rpc(
+        'tools/call',
+        { name: 'compute_fov_catalog', arguments: { sensorPartNumber: 'IMX477' } },
+        'live-fov-non-json-reject',
+        liveEnv,
+      );
+
+      expect(body).toMatchObject({
+        jsonrpc: '2.0',
+        error: {
+          code: -32603,
+          data: {
+            upstreamStatus: 502,
+            stage: 'live_fov_backend_response',
+          },
+        },
+      });
+      expect((body.error as JsonObject).message).toContain('upstream HTTP 502');
     } finally {
       globalThis.fetch = originalFetch;
     }

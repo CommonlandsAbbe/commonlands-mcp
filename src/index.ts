@@ -1468,13 +1468,6 @@ async function computeFovWithLiveBackend(
     return { error: { code: -32603, message: 'Live FoV backend request failed' } };
   }
 
-  const parsed = await readJsonWithLimit<LiveFovResponse>(response, 'Live FoV backend', {
-    maxBytes: FOV_BACKEND_MAX_RESPONSE_BYTES,
-  });
-  if ('error' in parsed) {
-    return { error: { code: -32603, message: 'Live FoV backend returned invalid response' } };
-  }
-
   if (!response.ok) {
     const isAuth = response.status === 401 || response.status === 403;
     return {
@@ -1489,6 +1482,13 @@ async function computeFovWithLiveBackend(
         },
       },
     };
+  }
+
+  const parsed = await readJsonWithLimit<LiveFovResponse>(response, 'Live FoV backend', {
+    maxBytes: FOV_BACKEND_MAX_RESPONSE_BYTES,
+  });
+  if ('error' in parsed) {
+    return { error: { code: -32603, message: 'Live FoV backend returned invalid response' } };
   }
 
   const resultLimit = input.lensSku ? FOV_SINGLE_MAX_RESULTS : FOV_CATALOG_MAX_RESULTS;
