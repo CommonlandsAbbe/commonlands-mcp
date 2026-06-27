@@ -7,7 +7,13 @@ import {
   getSensorByPartNumber,
   searchLenses,
   type LensCatalogItem,
+  type SensorCatalogItem,
 } from './catalog';
+import {
+  getLiveSensorByPartNumber,
+  isSensorStoreConfigured,
+  listLiveSensors,
+} from './sensor-store';
 import { computeFov } from './optics';
 import { buildProductPageDetails } from './product-page';
 import { getPurchaseRouteOptions } from './purchase-routes';
@@ -50,6 +56,11 @@ export interface Env {
   FOV_LIVE_BACKEND_ENABLED?: string;
   FOV_LAMBDA_ENDPOINT?: string;
   FOV_API_KEY?: string;
+  SENSOR_DDB_TABLE?: string;
+  SENSOR_DDB_REGION?: string;
+  AWS_ACCESS_KEY_ID?: string;
+  AWS_SECRET_ACCESS_KEY?: string;
+  AWS_SESSION_TOKEN?: string;
   MCP_ANALYTICS?: AnalyticsEngineDataset;
 }
 
@@ -825,8 +836,7 @@ async function writeMcpTelemetry(env: Env, request: Request, payload: JsonRpcReq
 // Returning the available part numbers in `data` lets callers self-correct instead of
 // retrying blindly. Do NOT hardcode one-off sensors here — the list is derived from the
 // snapshot so it stays correct as the catalog grows.
-function sensorNotFoundError(requested?: string): JsonRpcError {
-  const available = getKnownSensorPartNumbers();
+function sensorNotFoundError(requested?: string, available: string[] = getKnownSensorPartNumbers()): JsonRpcError {
   const suffix = typeof requested === 'string' && requested.trim() !== '' ? `: ${requested}` : '';
   return {
     code: -32004,
@@ -834,9 +844,40 @@ function sensorNotFoundError(requested?: string): JsonRpcError {
     data: {
       requestedPartNumber: typeof requested === 'string' ? requested : null,
       availableSensorPartNumbers: available,
-      hint: 'This MCP exposes a fixed reference-sensor set. Use one of availableSensorPartNumbers, or provide explicit sensor dimensions to the FoV tools.',
+      hint: 'Use one of availableSensorPartNumbers, or provide explicit sensor dimensions to the FoV tools.',
     },
   };
+}
+
+// Resolve a sensor by part number, preferring the live DynamoDB sensor table
+// (real pixel size/count) and falling back to the in-code reference fixture when
+// the store is unconfigured or the part is absent there. Centralizes the lookup so
+// every tool path uses the same source-of-truth ordering.
+async function resolveSensor(env: Env, partNumber: string): Promise<SensorCatalogItem | undefined> {
+  if (isSensorStoreConfigured(env)) {
+    try {
+      const live = await getLiveSensorByPartNumber(env, partNumber);
+      if (live) return live;
+    } catch (error) {
+      console.error('[Sensor Store] lookup failed, falling back to fixture:', error);
+    }
+  }
+  return getSensorByPartNumber(partNumber);
+}
+
+// Build a sensor-not-found error whose availableSensorPartNumbers reflects the live
+// table when configured (so agents see the real catalogue), else the fixture set.
+async function sensorNotFoundErrorAsync(env: Env, requested?: string): Promise<JsonRpcError> {
+  let available = getKnownSensorPartNumbers();
+  if (isSensorStoreConfigured(env)) {
+    try {
+      const live = await listLiveSensors(env);
+      if (live.length > 0) available = live.map((sensor) => sensor.partNumber);
+    } catch (error) {
+      console.error('[Sensor Store] list failed, using fixture list for error hint:', error);
+    }
+  }
+  return sensorNotFoundError(requested, available);
 }
 
 function validateRpcRequest(payload: unknown): JsonRpcRequest | JsonRpcError {
@@ -1046,9 +1087,9 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
       return rpcError(id, { code: -32602, message: 'Invalid params: partNumber is required' });
     }
 
-    const sensor = getSensorByPartNumber(args.partNumber);
+    const sensor = await resolveSensor(env, args.partNumber);
     if (!sensor) {
-      return rpcError(id, sensorNotFoundError(args.partNumber));
+      return rpcError(id, await sensorNotFoundErrorAsync(env, args.partNumber));
     }
 
     return toolResult(id, {
@@ -1068,9 +1109,9 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
 
     const lensSku = normalizeSafeIdentifier(args.lensSku as string);
     const sensorPartNumber = normalizeSafeIdentifier(args.sensorPartNumber as string);
-    const sensor = getSensorByPartNumber(sensorPartNumber);
+    const sensor = await resolveSensor(env, sensorPartNumber);
     if (!sensor) {
-      return rpcError(id, sensorNotFoundError(sensorPartNumber));
+      return rpcError(id, await sensorNotFoundErrorAsync(env, sensorPartNumber));
     }
 
     const workingDistanceMm = typeof args.workingDistanceMm === 'number' ? args.workingDistanceMm : undefined;
@@ -1079,6 +1120,7 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
       const liveInput: LiveFovInput = {
         lensSku,
         sensorPartNumber,
+        sensor,
         ...(workingDistanceMm !== undefined ? { workingDistanceMm } : {}),
       };
       const liveResult = await computeFovWithLiveBackend(env, liveInput);
@@ -1101,9 +1143,9 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
     if (distanceError) return rpcError(id, distanceError);
 
     const sensorPartNumber = normalizeSafeIdentifier(args.sensorPartNumber as string);
-    const sensor = getSensorByPartNumber(sensorPartNumber);
+    const sensor = await resolveSensor(env, sensorPartNumber);
     if (!sensor) {
-      return rpcError(id, sensorNotFoundError(sensorPartNumber));
+      return rpcError(id, await sensorNotFoundErrorAsync(env, sensorPartNumber));
     }
 
     const workingDistanceMm = typeof args.workingDistanceMm === 'number' ? args.workingDistanceMm : undefined;
@@ -1111,6 +1153,7 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
     if (isFovLiveBackendEnabled(env)) {
       const liveInput: LiveFovInput = {
         sensorPartNumber,
+        sensor,
         ...(workingDistanceMm !== undefined ? { workingDistanceMm } : {}),
       };
       const liveResult = await computeFovWithLiveBackend(env, liveInput);
@@ -1352,6 +1395,10 @@ interface LiveFovInput {
   lensSku?: string;
   sensorPartNumber: string;
   workingDistanceMm?: number;
+  // Already-resolved sensor (live DynamoDB table or fixture). When provided, the
+  // live backend uses these real dimensions instead of re-looking-up the fixture,
+  // so DB-sourced pixel size/count flow into the FoV computation.
+  sensor?: SensorCatalogItem;
 }
 
 interface LiveFovResponse {
@@ -1429,7 +1476,7 @@ async function computeFovWithLiveBackend(
     return { error: { code: -32603, message: 'Live FoV backend is missing authentication configuration' } };
   }
 
-  const sensor = getSensorByPartNumber(input.sensorPartNumber);
+  const sensor = input.sensor ?? getSensorByPartNumber(input.sensorPartNumber);
   if (!sensor) {
     return { error: { code: -32004, message: 'Sensor not found' } };
   }

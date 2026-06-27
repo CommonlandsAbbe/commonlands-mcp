@@ -14,6 +14,11 @@ invocation_logs = true
 [vars]
 FOV_LIVE_BACKEND_ENABLED = "true"
 FOV_LAMBDA_ENDPOINT = "https://ia97wrz7ag.execute-api.us-west-2.amazonaws.com/default/fov"
+# Live sensor catalog (DynamoDB). Non-secret config lives here; credentials
+# (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY) are Worker secrets set via the
+# Cloudflare dashboard or `wrangler secret put`, never committed.
+SENSOR_DDB_TABLE = "SensorData-orz4gwks4bef7engytv7spr2ha-dev"
+SENSOR_DDB_REGION = "us-west-2"
 
 [[analytics_engine_datasets]]
 binding = "MCP_ANALYTICS"

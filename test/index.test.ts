@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import worker, { type Env } from '../src/index';
+import { signDynamoRequest } from '../src/aws-sigv4';
+import { __resetSensorStoreCacheForTests } from '../src/sensor-store';
 
 const env: Env = {
   ENVIRONMENT: 'test',
@@ -222,6 +224,7 @@ describe('Commonlands MCP Worker', () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    __resetSensorStoreCacheForTests();
   });
 
   it('returns deploy metadata from /healthz', async () => {
@@ -2652,6 +2655,116 @@ describe('Commonlands MCP Worker', () => {
     expect(handoff.warnings.join(' ')).toContain('No Shopify cart or checkout was created');
     expect(handoff.warnings.join(' ')).toContain('read_shopify_products');
     expect(JSON.stringify(handoff)).not.toMatch(/docsend|secret|shpat|signedUrl/i);
+  });
+
+  it('signs DynamoDB requests with a deterministic SigV4 authorization header', async () => {
+    const signed = await signDynamoRequest({
+      region: 'us-west-2',
+      credentials: { accessKeyId: 'AKIDEXAMPLE', secretAccessKey: 'secretkeyexample' },
+      target: 'Scan',
+      body: { TableName: 'SensorData' },
+      now: new Date('2026-06-27T19:30:00.000Z'),
+    });
+
+    expect(signed.url).toBe('https://dynamodb.us-west-2.amazonaws.com/');
+    expect(signed.headers['x-amz-target']).toBe('DynamoDB_20120810.Scan');
+    expect(signed.headers['x-amz-date']).toBe('20260627T193000Z');
+    expect(signed.headers.authorization).toMatch(
+      /^AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE\/20260627\/us-west-2\/dynamodb\/aws4_request, SignedHeaders=content-type;host;x-amz-content-sha256;x-amz-date;x-amz-target, Signature=[0-9a-f]{64}$/,
+    );
+    // Signing must be stable for identical inputs.
+    const again = await signDynamoRequest({
+      region: 'us-west-2',
+      credentials: { accessKeyId: 'AKIDEXAMPLE', secretAccessKey: 'secretkeyexample' },
+      target: 'Scan',
+      body: { TableName: 'SensorData' },
+      now: new Date('2026-06-27T19:30:00.000Z'),
+    });
+    expect(again.headers.authorization).toBe(signed.headers.authorization);
+  });
+
+  it('resolves get_sensor_specs from the live DynamoDB sensor table', async () => {
+    const sensorEnv: Env = {
+      ...env,
+      SENSOR_DDB_TABLE: 'SensorData-orz4gwks4bef7engytv7spr2ha-dev',
+      SENSOR_DDB_REGION: 'us-west-2',
+      AWS_ACCESS_KEY_ID: 'AKIDEXAMPLE',
+      AWS_SECRET_ACCESS_KEY: 'secretkeyexample',
+    };
+
+    const calls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      calls.push(String(input));
+      return Response.json({
+        Items: [
+          {
+            id: { S: 'uuid-1' },
+            sensortype: { S: 'IMX577' },
+            sensormfg: { S: 'Sony' },
+            sensorhpix: { N: '4056' },
+            sensorvpix: { N: '3040' },
+            sensorpitch: { N: '1.55' },
+          },
+        ],
+      });
+    }) as typeof fetch;
+
+    const { body } = await rpc(
+      'tools/call',
+      { name: 'get_sensor_specs', arguments: { partNumber: 'IMX577' } },
+      'live-sensor',
+      sensorEnv,
+    );
+
+    expect(calls[0]).toBe('https://dynamodb.us-west-2.amazonaws.com/');
+    const structuredContent = getStructuredContent(body);
+    expect(structuredContent.sensor).toMatchObject({
+      partNumber: 'IMX577',
+      manufacturer: 'Sony',
+      resolution: { widthPx: 4056, heightPx: 3040 },
+      pixelSizeUm: 1.55,
+    });
+    // Active-area mm derived from pixels * pitch.
+    const sensor = structuredContent.sensor as { activeAreaMm: { width: number; height: number } };
+    expect(sensor.activeAreaMm.width).toBeCloseTo(6.2868, 3);
+    expect(sensor.activeAreaMm.height).toBeCloseTo(4.712, 3);
+  });
+
+  it('lists live sensor part numbers in the not-found error when the store is configured', async () => {
+    const sensorEnv: Env = {
+      ...env,
+      SENSOR_DDB_TABLE: 'SensorData-orz4gwks4bef7engytv7spr2ha-dev',
+      SENSOR_DDB_REGION: 'us-west-2',
+      AWS_ACCESS_KEY_ID: 'AKIDEXAMPLE',
+      AWS_SECRET_ACCESS_KEY: 'secretkeyexample',
+    };
+
+    globalThis.fetch = (async () =>
+      Response.json({
+        Items: [
+          { id: { S: 'u1' }, sensortype: { S: 'IMX477' }, sensormfg: { S: 'Sony' }, sensorhpix: { N: '4056' }, sensorvpix: { N: '3040' }, sensorpitch: { N: '1.55' } },
+          { id: { S: 'u2' }, sensortype: { S: 'AR0521' }, sensormfg: { S: 'onsemi' }, sensorhpix: { N: '2592' }, sensorvpix: { N: '1944' }, sensorpitch: { N: '2.2' } },
+        ],
+      })) as typeof fetch;
+
+    const { body } = await rpc(
+      'tools/call',
+      { name: 'get_sensor_specs', arguments: { partNumber: 'DOES_NOT_EXIST' } },
+      'live-sensor-missing',
+      sensorEnv,
+    );
+
+    expect(body).toMatchObject({ error: { code: -32004 } });
+    const data = (body.error as JsonObject).data as JsonObject;
+    expect(data.availableSensorPartNumbers).toEqual(['IMX477', 'AR0521']);
+  });
+
+  it('falls back to the fixture when the sensor store is not configured', async () => {
+    const { body } = await rpc('tools/call', {
+      name: 'get_sensor_specs',
+      arguments: { partNumber: 'IMX477' },
+    });
+    expect(getStructuredContent(body).sensor).toMatchObject({ partNumber: 'IMX477' });
   });
 
 });
