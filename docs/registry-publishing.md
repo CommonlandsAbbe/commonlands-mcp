@@ -16,8 +16,8 @@ registry caps `title` and `description` at **100 characters each**. `server.json
 is therefore written to pack the priority keywords into those fields:
 
 - **name:** `com.commonlands/optics-mcp`
-- **title:** Commonlands Optics: M12 & C-Mount Lens Finder + Field-of-View Calculator
-- **description:** M12 & C-mount machine-vision lens finder with image-sensor matching and field-of-view calculator.
+- **title:** Commonlands Optics: M12 Lens and C-Mount Lens Finder + Field-of-View Calculator
+- **description:** M12 lens and C-mount lens finder with image-sensor matching and field-of-view calculator.
 - **websiteUrl:** points at the GEO-optimized agentic page, which carries the
   long-tail keywords (depth-of-field calculator, effective focal length, sensor
   reference, etc.) that don't fit the 100-char limit.
@@ -29,8 +29,17 @@ keep those keyword-aware when editing `src/index.ts`.
 ## Prerequisites
 
 - The [`mcp-publisher`](https://github.com/modelcontextprotocol/registry) CLI.
-- OpenSSL 3 (required for Ed25519; macOS ships LibreSSL, install OpenSSL 3 via
-  Homebrew first).
+  - **Windows (PowerShell):** download the latest release binary, e.g.
+    ```powershell
+    Invoke-WebRequest -Uri "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_windows_amd64.tar.gz" -OutFile "mcp-publisher.tar.gz"
+    tar xf mcp-publisher.tar.gz mcp-publisher.exe
+    ```
+    then put `mcp-publisher.exe` somewhere on your `PATH`.
+  - **macOS:** `brew install mcp-publisher`.
+  - **From source:** `git clone https://github.com/modelcontextprotocol/registry && cd registry && make publisher` (needs Go 1.24+).
+- OpenSSL 3 (required for Ed25519). On Windows, Git Bash already ships OpenSSL 3 —
+  run the keypair commands below in Git Bash. macOS ships LibreSSL, so install
+  OpenSSL 3 via Homebrew first.
 - Access to Commonlands DNS (to add a TXT record at the `commonlands.com` apex).
 
 ## One-time: DNS verification for the `com.commonlands` namespace
