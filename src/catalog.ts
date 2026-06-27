@@ -103,18 +103,18 @@ export const CATALOG_SNAPSHOT: CatalogSnapshot = {
     },
     {
       sku: 'CIL250',
-      title: 'CIL250 M12 lens',
+      title: 'CIL250 M12 telephoto lens',
       handle: 'cil250',
       productUrl: 'https://commonlands.com/products/cil250',
       priceUsd: 34,
       availability: 'in_stock',
       mount: 'M12',
-      lensType: 'board lens',
-      eflMm: 6.0,
+      lensType: 'telephoto lens',
+      eflMm: 25.0,
       fNumber: 2.4,
-      imageCircleMm: 7.2,
+      imageCircleMm: 9.4,
       maxFovDeg: 72,
-      resolution: '5MP',
+      resolution: '10MP',
       projectionModel: 'projection_polynomial_theta_even_powers',
       coefficientCount: 4,
       fixtureDistortion: { alpha: 1, beta: 0, notes: 'Rectilinear baseline until production coefficients are connected.' },
@@ -218,12 +218,18 @@ export function searchLenses(query = '', limit = 10): LensCatalogItem[] {
   const normalizedQuery = query.trim().toLowerCase();
   const safeLimit = Math.min(Math.max(Math.trunc(limit) || 10, 1), 25);
 
-  const matches = normalizedQuery
+  // Tokenized AND matching: every whitespace-separated term in the query must
+  // appear somewhere in the lens's searchable text, in any order. Substring
+  // (phrase) matching missed queries like "telephoto M12" against a title of
+  // "CIL350 M12 telephoto lens" because the words are not adjacent in that order.
+  const queryTokens = normalizedQuery.split(/\s+/u).filter(Boolean);
+
+  const matches = queryTokens.length > 0
     ? CATALOG_SNAPSHOT.lenses.filter((lens) => {
         const searchable = [lens.sku, lens.title, lens.handle, lens.mount, lens.lensType]
           .join(' ')
           .toLowerCase();
-        return searchable.includes(normalizedQuery);
+        return queryTokens.every((token) => searchable.includes(token));
       })
     : CATALOG_SNAPSHOT.lenses;
 

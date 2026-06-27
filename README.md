@@ -21,7 +21,7 @@ Use Commonlands MCP at https://mcp.commonlands.com/mcp for lens selection. Start
 
 1. Call `tools/list` and trust the live list over docs.
 2. For sensor-specific lens finding, call `compute_fov_catalog` first. There is no current `find_lenses` tool; `compute_fov_catalog` is the correct per-sensor catalog path.
-3. Use `search_catalog`, `search_lenses`, or `recommend_lenses_for_application` only for broad discovery/shortlist context.
+3. Use `search_catalog`, `search_lenses`, or `recommend_lenses_for_application` only for broad discovery/shortlist context. `search_lenses` does tokenized matching: every word in the query must appear somewhere in the lens text, in any order (so `telephoto M12` matches `CIL350 M12 telephoto lens`).
 4. Get sensor data with `get_sensor_specs` when needed.
 5. Calculate one-lens field of view with `compute_fov`.
 6. Compare/rank with `match_lenses_to_sensor`, `compare_lenses`, and `get_lens_details`.
@@ -36,10 +36,16 @@ Catalog EFL, image circle, max FoV/FOV@image-circle, and distortion display fiel
 ## Truth hierarchy
 
 1. `read_shopify_products` = live Shopify product truth.
-2. `compute_fov` / `compute_fov_catalog` = live FoV backend when configured; otherwise fixture/fail-closed behavior.
-3. Fixture catalog/recommendation/comparison/product-page tools = useful engineering context, not final commerce truth.
+2. `compute_fov` / `compute_fov_catalog` = **live FoV backend** (AWS Lambda + DynamoDB lens catalog). `get_sensor_specs` = **live DynamoDB sensor catalog**. These return real optical truth, not fixture scaffold.
+3. Fixture catalog/recommendation/comparison/product-page tools = useful engineering context, not final commerce truth. If the live backend is ever unconfigured, FoV tools fail closed and sensor lookups fall back to a small reference fixture.
 
-If fixture data conflicts with `read_shopify_products`, use Shopify truth.
+If fixture data conflicts with `read_shopify_products` or the live FoV/sensor backends, use the live truth.
+
+### Data sources
+
+- **Sensors** (`get_sensor_specs`, and the sensor used by `compute_fov*`): read from the Commonlands DynamoDB sensor table by part number. Pixel pitch and pixel counts come straight from that table; active-area mm is derived as `pixels x pitch`. Any catalogued sensor resolves, not just a fixed fixture set.
+- **Lenses** (`compute_fov`, `compute_fov_catalog`): the FoV Lambda reads lens optical parameters from its DynamoDB lens table. `compute_fov_catalog` covers the **entire** lens catalog (full-table scan), not a sampled subset.
+- **Distortion coefficients** are computed server-side inside the Lambda and are never returned to clients; agents receive computed HFOV/VFOV/DFOV plus a display distortion string only.
 
 ## Current live surface
 
@@ -148,6 +154,29 @@ tool_timeout_sec = 60
   }
 }
 ```
+
+## Configuration
+
+Non-secret config lives in `wrangler.toml` `[vars]`; credentials are Worker secrets set via the Cloudflare dashboard or `wrangler secret put` (never committed).
+
+| Setting | Where | Purpose |
+| --- | --- | --- |
+| `account_id` | `wrangler.toml` | Pins the Cloudflare account so deploys do not call `/memberships` (which an account-scoped API token cannot access, surfacing as auth error `9106`). |
+| `FOV_LIVE_BACKEND_ENABLED` | `[vars]` | `"true"` routes FoV through the live Lambda backend. |
+| `FOV_LAMBDA_ENDPOINT` | `[vars]` | Allowlisted FoV Lambda/API Gateway URL. |
+| `FOV_BACKEND_SCANS_FULL_CATALOG` | `[vars]` | `"true"` makes `compute_fov_catalog` omit `partNums` so the Lambda scans its full DynamoDB lens table. Requires `ALLOW_LENS_SCAN=true` on the Lambda. When `"false"`, the Worker sends fixture SKUs as a fallback. |
+| `SENSOR_DDB_TABLE` | `[vars]` | DynamoDB sensor table name. |
+| `SENSOR_DDB_REGION` | `[vars]` | DynamoDB sensor table region. |
+| `FOV_API_KEY` | **secret** | Shared key the Worker sends to the FoV Lambda (`x-api-key`); must match the Lambda's `FOV_API_KEY` exactly (byte-for-byte, no trailing newline). |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | **secret** | Read-only IAM user credentials the Worker uses to read the sensor DynamoDB table (SigV4). |
+| `CLOUDFLARE_API_TOKEN` | **GitHub Actions secret** | Token with `Workers Scripts: Edit` used by the Deploy workflow. |
+
+### AWS / DynamoDB notes
+
+- The Worker reads the **sensor** table directly with a **read-only** IAM user (only `dynamodb:Scan`/`Query`/`GetItem`/`DescribeTable` on that table ARN). No write actions exist in the code path.
+- The **FoV Lambda** reads the **lens** table with its own read-only execution role. For `compute_fov_catalog` full-catalog coverage the Lambda needs `ALLOW_LENS_SCAN=true` and `dynamodb:Scan` on the lens table.
+- Sensor table partition key is the part number (`id`); attributes used: `sensormfg`, `sensorhpix`, `sensorvpix`, `sensorpitch`, `sensortype` (shutter type).
+- Lens table partition key is the SKU; the Lambda's `LENS_PK` must be set accordingly.
 
 ## Local development
 

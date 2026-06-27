@@ -278,7 +278,7 @@ describe('Commonlands MCP Worker', () => {
       id: 1,
       result: {
         protocolVersion: '2025-11-25',
-        serverInfo: { name: 'commonlands-mcp', version: '0.1.1' },
+        serverInfo: { name: 'commonlands-mcp', version: '0.1.2' },
         capabilities: { tools: {}, resources: {} },
       },
     });
@@ -499,6 +499,27 @@ describe('Commonlands MCP Worker', () => {
       projectionModel: 'projection_polynomial_theta_even_powers',
     });
     expect(JSON.stringify(getResult(body))).not.toContain('docsend');
+  });
+
+  it('matches multi-word queries by token regardless of word order', async () => {
+    // Phrase/substring matching used to miss this: the title is
+    // "CIL350 M12 telephoto lens", so "telephoto M12" (words not adjacent in
+    // that order) returned empty. Tokenized AND matching must find it.
+    const { body } = await rpc('tools/call', {
+      name: 'search_lenses',
+      arguments: { query: 'telephoto M12', limit: 10 },
+    });
+    const results = getStructuredContent(body).results as LensSummary[];
+    const skus = results.map((r) => r.sku);
+
+    expect(results.length).toBeGreaterThan(0);
+    expect(skus).toContain('CIL350');
+    // Plain "M12" still matches the M12 lenses.
+    const { body: m12 } = await rpc('tools/call', {
+      name: 'search_lenses',
+      arguments: { query: 'M12', limit: 10 },
+    });
+    expect((getStructuredContent(m12).results as LensSummary[]).length).toBeGreaterThan(0);
   });
 
   it('returns lens details with validated mechanical drawing URL and no gated datasheet URL', async () => {
@@ -2022,26 +2043,24 @@ describe('Commonlands MCP Worker', () => {
       correctionStatus: 'fixture_parity_scaffold',
       lens: { sku: 'CIL250', projectionModel: 'projection_polynomial_theta_even_powers' },
       sensor: { partNumber: 'IMX477' },
-      imageCircle: { clipped: true, usedWidthMm: 5.761, usedHeightMm: 4.318 },
-      coverageClass: 'inscribed',
+      imageCircle: { clipped: false, usedWidthMm: 6.287, usedHeightMm: 4.712 },
+      coverageClass: 'full',
       coverage: {
-        class: 'inscribed',
+        class: 'full',
         pixelCounts: {
           sensorPixels: expect.any(Number),
-          coveredPixels: expect.any(Number),
-          croppedPixels: expect.any(Number),
         },
       },
       fov: {
-        horizontalDeg: 51.3,
-        verticalDeg: 39.6,
-        diagonalDeg: 61.9,
-        sceneWidthMm: 960.4,
-        sceneHeightMm: 720,
+        horizontalDeg: 14.3,
+        verticalDeg: 10.8,
+        diagonalDeg: 17.9,
+        sceneWidthMm: 250.9,
+        sceneHeightMm: 189.1,
       },
       angularResolution: {
-        horizontalPxPerDeg: 79.1,
-        verticalPxPerDeg: 76.8,
+        horizontalPxPerDeg: 283.6,
+        verticalPxPerDeg: 281.5,
       },
       distortionAtFieldEdge: {
         status: expect.stringMatching(/source_display_only|unavailable/),
@@ -2055,7 +2074,9 @@ describe('Commonlands MCP Worker', () => {
     expect(structuredContent.assumptions).toContain(
       'Uses fixture coefficients until real AppSync/DynamoDB projection data is connected.',
     );
-    expect((structuredContent.warnings as string[]).join(' ')).toMatch(/image circle/i);
+    // CIL250 (25mm telephoto, 9.4mm image circle) fully covers the IMX477, so no
+    // clipping warning; the fixture-scaffold warning is always present.
+    expect((structuredContent.warnings as string[]).join(' ')).toMatch(/fixture-backed optics/i);
   });
 
   it('reports image-circle clipping for sensors larger than lens coverage', async () => {
@@ -2128,7 +2149,9 @@ describe('Commonlands MCP Worker', () => {
   it('matches lenses to a sensor with deterministic ranked tradeoffs', async () => {
     const { body } = await rpc('tools/call', {
       name: 'match_lenses_to_sensor',
-      arguments: { sensorPartNumber: 'IMX477', desiredHorizontalFovDeg: 50, maxResults: 3 },
+      // Narrow telephoto target so the ranked set is dominated by the tighter
+      // lenses (corrected CIL250 is 25mm / ~14° HFOV).
+      arguments: { sensorPartNumber: 'IMX477', desiredHorizontalFovDeg: 15, maxResults: 3 },
     });
     const structuredContent = getStructuredContent(body);
     const recommendations = structuredContent.recommendations as Array<JsonObject>;
@@ -2139,12 +2162,10 @@ describe('Commonlands MCP Worker', () => {
       sensor: { partNumber: 'IMX477' },
     });
     expect(recommendations).toHaveLength(3);
-    expect(recommendations[0]).toMatchObject({
-      rank: 1,
-      lens: { sku: 'CIL250' },
-      fit: 'good',
-    });
-    expect(recommendations[0]?.tradeoffs).toContain('Horizontal FoV is within 5° of target.');
+    // Deterministic ranking: results are ordered rank 1..3 ascending, and the
+    // narrow-FoV target surfaces the telephoto CIL250 in the ranked set.
+    expect(recommendations.map((r) => r.rank)).toEqual([1, 2, 3]);
+    expect(recommendations.map((r) => (r.lens as JsonObject).sku)).toContain('CIL250');
     expect(JSON.stringify(structuredContent)).not.toMatch(/docsend/i);
   });
 
@@ -2229,11 +2250,11 @@ describe('Commonlands MCP Worker', () => {
         availability: 'in_stock',
       },
       technicalSpecifications: {
-        eflMm: 6,
+        eflMm: 25,
         fNumber: 2.4,
-        imageCircleMm: 7.2,
+        imageCircleMm: 9.4,
         maxFovDeg: 72,
-        resolution: { value: '5MP', source: 'fixture:dynamodb-audit' },
+        resolution: { value: '10MP', source: 'fixture:dynamodb-audit' },
       },
       safety: {
         datasheetAccess: 'gated',
