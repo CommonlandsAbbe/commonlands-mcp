@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import worker, { type Env } from '../src/index';
+import worker, { __resetLiveCatalogResponseCacheForTests, type Env } from '../src/index';
 import { signDynamoRequest } from '../src/aws-sigv4';
 import { __resetSensorStoreCacheForTests } from '../src/sensor-store';
 
@@ -34,6 +34,14 @@ const shopifyCheckoutBasicEnv: Env = {
 const shopifyCheckoutEnv: Env = {
   ...shopifyCheckoutBasicEnv,
   ENABLE_EXTRA_CHECKOUT_MUTATION_TOOLS: 'true',
+};
+
+const liveFovEnv: Env = {
+  ...env,
+  FOV_LIVE_BACKEND_ENABLED: 'true',
+  FOV_BACKEND_SCANS_FULL_CATALOG: 'true',
+  FOV_LAMBDA_ENDPOINT: 'https://ia97wrz7ag.execute-api.us-west-2.amazonaws.com/default/fov',
+  FOV_API_KEY: 'test-secret-never-return',
 };
 
 type JsonObject = Record<string, unknown>;
@@ -185,6 +193,30 @@ function getStructuredContent(body: JsonObject): JsonObject {
   return result.structuredContent as JsonObject;
 }
 
+function liveLensCatalogResponse(lenses: Array<Record<string, unknown>> = [
+  {
+    partNum: 'CIL061',
+    hfov: 44.2,
+    vfov: 34.1,
+    dfov: 54.9,
+    efl: 6,
+    image_circle: 7.4,
+    lens_type: 'Mid-Range',
+    mount: 'M12',
+    resolution: '3MP',
+    f_num: 1.9,
+    distortion: '1.2%',
+    url: 'https://commonlands.com/products/fast-6mm-m12-lens-cil061',
+  },
+]): JsonObject {
+  return {
+    sensor: { partNumber: 'IMX477', hsize: 6.287, vsize: 4.712, dsize: 7.857 },
+    count: lenses.length,
+    lenses,
+    errors: [],
+  };
+}
+
 function metafield(namespace: string, key: string, type: string, value: string): JsonObject {
   return { namespace, key, type, value, reference: null };
 }
@@ -227,6 +259,7 @@ describe('Commonlands MCP Worker', () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    __resetLiveCatalogResponseCacheForTests();
     __resetSensorStoreCacheForTests();
   });
 
@@ -661,6 +694,69 @@ describe('Commonlands MCP Worker', () => {
         distortion_status: 'source_display_only',
       },
     });
+  });
+
+  it('exposes live lens catalog resources such as CIL061 and lowercase sensor URIs', async () => {
+    globalThis.fetch = (async () => Response.json(liveLensCatalogResponse())) as typeof fetch;
+
+    const listed = await rpc('resources/list', undefined, 'live-resource-list', liveFovEnv);
+    const resources = getResult(listed.body).resources as ResourceSummary[];
+    expect(resources.map((resource) => resource.uri)).toContain('commonlands://lenses/CIL061');
+
+    const sensorRead = await rpc('resources/read', { uri: 'commonlands://sensors/ar0234' }, 'lowercase-sensor', liveFovEnv);
+    const sensorContents = getResult(sensorRead.body).contents as Array<JsonObject>;
+    const sensorParsed = JSON.parse(sensorContents[0]?.text as string) as JsonObject;
+    expect(sensorParsed).toMatchObject({
+      schemaVersion: 'commonlands.sensor_resource.v1',
+      sensor: { partNumber: 'AR0234' },
+    });
+
+    globalThis.fetch = (async () => Response.json(liveLensCatalogResponse())) as typeof fetch;
+    const lensRead = await rpc('resources/read', { uri: 'commonlands://lenses/CIL061' }, 'live-lens-resource', liveFovEnv);
+    const lensContents = getResult(lensRead.body).contents as Array<JsonObject>;
+    const lensParsed = JSON.parse(lensContents[0]?.text as string) as JsonObject;
+    expect(lensParsed).toMatchObject({
+      schemaVersion: 'commonlands.lens_resource.v1',
+      lens: {
+        sku: 'CIL061',
+        source: 'live-lambda-dynamodb-lens-catalog',
+        eflMm: 6,
+        imageCircleMm: 7.4,
+        productUrl: 'https://commonlands.com/products/fast-6mm-m12-lens-cil061',
+      },
+      distortionProfile: {
+        lens_sku: 'CIL061',
+        distortion_status: 'source_display_only',
+        correction_status: 'source_display_only_no_measured_polynomial_correction_claim',
+      },
+      latencyTarget: {
+        calculator_p95_ms: 1500,
+      },
+    });
+  });
+
+  it('returns actionable lens resource errors instead of pushing agents back to self-computing', async () => {
+    globalThis.fetch = (async () => Response.json(liveLensCatalogResponse())) as typeof fetch;
+
+    const { body } = await rpc(
+      'resources/read',
+      { uri: 'commonlands://lenses/CIL000' },
+      'missing-lens-resource',
+      liveFovEnv,
+    );
+
+    expect(body).toMatchObject({
+      error: {
+        code: -32004,
+        message: 'Lens not found: CIL000',
+        data: {
+          requestedSku: 'CIL000',
+          retryToolName: 'search_lens_catalog',
+          retryArguments: { query: 'CIL000', limit: 5 },
+        },
+      },
+    });
+    expect(JSON.stringify((body.error as JsonObject).data)).toMatch(/Do not self-compute/i);
   });
 
   it('lists and returns the lens-selection MCP prompt', async () => {
@@ -2188,8 +2284,17 @@ describe('Commonlands MCP Worker', () => {
     });
 
     expect(body).toMatchObject({
-      error: { code: -32603, message: 'Live FoV backend is missing authentication configuration' },
+      error: {
+        code: -32603,
+        message: 'Live FoV backend is missing authentication configuration: FOV_API_KEY is required',
+        data: {
+          missingParam: 'FOV_API_KEY',
+          stage: 'live_fov_backend_auth_config',
+          retryToolName: 'calculate_field_of_view',
+        },
+      },
     });
+    expect(JSON.stringify((body.error as JsonObject).data)).toMatch(/Do not self-compute FoV/i);
   });
 
   const liveRankingEnv: Env = {
@@ -2281,6 +2386,96 @@ describe('Commonlands MCP Worker', () => {
     const skus = (sc.results as Array<JsonObject>).map((r) => r.sku);
     expect(skus).toEqual(['CIL250', 'CIL900']);
     expect(skus).not.toContain('CIL078');
+  });
+
+  it('routes canonical agent queries through the intended optics tools', async () => {
+    const canonicalEvals = [
+      {
+        query: 'find me a 60 degree lens on the AR0234',
+        expectedTool: 'match_lens_to_sensor',
+        call: {
+          name: 'match_lens_to_sensor',
+          arguments: { sensor: 'AR0234', desired_horizontal_fov_deg: 60, max_results: 5 },
+        },
+      },
+      {
+        query: 'HFOV of CIL061 on AR0234',
+        expectedTool: 'calculate_field_of_view',
+        call: {
+          name: 'calculate_field_of_view',
+          arguments: { lens_sku: 'CIL061', sensor: 'AR0234' },
+        },
+      },
+    ];
+    const routedTools: string[] = [];
+    const catalog = liveLensCatalogResponse([
+      {
+        partNum: 'CIL061',
+        hfov: 44.2,
+        vfov: 34.1,
+        dfov: 54.9,
+        efl: 6,
+        image_circle: 7.4,
+        lens_type: 'Mid-Range',
+        mount: 'M12',
+        distortion: '1.2%',
+      },
+      {
+        partNum: 'CIL078',
+        hfov: 60.5,
+        vfov: 47.3,
+        dfov: 72.8,
+        efl: 2.8,
+        image_circle: 6.6,
+        lens_type: 'Wide-Angle',
+        mount: 'M12',
+        distortion: '8.0%',
+      },
+    ]);
+
+    for (const item of canonicalEvals) {
+      globalThis.fetch = (async () => Response.json(catalog)) as typeof fetch;
+      routedTools.push(item.call.name);
+      const { body } = await rpc('tools/call', item.call, `routing-eval:${item.query}`, liveFovEnv);
+      expect(body.error).toBeUndefined();
+    }
+
+    expect(routedTools).toContain('match_lens_to_sensor');
+    expect(routedTools).toContain('calculate_field_of_view');
+    for (const item of canonicalEvals) {
+      expect(routedTools).toContain(item.expectedTool);
+    }
+  });
+
+  it('caches successful live catalog responses for repeated matching/resource grounding calls', async () => {
+    let fetchCount = 0;
+    globalThis.fetch = (async () => {
+      fetchCount += 1;
+      return Response.json(liveLensCatalogResponse([
+        {
+          partNum: 'CIL078',
+          hfov: 60.5,
+          vfov: 47.3,
+          dfov: 72.8,
+          efl: 2.8,
+          image_circle: 6.6,
+          lens_type: 'Wide-Angle',
+          mount: 'M12',
+        },
+      ]));
+    }) as typeof fetch;
+
+    for (let index = 0; index < 2; index += 1) {
+      const { body } = await rpc(
+        'tools/call',
+        { name: 'match_lens_to_sensor', arguments: { sensor: 'IMX477', desired_horizontal_fov_deg: 60, max_results: 5 } },
+        `live-match-cache-${index}`,
+        liveFovEnv,
+      );
+      expect(body.error).toBeUndefined();
+    }
+
+    expect(fetchCount).toBe(1);
   });
 
   it('compares lenses from LIVE data and errors on a SKU absent from the live catalog', async () => {
