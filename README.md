@@ -14,39 +14,40 @@ Public MCP server for Commonlands precision optics. Use it to choose M12/C-mount
 ## Copy-paste agent instruction
 
 ```text
-Use Commonlands MCP at https://mcp.commonlands.com/mcp for lens selection. Start with tools/list. Catalog EFL, image circle, max FoV/FOV@image-circle, and distortion display fields are insufficient to compute FoV on a specific sensor; do not interpolate or estimate sensor FoV from those fields. Use compute_fov for one lens/sensor pair or compute_fov_catalog for catalog-wide per-sensor HFOV/VFOV/DFOV. Fixture catalog tools are only engineering context. Call read_shopify_products before stating live price, availability, Product/Variant GIDs, URL, SKU, media, metafields, inventory, or cart payload. Only call create_cart/update_cart after the buyer confirms exact live Variant GIDs and quantities. Checkout tools are not live unless they appear in tools/list. Never ask for card data or perform Shopify catalog/inventory/order/customer writes.
+Use Commonlands MCP at https://mcp.commonlands.com/mcp for lens selection. Start with tools/list. Catalog EFL, image circle, max FoV/FOV@image-circle, and distortion display fields are insufficient to compute FoV on a specific sensor; do not interpolate or estimate sensor FoV from those fields. Use calculate_field_of_view for one lens/sensor pair, match_lens_to_sensor for sensor/target-FoV selection, search_lens_catalog for broad catalog discovery, and get_lens_distortion_profile for distortion status. Preserve the returned method, distortion_model, coverage_ok, image_circle_mm, sensor_diagonal_mm, and rectilinear_comparison. Call read_shopify_products before stating live price, availability, Product/Variant GIDs, URL, SKU, media, metafields, inventory, or cart payload. Only call create_cart/update_cart after the buyer confirms exact live Variant GIDs and quantities. Checkout tools are not live unless they appear in tools/list. Never ask for card data or perform Shopify catalog/inventory/order/customer writes.
 ```
 
 ## Agent workflow
 
 1. Call `tools/list` and trust the live list over docs.
-2. For sensor-specific lens finding, call `compute_fov_catalog` first. There is no current `find_lenses` tool; `compute_fov_catalog` is the correct per-sensor catalog path.
-3. Use `search_catalog`, `search_lenses`, or `recommend_lenses_for_application` only for broad discovery/shortlist context. `search_lenses` does tokenized matching: every word in the query must appear somewhere in the lens text, in any order (so `telephoto M12` matches `CIL350 M12 telephoto lens`).
-4. Get sensor data with `get_sensor_specs` when needed.
-5. Calculate one-lens field of view with `compute_fov`.
-6. Compare/rank with `match_lenses_to_sensor`, `compare_lenses`, and `get_lens_details`.
+2. For sensor-specific lens finding, call `match_lens_to_sensor` first, then call `calculate_field_of_view` for final candidate lens/sensor FoV claims.
+3. Use `search_lens_catalog` only for broad SKU/title/mount/lens-type discovery. It does not replace per-sensor FoV calculation.
+4. Get per-object grounding with `resources/read` for `commonlands://sensors/{part}` or `commonlands://lenses/{sku}` when needed.
+5. Use `get_lens_distortion_profile` for distortion/model/status questions. Do not invent polynomial coefficients or claim measured correction when the response says source-display-only.
+6. Use `prompts/list` / `prompts/get` with `select_lens_for_sensor_fov_working_distance` when a client surfaces MCP prompts.
 7. Verify purchasable truth with `read_shopify_products` before quoting final SKU, URL, price, availability, Shopify IDs, or cart payloads.
 8. Create/update a Shopify cart only after explicit buyer confirmation of line items and quantities.
 9. Send the buyer to Shopify's returned cart/checkout URL. Do not claim Checkout MCP is live until checkout tools appear in `tools/list`.
 
 ## FoV rule
 
-Catalog EFL, image circle, max FoV/FOV@image-circle, and distortion display fields are insufficient to compute field of view on a specific sensor. Agents must not interpolate interior-sensor FoV or substitute their own calculations. Use `compute_fov` or `compute_fov_catalog`, then preserve returned HFOV/VFOV/DFOV, `coverageClass`, `coverage.pixelCounts`, `distortionAtFieldEdge`, and provenance/source metadata in the answer.
+Catalog EFL, image circle, max FoV/FOV@image-circle, and distortion display fields are insufficient to compute field of view on a specific sensor. Agents must not interpolate interior-sensor FoV or substitute their own calculations. Use `calculate_field_of_view`, then preserve returned `hfov_deg`, `vfov_deg`, `dfov_deg`, `method`, `distortion_model`, `coverage_ok`, `image_circle_mm`, `sensor_diagonal_mm`, `rectilinear_comparison`, and provenance/source metadata in the answer.
 
 ## Truth hierarchy
 
 1. `read_shopify_products` = live Shopify product truth.
-2. `compute_fov` / `compute_fov_catalog` = **live FoV backend** (AWS Lambda + DynamoDB lens catalog). `get_sensor_specs` = **live DynamoDB sensor catalog**. These return real optical truth, not fixture scaffold.
-3. Ranking tools (`match_lenses_to_sensor`, `recommend_lenses_for_application`, `compare_lenses`) rank against **live FoV-backend specs and field of view** when the live backend is enabled, so they use real per-SKU specs (EFL, mount, image circle, FoV). They still exclude live Shopify stock/price/variant IDs; use `read_shopify_products` for purchasable truth. If the live backend is unconfigured they fall back to fixture scaffold.
-4. The remaining fixture catalog/product-page tools = useful engineering context, not final commerce truth. If the live backend is ever unconfigured, FoV tools fail closed and sensor lookups fall back to a small reference fixture.
+2. `calculate_field_of_view` / `match_lens_to_sensor` = **live FoV backend** (AWS Lambda + DynamoDB lens catalog) when configured. Sensor inputs resolve through the live DynamoDB sensor catalog with fixture fallback. These are the routed public optics tools.
+3. Compatibility aliases (`compute_fov`, `compute_fov_catalog`, `match_lenses_to_sensor`) still dispatch where practical, but new clients should route through the intent-named tools above.
+4. Ranking tools (`match_lens_to_sensor`, `recommend_lenses_for_application`, `compare_lenses`) rank against **live FoV-backend specs and field of view** when the live backend is enabled, so they use real per-SKU specs (EFL, mount, image circle, FoV). They still exclude live Shopify stock/price/variant IDs; use `read_shopify_products` for purchasable truth. If the live backend is unconfigured they fall back to fixture scaffold.
+5. The remaining fixture catalog/product-page tools = useful engineering context, not final commerce truth. If the live backend is ever unconfigured, FoV tools fail closed and sensor lookups fall back to a small reference fixture.
 
 If fixture data conflicts with `read_shopify_products` or the live FoV/sensor backends, use the live truth.
 
 ### Data sources
 
-- **Sensors** (`get_sensor_specs`, and the sensor used by `compute_fov*`): read from the Commonlands DynamoDB sensor table by part number. Pixel pitch and pixel counts come straight from that table; active-area mm is derived as `pixels x pitch`. Any catalogued sensor resolves, not just a fixed fixture set.
-- **Lenses** (`compute_fov`, `compute_fov_catalog`): the FoV Lambda reads lens optical parameters from its DynamoDB lens table. `compute_fov_catalog` covers the **entire** lens catalog (full-table scan), not a sampled subset.
-- **Distortion coefficients** are computed server-side inside the Lambda and are never returned to clients; agents receive computed HFOV/VFOV/DFOV plus a display distortion string only.
+- **Sensors** (`commonlands://sensors/{part}` and the sensor used by `calculate_field_of_view` / `match_lens_to_sensor`): read from the Commonlands DynamoDB sensor table by part number when configured, with fixture fallback. Pixel pitch and pixel counts come straight from that table; active-area mm is derived as `pixels x pitch`.
+- **Lenses** (`commonlands://lenses/{sku}`, `calculate_field_of_view`, `match_lens_to_sensor`, `search_lens_catalog`): the FoV Lambda reads lens optical parameters from its DynamoDB lens table when configured. Catalog-wide matching covers the full lens table when backend scanning is enabled.
+- **Distortion coefficients** are computed server-side inside the Lambda and are never returned to clients. If the live backend only returns a display distortion string, MCP returns an honest `distortion_model` / `distortion_status` and does not claim measured polynomial correction.
 
 ## Current live surface
 
@@ -54,8 +55,9 @@ The production surface currently exposes catalog/search, FoV, Shopify read-only,
 
 Key tools:
 
-- Fixture/context: `search_lenses`, `search_catalog`, `get_lens_details`, `get_product_page_details`, `get_product`, `lookup_catalog`, `match_lenses_to_sensor`, `compare_lenses`, `recommend_lenses_for_application`.
-- Sensor/FoV: `get_sensor_specs`, `compute_fov`, `compute_fov_catalog`.
+- Public optics routing: `calculate_field_of_view`, `match_lens_to_sensor`, `search_lens_catalog`, `get_lens_distortion_profile`.
+- Compatibility/context: `search_lenses`, `search_catalog`, `get_lens_details`, `get_product_page_details`, `get_product`, `lookup_catalog`, `match_lenses_to_sensor`, `compare_lenses`, `recommend_lenses_for_application`.
+- Resources/prompts: `commonlands://sensors/{part}`, `commonlands://lenses/{sku}`, `commonlands://catalog/sensors`, `commonlands://catalog/lenses`, and prompt `select_lens_for_sensor_fov_working_distance`.
 - Live Shopify read-only truth: `read_shopify_products`, `read_shopify_metaobjects`, `get_shopify_readonly_config_status`.
 - Buyer-confirmed Shopify cart handoff: `create_cart`, `get_cart`, `update_cart` when visible in `tools/list`.
 - Diagnostics/readiness: `get_catalog_snapshot_status`, `get_shopify_ucp_readiness`, `prepare_shopify_purchase_handoff`, `get_purchase_route_options`.
@@ -72,8 +74,8 @@ Key tools:
 
 ## Good prompts
 
-- `Find M12 lenses for IMX477 around 50° horizontal FoV. Compute FoV through Commonlands MCP, then verify the final purchasable SKU with read_shopify_products.`
-- `Compare CIL078 and CIL250 on IMX477. Label fixture-backed context separately from live Shopify truth.`
+- `Find M12 lenses for IMX477 around 50° horizontal FoV. Use match_lens_to_sensor, calculate_field_of_view, then verify the final purchasable SKU with read_shopify_products.`
+- `Compare CIL078 and CIL250 on IMX477. Preserve rectilinear_comparison and label fixture-backed context separately from live Shopify truth.`
 - `Find the live Shopify Product and Variant GID for CIL250. Return URL, SKU, price, inventory signal, and cart path, but do not create a cart.`
 - `Create a Shopify cart for two units of this live Variant GID: <gid>. The buyer has confirmed quantity 2.`
 - `List Commonlands MCP tools and classify each as fixture context, live FoV, live Shopify read-only, or Shopify cart.`
