@@ -497,7 +497,8 @@ describe('Commonlands MCP Worker', () => {
     expect(instructions).toMatch(/lens field of view/i);
     expect(instructions).toMatch(/Use read_shopify_products/i);
     expect(instructions).toMatch(/insufficient to compute field of view on a specific sensor/i);
-    expect(instructions).toMatch(/prefer compute_fov_catalog first/i);
+    expect(instructions).toMatch(/prefer match_lens_to_sensor/i);
+    expect(instructions).toMatch(/calculate_field_of_view/i);
     expect(instructions).toMatch(/Do not pass arbitrary URLs/i);
     expect(instructions).toMatch(/not accept client-supplied downstream tokens/i);
     expect(instructions).toMatch(/Do not run DIY optics math/i);

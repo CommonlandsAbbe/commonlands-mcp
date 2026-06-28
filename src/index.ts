@@ -124,7 +124,7 @@ const FOV_CATALOG_MAX_RESULTS = 250;
 const SEARCH_REFERENCE_SENSOR = 'IMX477';
 const UNKNOWN_ANALYTICS_VALUE = 'unknown';
 const FOV_COMPUTATION_RULE =
-  'FoV rule: catalog EFL, image circle, max FoV/FOV@image-circle, and distortion display fields are insufficient to compute field of view on a specific sensor; do not interpolate or estimate interior sensor FoV from those fields. Always call compute_fov for one lens/sensor pair or compute_fov_catalog for catalog-wide per-sensor HFOV/VFOV/DFOV.';
+  'FoV rule: catalog EFL, image circle, max FoV/FOV@image-circle, and distortion display fields are insufficient to compute field of view on a specific sensor; do not interpolate or estimate interior sensor FoV from those fields. Always call calculate_field_of_view for one lens/sensor pair or match_lens_to_sensor for catalog-wide per-sensor HFOV/VFOV/DFOV selection.';
 const INTENT_OPTICS_RULE =
   'Use this tool for FOV, HFOV, VFOV, DFOV, field of view, "lens for", lens-to-sensor, AR0234, IMX290, IMX477, and sensor part-number requests. It returns Commonlands data the model cannot derive: live backend FoV when configured, distortion model/status, image-circle coverage, live stock through Shopify read tools where applicable, and MTF/CRA/BFL fields if present in upstream catalog data. Do not use naive rectilinear fallback, focal-length-only math, interpolation, or self-computed catalog estimates when a Commonlands lens/sensor route is available.';
 const SENSOR_PART_ENUM = CATALOG_SNAPSHOT.sensors.map((sensor) => sensor.partNumber);
@@ -219,7 +219,7 @@ const SERVER_INSTRUCTIONS = [
   FOV_COMPUTATION_RULE,
   'Do not run DIY optics math, interpolate catalog FoV, infer coverage, or assemble sensor-specific optical numbers outside Commonlands MCP computed responses.',
   'Source-labeling policy: label every optical or commerce claim with its source; preserve returned provenance.method, provenance.rev, coverage class, distortion-at-field-edge status, and Shopify live-read versus fixture/source-warning distinctions.',
-  'For sensor-specific lens finding, prefer compute_fov_catalog first when the user gives a sensor or target FoV; its results already include per-sensor HFOV/VFOV/DFOV, image-circle coverage signals, sanitized provenance/source metadata, and backend errors where available. Use search_lenses/search_catalog only for broad SKU/title/mount discovery.',
+  'For sensor-specific lens finding, prefer match_lens_to_sensor when the user gives a sensor or target FoV, then call calculate_field_of_view for each final lens/sensor FoV claim. Use search_lens_catalog only for broad SKU/title/mount discovery.',
   'Safety boundaries: fixture-backed tools are scaffold/context only; Shopify product/cart truth is read-only unless approved cart tools are explicitly listed in tools/list; cancel, checkout, payment, customer, order, inventory, and product writes remain hidden/gated unless separately approved. Do not pass arbitrary URLs or client-supplied downstream tokens; Commonlands uses fixed allowlisted endpoints and server-side secrets only, and does not accept client-supplied downstream tokens.',
 ].join(' ');
 
