@@ -43,9 +43,12 @@ interface ToolSummary {
   title?: string;
   description?: string;
   inputSchema: JsonObject;
+  outputSchema?: JsonObject;
   annotations?: {
     title?: string;
     readOnlyHint?: boolean;
+    idempotentHint?: boolean;
+    openWorldHint?: boolean;
     destructiveHint?: boolean;
   };
 }
@@ -279,7 +282,7 @@ describe('Commonlands MCP Worker', () => {
       result: {
         protocolVersion: '2025-11-25',
         serverInfo: { name: 'commonlands-mcp', version: '0.1.4' },
-        capabilities: { tools: {}, resources: {} },
+        capabilities: { tools: {}, resources: {}, prompts: {} },
       },
     });
   });
@@ -355,18 +358,18 @@ describe('Commonlands MCP Worker', () => {
     expect(JSON.stringify(writes)).not.toContain('secret-ish');
   });
 
-  it('lists Phase 1 catalog tools', async () => {
+  it('lists the public intent-named optics tools with anti-DIY schemas', async () => {
     const { body } = await rpc('tools/list');
     const result = getResult(body);
     const tools = result.tools as ToolSummary[];
+    const toolNames = tools.map((tool) => tool.name);
 
-    expect(tools.map((tool) => tool.name)).toEqual([
-      'search_lenses',
-      'get_lens_details',
+    expect(toolNames).toEqual([
+      'calculate_field_of_view',
+      'match_lens_to_sensor',
+      'search_lens_catalog',
+      'get_lens_distortion_profile',
       'get_sensor_specs',
-      'compute_fov',
-      'compute_fov_catalog',
-      'match_lenses_to_sensor',
       'compare_lenses',
       'get_product_page_details',
       'get_catalog_snapshot_status',
@@ -381,19 +384,65 @@ describe('Commonlands MCP Worker', () => {
       'get_purchase_route_options',
       'recommend_lenses_for_application',
     ]);
-    expect(tools.map((tool) => tool.name)).not.toContain('complete_checkout');
-    expect(tools.map((tool) => tool.name)).not.toContain('update_checkout');
-    expect(tools.map((tool) => tool.name)).not.toContain('cancel_checkout');
+    expect(toolNames).not.toContain('search_lenses');
+    expect(toolNames).not.toContain('get_lens_details');
+    expect(toolNames).not.toContain('compute_fov');
+    expect(toolNames).not.toContain('compute_fov_catalog');
+    expect(toolNames).not.toContain('match_lenses_to_sensor');
+    expect(toolNames).not.toContain('complete_checkout');
+    expect(toolNames).not.toContain('update_checkout');
+    expect(toolNames).not.toContain('cancel_checkout');
     expect(tools[0]?.inputSchema.type).toBe('object');
+
+    const fovTool = tools.find((tool) => tool.name === 'calculate_field_of_view');
+    expect(fovTool?.inputSchema).toMatchObject({
+      anyOf: expect.arrayContaining([
+        { required: ['lens_sku'] },
+        { required: ['lensSku'] },
+        { required: ['focal_length_mm'] },
+        { required: ['focalLengthMm'] },
+      ]),
+    });
+    expect((fovTool?.inputSchema.properties as JsonObject).lens_sku).toBeTypeOf('object');
+    expect((fovTool?.inputSchema.properties as JsonObject).focal_length_mm).toBeTypeOf('object');
+    expect((fovTool?.inputSchema.properties as JsonObject).working_distance_mm).toBeTypeOf('object');
+    expect(fovTool?.outputSchema).toMatchObject({
+      required: expect.arrayContaining([
+        'hfov_deg',
+        'vfov_deg',
+        'dfov_deg',
+        'method',
+        'distortion_model',
+        'image_circle_mm',
+        'sensor_diagonal_mm',
+        'coverage_ok',
+        'rectilinear_comparison',
+      ]),
+      properties: {
+        rectilinear_comparison: {
+          required: ['dfov_deg', 'delta_deg'],
+        },
+      },
+    });
 
     const metadataText = tools.map((tool) => `${tool.title ?? ''} ${tool.description ?? ''}`).join(' ');
     expect(metadataText).toMatch(/M12 lenses/i);
     expect(metadataText).toMatch(/C-mount lenses/i);
-    expect(metadataText).toMatch(/lens field of view/i);
+    expect(metadataText).toMatch(/field of view/i);
+    expect(metadataText).toMatch(/HFOV/i);
+    expect(metadataText).toMatch(/VFOV/i);
+    expect(metadataText).toMatch(/DFOV/i);
+    expect(metadataText).toMatch(/AR0234/i);
+    expect(metadataText).toMatch(/IMX290/i);
+    expect(metadataText).toMatch(/IMX477/i);
+    expect(metadataText).toMatch(/lens for/i);
     expect(metadataText).toMatch(/read_shopify_products/i);
-    expect(metadataText).toMatch(/read-only/i);
-    expect(metadataText).toMatch(/insufficient to compute field of view on a specific sensor/i);
-    expect(metadataText).toMatch(/compute_fov_catalog/i);
+    expect(metadataText).toMatch(/live backend/i);
+    expect(metadataText).toMatch(/distortion model\/status/i);
+    expect(metadataText).toMatch(/live stock/i);
+    expect(metadataText).toMatch(/MTF\/CRA\/BFL/i);
+    expect(metadataText).toMatch(/Do not use naive rectilinear fallback/i);
+    expect(metadataText).toMatch(/focal-length-only math/i);
   });
 
   it('annotates every visible tool with display title and risk hints', async () => {
@@ -405,9 +454,19 @@ describe('Commonlands MCP Worker', () => {
       expect(tool.annotations).toMatchObject({
         title: tool.title,
         readOnlyHint: expect.any(Boolean),
+        idempotentHint: expect.any(Boolean),
+        openWorldHint: false,
         destructiveHint: expect.any(Boolean),
       });
     }
+
+    const fovTool = tools.find((tool) => tool.name === 'calculate_field_of_view');
+    expect(fovTool?.annotations).toMatchObject({
+      readOnlyHint: true,
+      idempotentHint: true,
+      openWorldHint: false,
+      destructiveHint: false,
+    });
 
     const cartTools = tools.filter((tool) => ['create_cart', 'get_cart', 'update_cart'].includes(tool.name));
     expect(cartTools).toHaveLength(3);
@@ -564,6 +623,8 @@ describe('Commonlands MCP Worker', () => {
     expect(resources.map((resource) => resource.uri)).toContain('commonlands://catalog/lenses');
     expect(resources.map((resource) => resource.uri)).toContain('commonlands://catalog/snapshot-status');
     expect(resources.map((resource) => resource.uri)).toContain('commonlands://compatibility/shopify-ucp');
+    expect(resources.map((resource) => resource.uri)).toContain('commonlands://sensors/AR0234');
+    expect(resources.map((resource) => resource.uri)).toContain('commonlands://lenses/CIL250');
     const resourceMetadataText = resources.map((resource) => `${resource.name ?? ''} ${resource.description ?? ''}`).join(' ');
     expect(resourceMetadataText).toMatch(/https:\/\/mcp\.commonlands\.com\/mcp/i);
     expect(resourceMetadataText).toMatch(/M12 lenses/i);
@@ -579,6 +640,57 @@ describe('Commonlands MCP Worker', () => {
     });
     const parsed = JSON.parse(contents[0]?.text as string) as { lenses: LensSummary[] };
     expect(parsed.lenses.length).toBeGreaterThanOrEqual(5);
+
+    const sensorRead = await rpc('resources/read', { uri: 'commonlands://sensors/AR0234' });
+    const sensorContents = getResult(sensorRead.body).contents as Array<JsonObject>;
+    const sensorParsed = JSON.parse(sensorContents[0]?.text as string) as JsonObject;
+    expect(sensorParsed).toMatchObject({
+      schemaVersion: 'commonlands.sensor_resource.v1',
+      sensor: { partNumber: 'AR0234' },
+    });
+
+    const lensRead = await rpc('resources/read', { uri: 'commonlands://lenses/CIL250' });
+    const lensContents = getResult(lensRead.body).contents as Array<JsonObject>;
+    const lensParsed = JSON.parse(lensContents[0]?.text as string) as JsonObject;
+    expect(lensParsed).toMatchObject({
+      schemaVersion: 'commonlands.lens_resource.v1',
+      lens: { sku: 'CIL250' },
+      distortionProfile: {
+        lens_sku: 'CIL250',
+        distortion_status: 'source_display_only',
+      },
+    });
+  });
+
+  it('lists and returns the lens-selection MCP prompt', async () => {
+    const listed = await rpc('prompts/list');
+    const prompts = getResult(listed.body).prompts as Array<JsonObject>;
+    expect(prompts.map((prompt) => prompt.name)).toContain('select_lens_for_sensor_fov_working_distance');
+    const prompt = prompts.find((entry) => entry.name === 'select_lens_for_sensor_fov_working_distance') as JsonObject;
+    expect(prompt.arguments).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'sensor', required: true }),
+      expect.objectContaining({ name: 'target_fov', required: true }),
+      expect.objectContaining({ name: 'working_distance', required: true }),
+      expect.objectContaining({ name: 'mount', required: false }),
+      expect.objectContaining({ name: 'constraints', required: false }),
+    ]));
+
+    const got = await rpc('prompts/get', {
+      name: 'select_lens_for_sensor_fov_working_distance',
+      arguments: {
+        sensor: 'AR0234',
+        target_fov: 'HFOV 60 deg',
+        working_distance: '500 mm',
+        mount: 'M12',
+        constraints: 'low distortion, in stock',
+      },
+    });
+    const result = getResult(got.body);
+    const messages = result.messages as Array<JsonObject>;
+    expect(messages[0]).toMatchObject({ role: 'user', content: { type: 'text' } });
+    expect(JSON.stringify(messages[0])).toMatch(/calculate_field_of_view/);
+    expect(JSON.stringify(messages[0])).toMatch(/match_lens_to_sensor/);
+    expect(JSON.stringify(messages[0])).toMatch(/Do not use naive rectilinear fallback/i);
   });
 
   it('reports Shopify Storefront/UCP compatibility readiness without live connectors', async () => {
@@ -1884,6 +1996,55 @@ describe('Commonlands MCP Worker', () => {
     expect(lensesJson).not.toContain('beta');
   });
 
+  it('wraps live calculate_field_of_view responses with required self-justifying fields', async () => {
+    globalThis.fetch = (async () =>
+      Response.json({
+        sensor: { partNumber: 'IMX477', hsize: 6.287, vsize: 4.712, dsize: 7.857 },
+        count: 1,
+        lenses: [{ partNum: 'CIL026', alpha: 0.91, beta: 0.94, hfov: 120.3, vfov: 91.6, dfov: 130.4, distortion: '0.1%', efl: 2.6, image_circle: 6.6 }],
+        errors: [],
+      })) as typeof fetch;
+
+    const { body } = await rpc('tools/call', {
+      name: 'calculate_field_of_view',
+      arguments: { lensSku: 'CIL026', sensor: 'IMX477', workingDistanceMm: 1000 },
+    }, 'live-calculate-fov-test', {
+      ...env,
+      FOV_LIVE_BACKEND_ENABLED: 'true',
+      FOV_LAMBDA_ENDPOINT: 'https://ia97wrz7ag.execute-api.us-west-2.amazonaws.com/default/fov',
+      FOV_API_KEY: 'test-secret-never-return',
+    });
+    const structuredContent = getStructuredContent(body);
+
+    expect(structuredContent).toMatchObject({
+      schemaVersion: 'optics.calculate_field_of_view.v1',
+      requested: { lensSku: 'CIL026', sensorPartNumber: 'IMX477', workingDistanceMm: 1000 },
+      hfov_deg: 120.3,
+      vfov_deg: 91.6,
+      dfov_deg: 130.4,
+      method: 'lambda_dynamodb_fov_backend',
+      distortion_model: 'source_display_only_no_measured_polynomial_correction_claim',
+      distortion_status: 'source_display_only',
+      image_circle_mm: 6.6,
+      sensor_diagonal_mm: 7.857,
+      coverage_ok: false,
+      rectilinear_comparison: {
+        dfov_deg: expect.any(Number),
+        delta_deg: expect.any(Number),
+      },
+      details: {
+        schemaVersion: 'optics.fov.live.v1',
+        lenses: [expect.objectContaining({
+          partNum: 'CIL026',
+          distortion: { display: '0.1%', status: 'source_display_only' },
+        })],
+      },
+    });
+    expect(JSON.stringify(structuredContent)).not.toContain('test-secret-never-return');
+    expect(JSON.stringify(structuredContent)).not.toContain('alpha');
+    expect(JSON.stringify(structuredContent)).not.toContain('beta');
+  });
+
   it('computes live catalog FoV for a sensor and sends the catalog lens ids', async () => {
     let seenInit: RequestInit | undefined;
     globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
@@ -2191,6 +2352,107 @@ describe('Commonlands MCP Worker', () => {
     // CIL250 (25mm telephoto, 9.4mm image circle) fully covers the IMX477, so no
     // clipping warning; the fixture-scaffold warning is always present.
     expect((structuredContent.warnings as string[]).join(' ')).toMatch(/fixture-backed optics/i);
+  });
+
+  it('calculates field of view through the intent-named tool with snake_case inputs', async () => {
+    const { body } = await rpc('tools/call', {
+      name: 'calculate_field_of_view',
+      arguments: { lens_sku: 'CIL250', sensor: 'IMX477', working_distance_mm: 1000 },
+    });
+    const structuredContent = getStructuredContent(body);
+
+    expect(structuredContent).toMatchObject({
+      schemaVersion: 'optics.calculate_field_of_view.v1',
+      requested: { lensSku: 'CIL250', sensorPartNumber: 'IMX477', workingDistanceMm: 1000 },
+      hfov_deg: 14.3,
+      vfov_deg: 10.8,
+      dfov_deg: 17.9,
+      method: 'fixture_parity_scaffold',
+      distortion_model: 'source_display_only_no_measured_polynomial_correction_claim',
+      image_circle_mm: 9.4,
+      sensor_diagonal_mm: 7.857,
+      coverage_ok: true,
+      rectilinear_comparison: {
+        dfov_deg: expect.any(Number),
+        delta_deg: expect.any(Number),
+      },
+      commonlands_data: {
+        source: 'fixture-catalog',
+      },
+      details: {
+        schemaVersion: 'optics.fov.v1',
+        fov: {
+          horizontalDeg: 14.3,
+          verticalDeg: 10.8,
+          diagonalDeg: 17.9,
+        },
+      },
+    });
+    expect((structuredContent.rectilinear_comparison as JsonObject).dfov_deg).toBeCloseTo(17.86, 3);
+    expect(JSON.stringify(structuredContent)).toMatch(/not model-computed catalog interpolation/i);
+  });
+
+  it('marks focal-length-only calculate_field_of_view as a rectilinear reference, not Commonlands lens truth', async () => {
+    const { body } = await rpc('tools/call', {
+      name: 'calculate_field_of_view',
+      arguments: { focal_length_mm: 25, sensorPartNumber: 'IMX477' },
+    });
+    const structuredContent = getStructuredContent(body);
+
+    expect(structuredContent).toMatchObject({
+      schemaVersion: 'optics.calculate_field_of_view.v1',
+      method: 'rectilinear_reference_from_user_focal_length_only_no_commonlands_lens_sku',
+      distortion_model: 'none_user_focal_length_only_not_commonlands_lens_data',
+      distortion_status: 'unavailable',
+      image_circle_mm: null,
+      coverage_ok: null,
+      rectilinear_comparison: {
+        dfov_deg: expect.any(Number),
+        delta_deg: 0,
+      },
+    });
+    expect((structuredContent.warnings as string[]).join(' ')).toMatch(/must not be presented as Commonlands distortion-corrected/i);
+  });
+
+  it('keeps legacy optics calls working while routing public names to the same catalog logic', async () => {
+    const search = await rpc('tools/call', {
+      name: 'search_lens_catalog',
+      arguments: { query: 'telephoto M12', limit: 10 },
+    });
+    const searchResults = getStructuredContent(search.body).results as LensSummary[];
+    expect(searchResults.map((result) => result.sku)).toContain('CIL350');
+
+    const legacySearch = await rpc('tools/call', {
+      name: 'search_lenses',
+      arguments: { query: 'telephoto M12', limit: 10 },
+    });
+    const legacyResults = getStructuredContent(legacySearch.body).results as LensSummary[];
+    expect(legacyResults.map((result) => result.sku)).toEqual(searchResults.map((result) => result.sku));
+
+    const match = await rpc('tools/call', {
+      name: 'match_lens_to_sensor',
+      arguments: { sensor: 'IMX477', desired_horizontal_fov_deg: 14, max_results: 3 },
+    });
+    const matchContent = getStructuredContent(match.body);
+    expect(matchContent).toMatchObject({
+      schemaVersion: 'recommendations.v1',
+      sensor: { partNumber: 'IMX477' },
+    });
+    expect((matchContent.recommendations as Array<JsonObject>).length).toBeGreaterThan(0);
+
+    const distortion = await rpc('tools/call', {
+      name: 'get_lens_distortion_profile',
+      arguments: { lens_sku: 'CIL250' },
+    });
+    expect(getStructuredContent(distortion.body)).toMatchObject({
+      schemaVersion: 'optics.distortion_profile.v1',
+      lensSku: 'CIL250',
+      profile: {
+        lens_sku: 'CIL250',
+        distortion_status: 'source_display_only',
+        correction_status: 'fixture_catalog_profile_not_measured_backend_correction',
+      },
+    });
   });
 
   it('reports image-circle clipping for sensors larger than lens coverage', async () => {

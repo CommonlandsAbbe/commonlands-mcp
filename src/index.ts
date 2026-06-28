@@ -91,12 +91,16 @@ interface ToolDefinition {
   title: string;
   description: string;
   inputSchema: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
   annotations?: ToolAnnotations;
+  hiddenFromList?: boolean;
 }
 
 interface ToolAnnotations {
   title: string;
   readOnlyHint: boolean;
+  idempotentHint: boolean;
+  openWorldHint: boolean;
   destructiveHint: boolean;
 }
 
@@ -121,11 +125,97 @@ const SEARCH_REFERENCE_SENSOR = 'IMX477';
 const UNKNOWN_ANALYTICS_VALUE = 'unknown';
 const FOV_COMPUTATION_RULE =
   'FoV rule: catalog EFL, image circle, max FoV/FOV@image-circle, and distortion display fields are insufficient to compute field of view on a specific sensor; do not interpolate or estimate interior sensor FoV from those fields. Always call compute_fov for one lens/sensor pair or compute_fov_catalog for catalog-wide per-sensor HFOV/VFOV/DFOV.';
+const INTENT_OPTICS_RULE =
+  'Use this tool for FOV, HFOV, VFOV, DFOV, field of view, "lens for", lens-to-sensor, AR0234, IMX290, IMX477, and sensor part-number requests. It returns Commonlands data the model cannot derive: live backend FoV when configured, distortion model/status, image-circle coverage, live stock through Shopify read tools where applicable, and MTF/CRA/BFL fields if present in upstream catalog data. Do not use naive rectilinear fallback, focal-length-only math, interpolation, or self-computed catalog estimates when a Commonlands lens/sensor route is available.';
+const SENSOR_PART_ENUM = CATALOG_SNAPSHOT.sensors.map((sensor) => sensor.partNumber);
+
+const CALCULATE_FIELD_OF_VIEW_INPUT_SCHEMA = {
+  type: 'object',
+  properties: {
+    lens_sku: { type: 'string', description: 'Commonlands lens SKU, for example CIL250. Snake-case alias for lensSku.' },
+    lensSku: { type: 'string', description: 'Commonlands lens SKU, for example CIL250. Camel-case alias for lens_sku.' },
+    focal_length_mm: { type: 'number', exclusiveMinimum: 0, description: 'Fallback rectilinear reference only when no Commonlands lens SKU is available. Snake-case alias for focalLengthMm.' },
+    focalLengthMm: { type: 'number', exclusiveMinimum: 0, description: 'Fallback rectilinear reference only when no Commonlands lens SKU is available. Camel-case alias for focal_length_mm.' },
+    sensor: {
+      anyOf: [
+        { type: 'string', enum: SENSOR_PART_ENUM, description: 'Known catalog sensor part number.' },
+        { type: 'string', pattern: '^[A-Za-z0-9-]{2,32}$', description: 'Safe sensor identifier accepted for live catalog lookup.' },
+        {
+          type: 'object',
+          properties: {
+            part_number: { type: 'string' },
+            partNumber: { type: 'string' },
+          },
+          additionalProperties: true,
+        },
+      ],
+      description: 'Sensor part number or safe sensor object. Supports AR0234, IMX290/IMX477 when present in the live catalog, and fixture sensors listed in the enum.',
+    },
+    sensorPartNumber: {
+      anyOf: [
+        { type: 'string', enum: SENSOR_PART_ENUM },
+        { type: 'string', pattern: '^[A-Za-z0-9-]{2,32}$' },
+      ],
+      description: 'Sensor part number. Camel-case alias for sensor.',
+    },
+    sensor_part_number: {
+      anyOf: [
+        { type: 'string', enum: SENSOR_PART_ENUM },
+        { type: 'string', pattern: '^[A-Za-z0-9-]{2,32}$' },
+      ],
+      description: 'Sensor part number. Snake-case alias for sensorPartNumber.',
+    },
+    working_distance_mm: { type: 'number', exclusiveMinimum: 0, description: 'Optional working distance in mm. Snake-case alias for workingDistanceMm.' },
+    workingDistanceMm: { type: 'number', exclusiveMinimum: 0, description: 'Optional working distance in mm. Camel-case alias for working_distance_mm.' },
+  },
+  anyOf: [
+    { required: ['lens_sku'] },
+    { required: ['lensSku'] },
+    { required: ['focal_length_mm'] },
+    { required: ['focalLengthMm'] },
+  ],
+  additionalProperties: false,
+} as const;
+
+const CALCULATE_FIELD_OF_VIEW_OUTPUT_SCHEMA = {
+  type: 'object',
+  required: [
+    'hfov_deg',
+    'vfov_deg',
+    'dfov_deg',
+    'method',
+    'distortion_model',
+    'image_circle_mm',
+    'sensor_diagonal_mm',
+    'coverage_ok',
+    'rectilinear_comparison',
+  ],
+  properties: {
+    hfov_deg: { type: ['number', 'null'] },
+    vfov_deg: { type: ['number', 'null'] },
+    dfov_deg: { type: ['number', 'null'] },
+    method: { type: 'string' },
+    distortion_model: { type: 'string' },
+    image_circle_mm: { type: ['number', 'null'] },
+    sensor_diagonal_mm: { type: 'number' },
+    coverage_ok: { type: ['boolean', 'null'] },
+    rectilinear_comparison: {
+      type: 'object',
+      required: ['dfov_deg', 'delta_deg'],
+      properties: {
+        dfov_deg: { type: ['number', 'null'] },
+        delta_deg: { type: ['number', 'null'] },
+      },
+      additionalProperties: false,
+    },
+  },
+  additionalProperties: true,
+} as const;
 
 const SERVER_INSTRUCTIONS = [
   `Commonlands MCP public endpoint is ${PUBLIC_MCP_ENDPOINT}. Use this endpoint in client configuration, metadata, and agent-facing descriptions.`,
   'Commonlands MCP helps agents select precision optics for machine vision, robotics, and embedded vision: M12 lenses, C-mount lenses, and lens field of view calculations.',
-  'Usage flow: discover lenses with search_lenses/search_catalog, inspect details with get_lens_details/get_product, compute lens field of view with compute_fov or compute_fov_catalog, rank options with match_lenses_to_sensor/compare_lenses/recommend_lenses_for_application, then use read_shopify_products for live purchasable truth before quoting price, availability, Shopify variantId, product URL, or cart payloads.',
+  'Usage flow: discover lenses with search_lens_catalog/search_catalog, inspect distortion with get_lens_distortion_profile, compute lens field of view with calculate_field_of_view, rank options with match_lens_to_sensor/compare_lenses/recommend_lenses_for_application, then use read_shopify_products for live purchasable truth before quoting price, availability, Shopify variantId, product URL, or cart payloads.',
   FOV_COMPUTATION_RULE,
   'Do not run DIY optics math, interpolate catalog FoV, infer coverage, or assemble sensor-specific optical numbers outside Commonlands MCP computed responses.',
   'Source-labeling policy: label every optical or commerce claim with its source; preserve returned provenance.method, provenance.rev, coverage class, distortion-at-field-edge status, and Shopify live-read versus fixture/source-warning distinctions.',
@@ -134,6 +224,79 @@ const SERVER_INSTRUCTIONS = [
 ].join(' ');
 
 const TOOLS: ToolDefinition[] = [
+  {
+    name: 'calculate_field_of_view',
+    title: 'Calculate Commonlands field of view',
+    description:
+      `Calculate Commonlands lens field of view for a lens/sensor pair and return HFOV, VFOV, DFOV, coverage, distortion status, and an explicit rectilinear comparison. ${INTENT_OPTICS_RULE} Accepts lens_sku/lensSku or focal_length_mm/focalLengthMm, plus sensor/sensorPartNumber/sensor_part_number and working_distance_mm/workingDistanceMm. If only focal length is supplied, the response is marked as a rectilinear reference and does not claim Commonlands distortion-corrected lens truth.`,
+    inputSchema: CALCULATE_FIELD_OF_VIEW_INPUT_SCHEMA,
+    outputSchema: CALCULATE_FIELD_OF_VIEW_OUTPUT_SCHEMA,
+  },
+  {
+    name: 'match_lens_to_sensor',
+    title: 'Match Commonlands lenses to a sensor',
+    description:
+      `Find and rank Commonlands lenses for a sensor, target field of view, working distance, mount, or "lens for" request. ${INTENT_OPTICS_RULE} Use this for AR0234, IMX290, IMX477, sensor part numbers, M12/C-mount matching, and target HFOV/VFOV/DFOV workflows; do not shortlist from focal length alone. Use read_shopify_products afterward for live stock, price, availability, Shopify variantId, product URL, and metafields.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sensor: { type: 'string', enum: SENSOR_PART_ENUM, description: 'Sensor part number, for example AR0234 or IMX477.' },
+        sensorPartNumber: {
+          anyOf: [
+            { type: 'string', enum: SENSOR_PART_ENUM },
+            { type: 'string', pattern: '^[A-Za-z0-9-]{2,32}$' },
+          ],
+          description: 'Sensor part number. Alias for sensor.',
+        },
+        sensor_part_number: {
+          anyOf: [
+            { type: 'string', enum: SENSOR_PART_ENUM },
+            { type: 'string', pattern: '^[A-Za-z0-9-]{2,32}$' },
+          ],
+          description: 'Sensor part number. Snake-case alias for sensorPartNumber.',
+        },
+        desired_horizontal_fov_deg: { type: 'number', exclusiveMinimum: 0 },
+        desiredHorizontalFovDeg: { type: 'number', exclusiveMinimum: 0 },
+        working_distance_mm: { type: 'number', exclusiveMinimum: 0 },
+        workingDistanceMm: { type: 'number', exclusiveMinimum: 0 },
+        mount: { type: 'string', description: 'Optional mount filter, for example M12 or C-mount.' },
+        max_results: { type: 'integer', minimum: 1, maximum: 10, default: 5 },
+        maxResults: { type: 'integer', minimum: 1, maximum: 10, default: 5 },
+      },
+      anyOf: [{ required: ['sensor'] }, { required: ['sensorPartNumber'] }, { required: ['sensor_part_number'] }],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'search_lens_catalog',
+    title: 'Search Commonlands lens catalog',
+    description:
+      `Search the Commonlands lens catalog by SKU, mount, lens type, M12, C-mount, field-of-view intent, "lens for" wording, or sensor-triggering text such as AR0234, IMX290, and IMX477. ${INTENT_OPTICS_RULE} This discovers candidate lenses from Commonlands catalog/live backend data; it does not replace calculate_field_of_view for sensor-specific HFOV/VFOV/DFOV and does not replace read_shopify_products for live stock/price/product truth.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'SKU, title, mount, lens type, application, sensor, or field-of-view search text.' },
+        limit: { type: 'integer', minimum: 1, maximum: 25, default: 10 },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'get_lens_distortion_profile',
+    title: 'Get Commonlands lens distortion profile',
+    description:
+      `Return the Commonlands distortion model/status for one lens SKU, including whether the data is source-display-only or backend-calculated. ${INTENT_OPTICS_RULE} Use this for distortion, rectilinear-vs-wide-angle, MTF/CRA/BFL/optical-profile questions when upstream fields are present. Do not invent polynomial coefficients or claim measured distortion correction when the backend only returns display distortion.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        lens_sku: { type: 'string', description: 'Commonlands lens SKU, for example CIL250. Snake-case alias for lensSku.' },
+        lensSku: { type: 'string', description: 'Commonlands lens SKU, for example CIL250. Camel-case alias for lens_sku.' },
+        sku: { type: 'string', description: 'Legacy SKU alias.' },
+      },
+      anyOf: [{ required: ['lens_sku'] }, { required: ['lensSku'] }, { required: ['sku'] }],
+      additionalProperties: false,
+    },
+  },
   {
     name: 'search_lenses',
     title: 'Search Commonlands lenses',
@@ -147,6 +310,7 @@ const TOOLS: ToolDefinition[] = [
       },
       additionalProperties: false,
     },
+    hiddenFromList: true,
   },
   {
     name: 'get_lens_details',
@@ -160,6 +324,7 @@ const TOOLS: ToolDefinition[] = [
       required: ['sku'],
       additionalProperties: false,
     },
+    hiddenFromList: true,
   },
   {
     name: 'get_sensor_specs',
@@ -193,6 +358,8 @@ const TOOLS: ToolDefinition[] = [
       required: ['lensSku', 'sensorPartNumber'],
       additionalProperties: false,
     },
+    outputSchema: CALCULATE_FIELD_OF_VIEW_OUTPUT_SCHEMA,
+    hiddenFromList: true,
   },
   {
     name: 'compute_fov_catalog',
@@ -212,6 +379,7 @@ const TOOLS: ToolDefinition[] = [
       required: ['sensorPartNumber'],
       additionalProperties: false,
     },
+    hiddenFromList: true,
   },
   {
     name: 'match_lenses_to_sensor',
@@ -230,6 +398,7 @@ const TOOLS: ToolDefinition[] = [
       required: ['sensorPartNumber'],
       additionalProperties: false,
     },
+    hiddenFromList: true,
   },
   {
     name: 'compare_lenses',
@@ -733,6 +902,21 @@ const RESOURCES = [
   },
 ];
 
+const PROMPTS = [
+  {
+    name: 'select_lens_for_sensor_fov_working_distance',
+    title: 'Select lens for sensor, FoV, and working distance',
+    description: 'Guide a model to use Commonlands MCP optics tools for sensor-specific lens selection instead of self-computed FoV math.',
+    arguments: [
+      { name: 'sensor', description: 'Sensor part number, for example AR0234, IMX290, or IMX477.', required: true },
+      { name: 'target_fov', description: 'Target field of view, such as HFOV 60 deg or 120 mm width.', required: true },
+      { name: 'working_distance', description: 'Working distance, preferably in mm.', required: true },
+      { name: 'mount', description: 'Preferred mount such as M12 or C-mount.', required: false },
+      { name: 'constraints', description: 'Application constraints such as low distortion, stock, MTF, CRA, BFL, IP rating, or budget.', required: false },
+    ],
+  },
+] as const;
+
 function json(data: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(data), {
     ...init,
@@ -923,6 +1107,7 @@ function initializeResponse(id: unknown, params: unknown): Response {
     capabilities: {
       tools: {},
       resources: {},
+      prompts: {},
     },
     serverInfo: SERVER_INFO,
     instructions: SERVER_INSTRUCTIONS,
@@ -945,7 +1130,7 @@ function toolListResponse(id: unknown, env: Env): Response {
 }
 
 function visibleTools(env: Env): ToolDefinition[] {
-  return TOOLS.filter((tool) => isToolEnabled(tool.name, env)).map(withToolAnnotations);
+  return TOOLS.filter((tool) => !tool.hiddenFromList && isToolEnabled(tool.name, env)).map(withToolAnnotations);
 }
 
 function isToolEnabled(name: string, env: Env): boolean {
@@ -970,21 +1155,38 @@ const WRITE_TOOL_NAMES = new Set([
 
 function withToolAnnotations(tool: ToolDefinition): ToolDefinition {
   const writes = WRITE_TOOL_NAMES.has(tool.name);
+  const listedTool = { ...tool };
+  delete listedTool.hiddenFromList;
   return {
-    ...tool,
+    ...listedTool,
     annotations: {
       title: tool.title,
       readOnlyHint: !writes,
+      idempotentHint: !writes,
+      openWorldHint: false,
       destructiveHint: writes,
     },
   };
 }
 
 function resourceListResponse(id: unknown): Response {
-  return rpcResult(id, { resources: RESOURCES });
+  const lensResources = CATALOG_SNAPSHOT.lenses.map((lens) => ({
+    uri: `commonlands://lenses/${lens.sku}`,
+    name: `Commonlands lens ${lens.sku}`,
+    description: `Per-lens Commonlands optical/catalog resource for ${lens.sku}: mount, focal length, image circle, distortion status, and product handoff fields.`,
+    mimeType: 'application/json',
+  }));
+  const sensorResources = CATALOG_SNAPSHOT.sensors.map((sensor) => ({
+    uri: `commonlands://sensors/${sensor.partNumber}`,
+    name: `Commonlands sensor ${sensor.partNumber}`,
+    description: `Per-sensor Commonlands resource for ${sensor.partNumber}: active area, resolution, pixel pitch, and FoV input metadata.`,
+    mimeType: 'application/json',
+  }));
+
+  return rpcResult(id, { resources: [...RESOURCES, ...lensResources, ...sensorResources] });
 }
 
-function resourceReadResponse(id: unknown, params: unknown): Response {
+async function resourceReadResponse(id: unknown, params: unknown, env: Env): Promise<Response> {
   if (!isRecord(params) || typeof params.uri !== 'string') {
     return rpcError(id, { code: -32602, message: 'Invalid params: uri is required' });
   }
@@ -1021,6 +1223,47 @@ function resourceReadResponse(id: unknown, params: unknown): Response {
     });
   }
 
+  const sensorMatch = /^commonlands:\/\/sensors\/([A-Za-z0-9-]{2,32})$/u.exec(params.uri);
+  if (sensorMatch) {
+    const partNumber = normalizeSafeIdentifier(sensorMatch[1] as string);
+    const sensor = await resolveSensor(env, partNumber);
+    if (!sensor) return rpcError(id, await sensorNotFoundErrorAsync(env, partNumber));
+    return rpcResult(id, {
+      contents: [
+        {
+          uri: params.uri,
+          mimeType: 'application/json',
+          text: JSON.stringify({
+            schemaVersion: 'commonlands.sensor_resource.v1',
+            sensor,
+            source: isSensorStoreConfigured(env) ? 'live-dynamodb-when-present-fixture-fallback' : 'fixture-catalog',
+          }),
+        },
+      ],
+    });
+  }
+
+  const lensMatch = /^commonlands:\/\/lenses\/([A-Za-z0-9-]{2,32})$/u.exec(params.uri);
+  if (lensMatch) {
+    const sku = normalizeSafeIdentifier(lensMatch[1] as string);
+    const lens = getLensBySku(sku);
+    if (!lens) return rpcError(id, { code: -32004, message: `Lens not found: ${sku}` });
+    return rpcResult(id, {
+      contents: [
+        {
+          uri: params.uri,
+          mimeType: 'application/json',
+          text: JSON.stringify({
+            schemaVersion: 'commonlands.lens_resource.v1',
+            lens: summarizeLens(lens),
+            distortionProfile: buildLensDistortionProfile(lens),
+            sourceWarning: FIXTURE_NOT_PRODUCT_TRUTH_WARNING,
+          }),
+        },
+      ],
+    });
+  }
+
   if (params.uri === 'commonlands://catalog/snapshot-status') {
     return rpcResult(id, {
       contents: [
@@ -1048,17 +1291,265 @@ function resourceReadResponse(id: unknown, params: unknown): Response {
   return rpcError(id, { code: -32602, message: `Unknown resource: ${params.uri}` });
 }
 
+function promptListResponse(id: unknown): Response {
+  return rpcResult(id, { prompts: PROMPTS });
+}
+
+function promptGetResponse(id: unknown, params: unknown): Response {
+  if (!isRecord(params) || typeof params.name !== 'string') {
+    return rpcError(id, { code: -32602, message: 'Invalid params: prompt name is required' });
+  }
+
+  if (params.name !== 'select_lens_for_sensor_fov_working_distance') {
+    return rpcError(id, { code: -32602, message: `Unknown prompt: ${params.name}` });
+  }
+
+  const args = isRecord(params.arguments) ? params.arguments : {};
+  const sensor = typeof args.sensor === 'string' ? args.sensor : '<sensor part number>';
+  const targetFov = typeof args.target_fov === 'string' ? args.target_fov : '<target HFOV/VFOV/DFOV or scene size>';
+  const workingDistance = typeof args.working_distance === 'string' ? args.working_distance : '<working distance>';
+  const mount = typeof args.mount === 'string' ? args.mount : '<optional mount>';
+  const constraints = typeof args.constraints === 'string' ? args.constraints : '<constraints>';
+
+  return rpcResult(id, {
+    description: PROMPTS[0].description,
+    messages: [
+      {
+        role: 'user',
+        content: {
+          type: 'text',
+          text: [
+            'Select Commonlands lenses using MCP tools, not self-computed optics math.',
+            `Sensor: ${sensor}`,
+            `Target FoV: ${targetFov}`,
+            `Working distance: ${workingDistance}`,
+            `Mount: ${mount}`,
+            `Constraints: ${constraints}`,
+            'Call calculate_field_of_view for any lens/sensor FoV claim, match_lens_to_sensor for shortlist ranking, search_lens_catalog for candidate discovery, get_lens_distortion_profile for distortion status, and read_shopify_products for live purchasable truth. Preserve method, distortion_model/status, coverage_ok, image_circle_mm, sensor_diagonal_mm, rectilinear_comparison, source warnings, and any stock/MTF/CRA/BFL fields returned by Commonlands data. Do not use naive rectilinear fallback or focal-length-only math when Commonlands lens data is available.',
+          ].join('\n'),
+        },
+      },
+    ],
+  });
+}
+
+function canonicalToolName(name: string): string {
+  if (name === 'search_lens_catalog') return 'search_lenses';
+  if (name === 'match_lens_to_sensor') return 'match_lenses_to_sensor';
+  return name;
+}
+
+function isKnownToolName(name: string): boolean {
+  return TOOLS.some((tool) => tool.name === name);
+}
+
+function normalizeAliasedToolArgs(toolName: string, args: Record<string, unknown>): Record<string, unknown> {
+  if (toolName !== 'match_lenses_to_sensor') return args;
+  return {
+    ...args,
+    ...(typeof args.sensor === 'string' && args.sensorPartNumber === undefined ? { sensorPartNumber: args.sensor } : {}),
+    ...(typeof args.sensor_part_number === 'string' && args.sensorPartNumber === undefined ? { sensorPartNumber: args.sensor_part_number } : {}),
+    ...(typeof args.desired_horizontal_fov_deg === 'number' && args.desiredHorizontalFovDeg === undefined ? { desiredHorizontalFovDeg: args.desired_horizontal_fov_deg } : {}),
+    ...(typeof args.working_distance_mm === 'number' && args.workingDistanceMm === undefined ? { workingDistanceMm: args.working_distance_mm } : {}),
+    ...(typeof args.max_results === 'number' && args.maxResults === undefined ? { maxResults: args.max_results } : {}),
+  };
+}
+
+interface NormalizedCalculateFovArgs {
+  lensSku?: string;
+  focalLengthMm?: number;
+  sensorPartNumber: string;
+  workingDistanceMm?: number;
+}
+
+function normalizeCalculateFovArgs(args: Record<string, unknown>): NormalizedCalculateFovArgs | { error: JsonRpcError } {
+  const lensSkuRaw = firstString(args.lens_sku, args.lensSku);
+  const focalLengthMm = firstNumber(args.focal_length_mm, args.focalLengthMm);
+  const sensorPartNumberRaw = sensorPartNumberFromArgs(args);
+  const workingDistanceMm = firstNumber(args.working_distance_mm, args.workingDistanceMm);
+
+  if (!lensSkuRaw && focalLengthMm === undefined) {
+    return { error: { code: -32602, message: 'Invalid params: lens_sku/lensSku or focal_length_mm/focalLengthMm is required' } };
+  }
+  if (lensSkuRaw) {
+    const lensError = validateSafeIdentifier(lensSkuRaw, 'lens_sku');
+    if (lensError) return { error: lensError };
+  }
+  if (focalLengthMm !== undefined && (!Number.isFinite(focalLengthMm) || focalLengthMm <= 0)) {
+    return { error: { code: -32602, message: 'Invalid params: focal_length_mm must be positive when provided' } };
+  }
+  const sensorError = validateSafeIdentifier(sensorPartNumberRaw, 'sensor');
+  if (sensorError) return { error: sensorError };
+  const distanceError = validateOptionalPositiveNumber(workingDistanceMm, 'working_distance_mm', MAX_WORKING_DISTANCE_MM);
+  if (distanceError) return { error: distanceError };
+
+  return {
+    ...(lensSkuRaw ? { lensSku: normalizeSafeIdentifier(lensSkuRaw) } : {}),
+    ...(focalLengthMm !== undefined ? { focalLengthMm } : {}),
+    sensorPartNumber: normalizeSafeIdentifier(sensorPartNumberRaw as string),
+    ...(workingDistanceMm !== undefined ? { workingDistanceMm } : {}),
+  };
+}
+
+function sensorPartNumberFromArgs(args: Record<string, unknown>): unknown {
+  const direct = firstString(args.sensorPartNumber, args.sensor_part_number);
+  if (direct) return direct;
+  if (typeof args.sensor === 'string') return args.sensor;
+  if (isRecord(args.sensor)) return firstString(args.sensor.partNumber, args.sensor.part_number);
+  return undefined;
+}
+
+function buildLensDistortionProfile(lens: LensCatalogItem): Record<string, unknown> {
+  return {
+    lens_sku: lens.sku,
+    distortion_model: lens.projectionModel,
+    distortion_status: lens.fixtureDistortion ? 'source_display_only' : 'unavailable',
+    correction_status: 'fixture_catalog_profile_not_measured_backend_correction',
+    coefficient_count: lens.coefficientCount,
+    image_circle_mm: lens.imageCircleMm,
+    max_fov_deg: lens.maxFovDeg,
+    source_display: lens.fixtureDistortion?.notes ?? null,
+    source: lens.source.optical,
+    mtf: 'not_present_in_current_fixture',
+    cra: 'not_present_in_current_fixture',
+    bfl: 'not_present_in_current_fixture',
+    warning: 'Do not invent polynomial coefficients or measured distortion correction from this fixture/source-display profile.',
+  };
+}
+
+function buildCalculateFieldOfViewResponse(
+  detail: Record<string, unknown>,
+  sensor: SensorCatalogItem,
+  requested: Record<string, unknown>,
+): Record<string, unknown> {
+  const lens = firstRecordFromArray(detail.lenses);
+  const detailFov = isRecord(detail.fov) ? detail.fov : undefined;
+  const lensFov = lens && isRecord(lens.fov) ? lens.fov : undefined;
+  const detailLens = isRecord(detail.lens) ? detail.lens : undefined;
+  const detailImageCircle = isRecord(detail.imageCircle) ? detail.imageCircle : undefined;
+  const detailProvenance = isRecord(detail.provenance) ? detail.provenance : undefined;
+  const lensProvenance = lens && isRecord(lens.provenance) ? lens.provenance : undefined;
+  const lensDistortion = lens && isRecord(lens.distortion) ? lens.distortion : undefined;
+  const distortionAtFieldEdge = isRecord(detail.distortionAtFieldEdge)
+    ? detail.distortionAtFieldEdge
+    : lens && isRecord(lens.distortionAtFieldEdge)
+      ? lens.distortionAtFieldEdge
+      : undefined;
+
+  const hfovDeg = firstNumber(detailFov?.horizontalDeg, lens?.hfov, lensFov?.horizontalDeg) ?? null;
+  const vfovDeg = firstNumber(detailFov?.verticalDeg, lens?.vfov, lensFov?.verticalDeg) ?? null;
+  const dfovDeg = firstNumber(detailFov?.diagonalDeg, lens?.dfov, lensFov?.diagonalDeg) ?? null;
+  const rawSensorDiagonalMm = Math.hypot(sensor.activeAreaMm.width, sensor.activeAreaMm.height);
+  const sensorDiagonalMm = roundNumber(rawSensorDiagonalMm, 3);
+  const imageCircleMm = firstNumber(detailImageCircle?.lensImageCircleMm, lens?.imageCircle) ?? null;
+  const eflMm = firstNumber(detailLens?.eflMm, lens?.efl);
+  const rectilinearDfovDeg = eflMm !== undefined ? roundNumber(rectilinearFovDeg(rawSensorDiagonalMm, eflMm), 3) : null;
+  const deltaDeg = dfovDeg !== null && rectilinearDfovDeg !== null ? roundNumber(dfovDeg - rectilinearDfovDeg, 3) : null;
+  const distortionStatus = firstString(lensDistortion?.status, distortionAtFieldEdge?.status) ?? 'unavailable';
+
+  return {
+    schemaVersion: 'optics.calculate_field_of_view.v1',
+    requested,
+    hfov_deg: hfovDeg,
+    vfov_deg: vfovDeg,
+    dfov_deg: dfovDeg,
+    method: firstString(detailProvenance?.method, lensProvenance?.method, detail.correctionStatus) ?? 'unknown',
+    distortion_model: describeDistortionModel(distortionStatus),
+    distortion_status: distortionStatus,
+    image_circle_mm: imageCircleMm,
+    sensor_diagonal_mm: sensorDiagonalMm,
+    coverage_ok: coverageOkFromClass(firstString(detail.coverageClass, lens?.coverageClass)),
+    rectilinear_comparison: {
+      dfov_deg: rectilinearDfovDeg,
+      delta_deg: deltaDeg,
+    },
+    commonlands_data: {
+      source: firstString(detail.source, detailProvenance?.source, lensProvenance?.source) ?? 'unknown',
+      correctionStatus: firstString(detail.correctionStatus) ?? 'unknown',
+      notes: [
+        'Field values are routed through Commonlands MCP optics data, not model-computed catalog interpolation.',
+        'rectilinear_comparison is provided as a reference only; do not replace Commonlands method/status with focal-length-only math.',
+      ],
+    },
+    details: detail,
+  };
+}
+
+function buildFocalLengthReferenceFovResponse(
+  focalLengthMm: number,
+  sensor: SensorCatalogItem,
+  workingDistanceMm: number | undefined,
+): Record<string, unknown> {
+  const rawSensorDiagonalMm = Math.hypot(sensor.activeAreaMm.width, sensor.activeAreaMm.height);
+  const sensorDiagonalMm = roundNumber(rawSensorDiagonalMm, 3);
+  const hfovDeg = roundNumber(rectilinearFovDeg(sensor.activeAreaMm.width, focalLengthMm), 3);
+  const vfovDeg = roundNumber(rectilinearFovDeg(sensor.activeAreaMm.height, focalLengthMm), 3);
+  const dfovDeg = roundNumber(rectilinearFovDeg(rawSensorDiagonalMm, focalLengthMm), 3);
+  return {
+    schemaVersion: 'optics.calculate_field_of_view.v1',
+    requested: {
+      focal_length_mm: focalLengthMm,
+      sensorPartNumber: sensor.partNumber,
+      ...(workingDistanceMm !== undefined ? { workingDistanceMm } : {}),
+    },
+    hfov_deg: hfovDeg,
+    vfov_deg: vfovDeg,
+    dfov_deg: dfovDeg,
+    method: 'rectilinear_reference_from_user_focal_length_only_no_commonlands_lens_sku',
+    distortion_model: 'none_user_focal_length_only_not_commonlands_lens_data',
+    distortion_status: 'unavailable',
+    image_circle_mm: null,
+    sensor_diagonal_mm: sensorDiagonalMm,
+    coverage_ok: null,
+    rectilinear_comparison: {
+      dfov_deg: dfovDeg,
+      delta_deg: 0,
+    },
+    warnings: [
+      'This response is an explicit rectilinear reference because no Commonlands lens SKU was supplied. It must not be presented as Commonlands distortion-corrected or catalog-backed lens truth.',
+      'For Commonlands lens selection, call match_lens_to_sensor/search_lens_catalog and then calculate_field_of_view with lens_sku.',
+    ],
+  };
+}
+
+function firstRecordFromArray(value: unknown): Record<string, unknown> | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return isRecord(value[0]) ? value[0] : undefined;
+}
+
+function describeDistortionModel(status: string): string {
+  if (status === 'calculated') return 'live_backend_calculated_distortion_fields';
+  if (status === 'source_display_only') return 'source_display_only_no_measured_polynomial_correction_claim';
+  return 'unavailable_no_measured_distortion_model';
+}
+
+function coverageOkFromClass(value: string | undefined): boolean | null {
+  if (value === 'full') return true;
+  if (value === 'inscribed' || value === 'cropped') return false;
+  return null;
+}
+
+function rectilinearFovDeg(sensorDimensionMm: number, focalLengthMm: number): number {
+  return (2 * Math.atan(sensorDimensionMm / (2 * focalLengthMm))) * (180 / Math.PI);
+}
+
+function roundNumber(value: number, places: number): number {
+  const factor = 10 ** places;
+  return Math.round((value + Number.EPSILON) * factor) / factor;
+}
+
 async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise<Response> {
   if (!isRecord(params) || typeof params.name !== 'string') {
     return rpcError(id, { code: -32602, message: 'Invalid params: tool name is required' });
   }
 
-  const args = isRecord(params.arguments) ? params.arguments : {};
-  if (!isToolEnabled(params.name, env)) {
+  const toolName = canonicalToolName(params.name);
+  if (!isKnownToolName(toolName) || !isToolEnabled(toolName, env)) {
     return rpcError(id, { code: -32601, message: `Tool not found: ${params.name}` });
   }
+  const args = normalizeAliasedToolArgs(toolName, isRecord(params.arguments) ? params.arguments : {});
 
-  if (params.name === 'search_lenses') {
+  if (toolName === 'search_lenses') {
     const query = typeof args.query === 'string' ? args.query : '';
     const limit = typeof args.limit === 'number' ? args.limit : 10;
 
@@ -1093,7 +1584,29 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
     });
   }
 
-  if (params.name === 'get_lens_details') {
+  if (toolName === 'get_lens_distortion_profile') {
+    const lensSku = firstString(args.lens_sku, args.lensSku, args.sku);
+    const lensSkuError = validateSafeIdentifier(lensSku, 'lens_sku');
+    if (lensSkuError) return rpcError(id, lensSkuError);
+    const sku = normalizeSafeIdentifier(lensSku as string);
+    const lens = getLensBySku(sku);
+    if (!lens) {
+      return rpcError(id, { code: -32004, message: `Lens not found: ${sku}` });
+    }
+
+    return toolResult(id, {
+      schemaVersion: 'optics.distortion_profile.v1',
+      lensSku: lens.sku,
+      profile: buildLensDistortionProfile(lens),
+      catalogFields: summarizeLens(lens),
+      sourceWarning: FIXTURE_NOT_PRODUCT_TRUTH_WARNING,
+      warnings: [
+        'Fixture distortion profile is source-display/catalog scaffold data. Do not claim measured polynomial correction unless a live backend response marks distortion status as calculated.',
+      ],
+    });
+  }
+
+  if (toolName === 'get_lens_details') {
     if (typeof args.sku !== 'string') {
       return rpcError(id, { code: -32602, message: 'Invalid params: sku is required' });
     }
@@ -1111,7 +1624,7 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
     });
   }
 
-  if (params.name === 'get_sensor_specs') {
+  if (toolName === 'get_sensor_specs') {
     if (typeof args.partNumber !== 'string') {
       return rpcError(id, { code: -32602, message: 'Invalid params: partNumber is required' });
     }
@@ -1128,7 +1641,52 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
     });
   }
 
-  if (params.name === 'compute_fov') {
+  if (toolName === 'calculate_field_of_view') {
+    const normalized = normalizeCalculateFovArgs(args);
+    if ('error' in normalized) return rpcError(id, normalized.error);
+
+    const sensor = await resolveSensor(env, normalized.sensorPartNumber);
+    if (!sensor) {
+      return rpcError(id, await sensorNotFoundErrorAsync(env, normalized.sensorPartNumber));
+    }
+
+    if (normalized.lensSku) {
+      if (isFovLiveBackendEnabled(env)) {
+        const liveResult = await computeFovWithLiveBackend(env, {
+          lensSku: normalized.lensSku,
+          sensorPartNumber: normalized.sensorPartNumber,
+          sensor,
+          ...(normalized.workingDistanceMm !== undefined ? { workingDistanceMm: normalized.workingDistanceMm } : {}),
+        });
+        if ('error' in liveResult) return rpcError(id, liveResult.error);
+        return toolResult(id, buildCalculateFieldOfViewResponse(liveResult.structuredContent, sensor, {
+          lensSku: normalized.lensSku,
+          sensorPartNumber: normalized.sensorPartNumber,
+          ...(normalized.workingDistanceMm !== undefined ? { workingDistanceMm: normalized.workingDistanceMm } : {}),
+        }));
+      }
+
+      const lens = getLensBySku(normalized.lensSku);
+      if (!lens) {
+        return rpcError(id, { code: -32004, message: `Lens not found: ${normalized.lensSku}` });
+      }
+      const fixture = buildFixtureSingleFovResponse(lens, sensor, normalized.workingDistanceMm);
+      return toolResult(id, buildCalculateFieldOfViewResponse(fixture, sensor, {
+        lensSku: normalized.lensSku,
+        sensorPartNumber: normalized.sensorPartNumber,
+        ...(normalized.workingDistanceMm !== undefined ? { workingDistanceMm: normalized.workingDistanceMm } : {}),
+      }));
+    }
+
+    const focalLengthResponse = buildFocalLengthReferenceFovResponse(
+      normalized.focalLengthMm as number,
+      sensor,
+      normalized.workingDistanceMm,
+    );
+    return toolResult(id, focalLengthResponse);
+  }
+
+  if (toolName === 'compute_fov') {
     const lensSkuError = validateSafeIdentifier(args.lensSku, 'lensSku');
     if (lensSkuError) return rpcError(id, lensSkuError);
     const sensorError = validateSafeIdentifier(args.sensorPartNumber, 'sensorPartNumber');
@@ -1165,7 +1723,7 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
     return toolResult(id, buildFixtureSingleFovResponse(lens, sensor, workingDistanceMm));
   }
 
-  if (params.name === 'compute_fov_catalog') {
+  if (toolName === 'compute_fov_catalog') {
     const sensorError = validateSafeIdentifier(args.sensorPartNumber, 'sensorPartNumber');
     if (sensorError) return rpcError(id, sensorError);
     const distanceError = validateOptionalPositiveNumber(args.workingDistanceMm, 'workingDistanceMm', MAX_WORKING_DISTANCE_MM);
@@ -1221,7 +1779,7 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
     });
   }
 
-  if (params.name === 'match_lenses_to_sensor') {
+  if (toolName === 'match_lenses_to_sensor') {
     const validation = validateRecommendationArgs(args);
     if (validation) return rpcError(id, validation);
 
@@ -1242,7 +1800,7 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
     }
   }
 
-  if (params.name === 'compare_lenses') {
+  if (toolName === 'compare_lenses') {
     if (!Array.isArray(args.lensSkus) || args.lensSkus.length < 1 || args.lensSkus.length > 10 || args.lensSkus.some((sku) => typeof sku !== 'string' || sku.trim() === '')) {
       return rpcError(id, { code: -32602, message: 'Invalid params: lensSkus must include 1-10 SKUs' });
     }
@@ -1273,7 +1831,7 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
     }
   }
 
-  if (params.name === 'get_product_page_details') {
+  if (toolName === 'get_product_page_details') {
     if (typeof args.sku !== 'string') {
       return rpcError(id, { code: -32602, message: 'Invalid params: sku is required' });
     }
@@ -1289,35 +1847,35 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
     });
   }
 
-  if (params.name === 'get_catalog_snapshot_status') {
+  if (toolName === 'get_catalog_snapshot_status') {
     return toolResult(id, getCatalogSnapshotStatus());
   }
 
-  if (params.name === 'get_shopify_ucp_readiness') {
+  if (toolName === 'get_shopify_ucp_readiness') {
     return toolResult(id, getShopifyUcpReadiness());
   }
 
-  if (params.name === 'get_shopify_readonly_config_status') {
+  if (toolName === 'get_shopify_readonly_config_status') {
     return toolResult(id, getShopifyReadonlyStatus(env));
   }
 
-  if (params.name === 'read_shopify_products') {
+  if (toolName === 'read_shopify_products') {
     return toolResult(id, await readShopifyProducts(env, args));
   }
 
-  if (params.name === 'read_shopify_metaobjects') {
+  if (toolName === 'read_shopify_metaobjects') {
     return toolResult(id, await readShopifyMetaobjects(env, args));
   }
 
-  if (isCartTool(params.name)) {
-    return toolResult(id, await callShopifyCartUcp(env, params.name, args));
+  if (isCartTool(toolName)) {
+    return toolResult(id, await callShopifyCartUcp(env, toolName, args));
   }
 
-  if (isCheckoutTool(params.name)) {
-    return toolResult(id, await callShopifyCheckoutMcp(env, params.name, args));
+  if (isCheckoutTool(toolName)) {
+    return toolResult(id, await callShopifyCheckoutMcp(env, toolName, args));
   }
 
-  if (params.name === 'search_catalog') {
+  if (toolName === 'search_catalog') {
     try {
       return toolResult(id, {
         ...searchCatalog(args),
@@ -1328,7 +1886,7 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
     }
   }
 
-  if (params.name === 'lookup_catalog') {
+  if (toolName === 'lookup_catalog') {
     try {
       return toolResult(id, {
         ...lookupCatalog(args),
@@ -1339,7 +1897,7 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
     }
   }
 
-  if (params.name === 'get_product') {
+  if (toolName === 'get_product') {
     try {
       return toolResult(id, {
         ...getProduct(args),
@@ -1350,7 +1908,7 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
     }
   }
 
-  if (params.name === 'prepare_shopify_purchase_handoff') {
+  if (toolName === 'prepare_shopify_purchase_handoff') {
     try {
       return toolResult(id, {
         ...prepareShopifyPurchaseHandoff(args),
@@ -1361,7 +1919,7 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
     }
   }
 
-  if (params.name === 'get_purchase_route_options') {
+  if (toolName === 'get_purchase_route_options') {
     try {
       return toolResult(id, {
         ...getPurchaseRouteOptions(args),
@@ -1372,7 +1930,7 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
     }
   }
 
-  if (params.name === 'recommend_lenses_for_application') {
+  if (toolName === 'recommend_lenses_for_application') {
     const validation = validateRecommendationArgs(args);
     if (validation) return rpcError(id, validation);
     if (args.application !== undefined && typeof args.application !== 'string') {
@@ -1965,8 +2523,8 @@ function buildFixtureSingleFovResponse(
 ): Record<string, unknown> {
   const result = computeFov(lens, sensor, workingDistanceMm);
   const coverage = buildCoverageMetadata(sensor, result.imageCircle.lensImageCircleMm);
-  const distortion = result.lens.fixtureDistortion
-    ? { display: result.lens.fixtureDistortion.notes, status: 'source_display_only' } as const
+  const distortion = lens.fixtureDistortion
+    ? { display: lens.fixtureDistortion.notes, status: 'source_display_only' } as const
     : undefined;
 
   return {
@@ -2277,7 +2835,9 @@ async function handleMcp(request: Request, env: Env): Promise<Response> {
   else if (parsed.method === 'tools/list') response = toolListResponse(parsed.id, env);
   else if (parsed.method === 'tools/call') response = await toolCallResponse(parsed.id, parsed.params, env);
   else if (parsed.method === 'resources/list') response = resourceListResponse(parsed.id);
-  else if (parsed.method === 'resources/read') response = resourceReadResponse(parsed.id, parsed.params);
+  else if (parsed.method === 'resources/read') response = await resourceReadResponse(parsed.id, parsed.params, env);
+  else if (parsed.method === 'prompts/list') response = promptListResponse(parsed.id);
+  else if (parsed.method === 'prompts/get') response = promptGetResponse(parsed.id, parsed.params);
   else {
     response = rpcError(parsed.id, {
       code: -32601,
