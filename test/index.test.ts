@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import worker, { type Env } from '../src/index';
+import worker, { __resetLensCatalogCacheForTests, type Env } from '../src/index';
 import { signDynamoRequest } from '../src/aws-sigv4';
 import { __resetSensorStoreCacheForTests } from '../src/sensor-store';
 
@@ -228,6 +228,7 @@ describe('Commonlands MCP Worker', () => {
   afterEach(() => {
     globalThis.fetch = originalFetch;
     __resetSensorStoreCacheForTests();
+    __resetLensCatalogCacheForTests();
   });
 
   it('returns deploy metadata from /healthz', async () => {
@@ -281,7 +282,7 @@ describe('Commonlands MCP Worker', () => {
       id: 1,
       result: {
         protocolVersion: '2025-11-25',
-        serverInfo: { name: 'commonlands-mcp', version: '0.1.4' },
+        serverInfo: { name: 'commonlands-mcp', version: '0.1.5' },
         capabilities: { tools: {}, resources: {}, prompts: {} },
       },
     });
@@ -468,15 +469,48 @@ describe('Commonlands MCP Worker', () => {
       destructiveHint: false,
     });
 
-    const cartTools = tools.filter((tool) => ['create_cart', 'get_cart', 'update_cart'].includes(tool.name));
-    expect(cartTools).toHaveLength(3);
-    for (const tool of cartTools) {
-      expect(tool.annotations).toMatchObject({
-        readOnlyHint: false,
-        destructiveHint: true,
-      });
+    // get_cart is a read: read-only and idempotent, never destructive. create_cart
+    // writes new state but destroys nothing. update_cart overwrites existing state.
+    const getCart = tools.find((tool) => tool.name === 'get_cart');
+    expect(getCart?.annotations).toMatchObject({
+      readOnlyHint: true,
+      idempotentHint: true,
+      destructiveHint: false,
+    });
+    const createCart = tools.find((tool) => tool.name === 'create_cart');
+    expect(createCart?.annotations).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: false,
+    });
+    const updateCart = tools.find((tool) => tool.name === 'update_cart');
+    expect(updateCart?.annotations).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: true,
+    });
+  });
+
+  it('never references hidden tool names inside visible tool descriptions', async () => {
+    const { body } = await rpc('tools/list', undefined, 'visible-descriptions', shopifyCartEnv);
+    const tools = getResult(body).tools as ToolSummary[];
+    const visibleNames = new Set(tools.map((tool) => tool.name));
+    const hiddenNames = [
+      'compute_fov_catalog',
+      'compute_fov',
+      'match_lenses_to_sensor',
+      'search_lenses',
+      'get_lens_details',
+    ].filter((name) => !visibleNames.has(name));
+
+    for (const tool of tools) {
+      for (const hidden of hiddenNames) {
+        expect(
+          `${tool.description ?? ''}`.includes(hidden),
+          `visible tool ${tool.name} description references hidden tool ${hidden}`,
+        ).toBe(false);
+      }
     }
   });
+
 
   it('returns MCP initialize instructions with usage, SEO, and security metadata', async () => {
     const { body } = await rpc(
@@ -3182,7 +3216,7 @@ describe('Commonlands MCP Worker', () => {
 
     const { body } = await rpc(
       'tools/call',
-      { name: 'get_sensor_specs', arguments: { partNumber: 'DOES_NOT_EXIST' } },
+      { name: 'get_sensor_specs', arguments: { partNumber: 'DOES-NOT-EXIST' } },
       'live-sensor-missing',
       sensorEnv,
     );
