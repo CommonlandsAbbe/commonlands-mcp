@@ -27,7 +27,7 @@ organization and **Owner / directory-management** access — individual plans
 cannot submit. Confirm the org plan before starting.
 
 **Technical readiness (already met):**
-- All 22 tools include `title` + `readOnlyHint`/`destructiveHint` annotations ✅
+- All 21 tools include `title` + `readOnlyHint`/`destructiveHint` annotations ✅
 - Read and write actions are separate tools ✅
 - Public endpoint, **no authentication** → reviewers connect instantly ✅
 - Privacy policy exists ✅
@@ -45,7 +45,7 @@ cannot submit. Confirm the org plan before starting.
 - **Company:** Commonlands LLC · `https://commonlands.com` · review contact: Max Henkart
 - **Data scope:** Both (read + buyer-confirmed cart write). No payment, orders, customer records, or inventory writes.
 - **User prerequisites:** None — public endpoint, no account or API key.
-- **Test credentials:** None required. Reviewers connect to `https://mcp.commonlands.com/mcp` and call `tools/list` (22 tools). Sample call: `match_lenses_to_sensor` with `{ "sensorPartNumber": "IMX477", "desiredHorizontalFovDeg": 70 }`.
+- **Test credentials:** None required. Reviewers connect to `https://mcp.commonlands.com/mcp` and call `tools/list` (21 tools). Sample call: `match_lens_to_sensor` with `{ "sensorPartNumber": "IMX477", "desiredHorizontalFovDeg": 70 }`.
 
 **Description (≤2000):**
 
