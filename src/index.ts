@@ -106,7 +106,7 @@ interface ToolAnnotations {
 
 const SERVER_INFO = {
   name: 'commonlands-mcp',
-  version: '0.1.4',
+  version: '0.1.5',
 } as const;
 
 const PUBLIC_MCP_ENDPOINT = 'https://mcp.commonlands.com/mcp';
@@ -127,6 +127,11 @@ const FOV_COMPUTATION_RULE =
   'FoV rule: catalog EFL, image circle, max FoV/FOV@image-circle, and distortion display fields are insufficient to compute field of view on a specific sensor; do not interpolate or estimate interior sensor FoV from those fields. Always call calculate_field_of_view for one lens/sensor pair or match_lens_to_sensor for catalog-wide per-sensor HFOV/VFOV/DFOV selection.';
 const INTENT_OPTICS_RULE =
   'Use this tool for FOV, HFOV, VFOV, DFOV, field of view, "lens for", lens-to-sensor, AR0234, IMX290, IMX477, and sensor part-number requests. It returns Commonlands data the model cannot derive: live backend FoV when configured, distortion model/status, image-circle coverage, live stock through Shopify read tools where applicable, and MTF/CRA/BFL fields if present in upstream catalog data. Do not use naive rectilinear fallback, focal-length-only math, interpolation, or self-computed catalog estimates when a Commonlands lens/sensor route is available.';
+// Short pointer for support tools. The full FoV rule lives in the server
+// instructions and the intent tools; repeating the long form in every description
+// cost every connecting client ~1.4K tokens per tools/list.
+const FOV_RULE_POINTER =
+  'FoV rule: never estimate sensor-specific FoV from catalog fields; use calculate_field_of_view or match_lens_to_sensor.';
 const SENSOR_PART_ENUM = CATALOG_SNAPSHOT.sensors.map((sensor) => sensor.partNumber);
 
 const CALCULATE_FIELD_OF_VIEW_INPUT_SCHEMA = {
@@ -240,7 +245,13 @@ const TOOLS: ToolDefinition[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        sensor: { type: 'string', enum: SENSOR_PART_ENUM, description: 'Sensor part number, for example AR0234 or IMX477.' },
+        sensor: {
+          anyOf: [
+            { type: 'string', enum: SENSOR_PART_ENUM, description: 'Known catalog sensor part number.' },
+            { type: 'string', pattern: '^[A-Za-z0-9-]{2,32}$', description: 'Safe sensor identifier accepted for live catalog lookup.' },
+          ],
+          description: 'Sensor part number, for example AR0234, IMX290, or IMX477. Any sensor in the live catalog is accepted; the enum lists only the fixture fallback set.',
+        },
         sensorPartNumber: {
           anyOf: [
             { type: 'string', enum: SENSOR_PART_ENUM },
@@ -271,7 +282,7 @@ const TOOLS: ToolDefinition[] = [
     name: 'search_lens_catalog',
     title: 'Search Commonlands lens catalog',
     description:
-      `Search the Commonlands lens catalog by SKU, mount, lens type, M12, C-mount, field-of-view intent, "lens for" wording, or sensor-triggering text such as AR0234, IMX290, and IMX477. ${INTENT_OPTICS_RULE} This discovers candidate lenses from Commonlands catalog/live backend data; it does not replace calculate_field_of_view for sensor-specific HFOV/VFOV/DFOV and does not replace read_shopify_products for live stock/price/product truth.`,
+      `Search the Commonlands lens catalog by SKU, mount, lens type, M12, C-mount, or application text. For sensor part numbers such as AR0234, IMX290, and IMX477, or any "lens for <sensor>" request, use match_lens_to_sensor instead — sensor names are not searchable text here. ${INTENT_OPTICS_RULE} This discovers candidate lenses from Commonlands catalog/live backend data; it does not replace calculate_field_of_view for sensor-specific HFOV/VFOV/DFOV and does not replace read_shopify_products for live stock/price/product truth.`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -329,7 +340,7 @@ const TOOLS: ToolDefinition[] = [
   {
     name: 'get_sensor_specs',
     title: 'Get sensor specs',
-    description: `Return sensor dimensions, pixel pitch, and resolution for lens field of view, M12 lens, and C-mount lens matching inputs. In production this uses the read-only live sensor table when configured, with fixture fallback when unavailable. Use these specs as inputs to compute_fov or compute_fov_catalog, not as a reason to hand-calculate FoV. ${FOV_COMPUTATION_RULE}`,
+    description: `Return sensor dimensions, pixel pitch, and resolution for lens field of view, M12 lens, and C-mount lens matching inputs. In production this uses the read-only live sensor table when configured, with fixture fallback when unavailable. Use these specs as inputs to calculate_field_of_view or match_lens_to_sensor, not as a reason to hand-calculate FoV. ${FOV_RULE_POINTER}`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -358,7 +369,8 @@ const TOOLS: ToolDefinition[] = [
       required: ['lensSku', 'sensorPartNumber'],
       additionalProperties: false,
     },
-    outputSchema: CALCULATE_FIELD_OF_VIEW_OUTPUT_SCHEMA,
+    // No outputSchema: this legacy alias returns optics.fov.v1 / optics.fov.live.v1
+    // shapes, not the calculate_field_of_view contract.
     hiddenFromList: true,
   },
   {
@@ -403,7 +415,7 @@ const TOOLS: ToolDefinition[] = [
   {
     name: 'compare_lenses',
     title: 'Compare Commonlands lenses',
-    description: `Compare selected fixture-backed Commonlands M12 lens and C-mount lens SKUs on the same sensor with the same deterministic scoring model. Use as explanatory context, then call compute_fov for final sensor-specific FoV values when precision matters. ${FOV_COMPUTATION_RULE} Not live product truth; verify purchasable facts with read_shopify_products.`,
+    description: `Compare selected Commonlands M12 lens and C-mount lens SKUs on the same sensor with the same deterministic scoring model. Use as explanatory context, then call calculate_field_of_view for final sensor-specific FoV values when precision matters. ${FOV_RULE_POINTER} Not live product truth; verify purchasable facts with read_shopify_products.`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -424,7 +436,7 @@ const TOOLS: ToolDefinition[] = [
     name: 'get_product_page_details',
     title: 'Get product page details',
     description:
-      `Return fixture-backed product-page handoff details for one lens, including DynamoDB-sourced optical specs and gated datasheet policy. Product-page/catalog optical fields are not a substitute for sensor-specific FoV; call compute_fov for the lens/sensor pair. ${FOV_COMPUTATION_RULE} Use read_shopify_products for live product URL, price, availability, variant IDs, and metafields.`,
+      `Return fixture-backed product-page handoff details for one lens, including DynamoDB-sourced optical specs and gated datasheet policy. Product-page/catalog optical fields are not a substitute for sensor-specific FoV; call calculate_field_of_view for the lens/sensor pair. ${FOV_RULE_POINTER} Use read_shopify_products for live product URL, price, availability, variant IDs, and metafields.`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -750,7 +762,7 @@ const TOOLS: ToolDefinition[] = [
     name: 'search_catalog',
     title: 'Search UCP catalog',
     description:
-      `Fixture-backed UCP Catalog search alias for Shopify-native product discovery; no live Shopify calls or cart behavior. Use this only for broad discovery; when a sensor or target FoV is involved, call compute_fov_catalog or compute_fov instead of estimating from catalog fields. ${FOV_COMPUTATION_RULE}`,
+      `Fixture-backed UCP Catalog search alias for Shopify-native product discovery; no live Shopify calls or cart behavior. Use this only for broad discovery; when a sensor or target FoV is involved, call match_lens_to_sensor or calculate_field_of_view instead of estimating from catalog fields. ${FOV_RULE_POINTER}`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -771,7 +783,7 @@ const TOOLS: ToolDefinition[] = [
     name: 'lookup_catalog',
     title: 'Lookup UCP catalog products',
     description:
-      `Fixture-backed UCP Catalog lookup alias for product, variant, SKU, handle, or URL identifiers; returns not-found messages instead of writes. Lookup records are not enough for sensor-specific FoV; call compute_fov for known lens/sensor pairs. ${FOV_COMPUTATION_RULE}`,
+      `Fixture-backed UCP Catalog lookup alias for product, variant, SKU, handle, or URL identifiers; returns not-found messages instead of writes. Lookup records are not enough for sensor-specific FoV; call calculate_field_of_view for known lens/sensor pairs. ${FOV_RULE_POINTER}`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -793,7 +805,7 @@ const TOOLS: ToolDefinition[] = [
     name: 'get_product',
     title: 'Get UCP catalog product',
     description:
-      `Fixture-backed UCP Catalog product detail alias with Commonlands optical metadata and Shopify-native handoff fields. Product optical fields are not a substitute for sensor-specific FoV; call compute_fov for the lens/sensor pair. ${FOV_COMPUTATION_RULE}`,
+      `Fixture-backed UCP Catalog product detail alias with Commonlands optical metadata and Shopify-native handoff fields. Product optical fields are not a substitute for sensor-specific FoV; call calculate_field_of_view for the lens/sensor pair. ${FOV_RULE_POINTER}`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -815,7 +827,7 @@ const TOOLS: ToolDefinition[] = [
     name: 'prepare_shopify_purchase_handoff',
     title: 'Prepare Shopify purchase handoff',
     description:
-      `Build a read-only Shopify-native purchase handoff seam for a selected lens without creating carts, checkout, orders, inventory mutations, or writes. Preserve any computed FoV provenance from compute_fov/compute_fov_catalog when carrying optical context into purchase handoff. ${FOV_COMPUTATION_RULE}`,
+      `Build a read-only Shopify-native purchase handoff seam for a selected lens without creating carts, checkout, orders, inventory mutations, or writes. Preserve any computed FoV provenance from calculate_field_of_view/match_lens_to_sensor when carrying optical context into purchase handoff. ${FOV_RULE_POINTER}`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -832,7 +844,7 @@ const TOOLS: ToolDefinition[] = [
     name: 'get_purchase_route_options',
     title: 'Get purchase route options',
     description:
-      `Return safe dual-channel purchase route options for AI agents and robotics engineers across Commonlands MCP and Shopify-native channels without mutating commerce state. This explains commerce routes only; call compute_fov/compute_fov_catalog for sensor-specific FoV before recommending a lens. ${FOV_COMPUTATION_RULE}`,
+      `Return safe dual-channel purchase route options for AI agents and robotics engineers across Commonlands MCP and Shopify-native channels without mutating commerce state. This explains commerce routes only; call calculate_field_of_view/match_lens_to_sensor for sensor-specific FoV before recommending a lens. ${FOV_RULE_POINTER}`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -850,7 +862,7 @@ const TOOLS: ToolDefinition[] = [
     name: 'recommend_lenses_for_application',
     title: 'Recommend lenses for an application',
     description:
-      `Rank fixture catalog M12 lenses and C-mount lenses for an application note such as embedded robotics, machine-vision inspection, or a required lens field of view. Use as an application shortlist helper, then call compute_fov_catalog or compute_fov for final per-sensor HFOV/VFOV/DFOV. ${FOV_COMPUTATION_RULE}`,
+      `Rank Commonlands M12 lenses and C-mount lenses for an application note such as embedded robotics, machine-vision inspection, or a required lens field of view. Use as an application shortlist helper, then call match_lens_to_sensor or calculate_field_of_view for final per-sensor HFOV/VFOV/DFOV. ${FOV_RULE_POINTER}`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -1057,6 +1069,24 @@ async function resolveSensor(env: Env, partNumber: string): Promise<SensorCatalo
   return getSensorByPartNumber(partNumber);
 }
 
+// Like resolveSensor, but also reports which source answered so tool responses can
+// carry provenance (live sensor table vs fixture fallback).
+async function resolveSensorWithSource(
+  env: Env,
+  partNumber: string,
+): Promise<{ sensor: SensorCatalogItem; source: 'live' | 'fixture' } | undefined> {
+  if (isSensorStoreConfigured(env)) {
+    try {
+      const live = await getLiveSensorByPartNumber(env, partNumber);
+      if (live) return { sensor: live, source: 'live' };
+    } catch (error) {
+      console.error('[Sensor Store] lookup failed, falling back to fixture:', error);
+    }
+  }
+  const fixture = getSensorByPartNumber(partNumber);
+  return fixture ? { sensor: fixture, source: 'fixture' } : undefined;
+}
+
 // Build a sensor-not-found error whose availableSensorPartNumbers reflects the live
 // table when configured (so agents see the real catalogue), else the fixture set.
 async function sensorNotFoundErrorAsync(env: Env, requested?: string): Promise<JsonRpcError> {
@@ -1141,20 +1171,32 @@ function isToolEnabled(name: string, env: Env): boolean {
   return true;
 }
 
-const WRITE_TOOL_NAMES = new Set([
+// Commerce tools that create or mutate Shopify-owned state. get_cart/get_checkout are
+// reads (gated behind the same env flags, but read-only and idempotent) — labeling a
+// cart read destructive adds pointless approval friction in directory clients.
+const MUTATING_TOOL_NAMES = new Set([
   'create_cart',
-  'get_cart',
   'update_cart',
   'cancel_cart',
   'create_checkout',
-  'get_checkout',
+  'update_checkout',
+  'complete_checkout',
+  'cancel_checkout',
+]);
+
+// Per MCP spec, destructiveHint marks tools that may delete or irreversibly change
+// state. Creating a new cart/checkout is a write but destroys nothing; updates,
+// completes, and cancels overwrite or terminate existing state.
+const DESTRUCTIVE_TOOL_NAMES = new Set([
+  'update_cart',
+  'cancel_cart',
   'update_checkout',
   'complete_checkout',
   'cancel_checkout',
 ]);
 
 function withToolAnnotations(tool: ToolDefinition): ToolDefinition {
-  const writes = WRITE_TOOL_NAMES.has(tool.name);
+  const writes = MUTATING_TOOL_NAMES.has(tool.name);
   const listedTool = { ...tool };
   delete listedTool.hiddenFromList;
   return {
@@ -1164,7 +1206,7 @@ function withToolAnnotations(tool: ToolDefinition): ToolDefinition {
       readOnlyHint: !writes,
       idempotentHint: !writes,
       openWorldHint: false,
-      destructiveHint: writes,
+      destructiveHint: DESTRUCTIVE_TOOL_NAMES.has(tool.name),
     },
   };
 }
@@ -1552,10 +1594,17 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
   if (toolName === 'search_lenses') {
     const query = typeof args.query === 'string' ? args.query : '';
     const limit = typeof args.limit === 'number' ? args.limit : 10;
+    // Sensor part numbers are not searchable lens text; steer agents to the sensor
+    // matching tool instead of letting an empty result read as "no lenses fit".
+    const sensorLikeQuery = /^(IMX|ISX|AR|OV|MT9)[0-9A-Z-]*$/i.test(query.trim());
+    const sensorQueryHint = sensorLikeQuery
+      ? { hint: `"${query.trim()}" looks like a sensor part number. Lens search matches SKU, mount, lens type, and resolution text only — use match_lens_to_sensor for sensor-specific lens finding.` }
+      : {};
 
     // Live search: enumerate the full live lens catalog and tokenized-match against
     // SKU, mount, lens type, and resolution. This makes lens_type queries work, e.g.
     // "telephoto" returns every lens with lensType Telephoto, keyed by clean part number.
+    let liveBackendError: string | undefined;
     if (isFovLiveBackendEnabled(env)) {
       const sensor = await resolveSensor(env, SEARCH_REFERENCE_SENSOR);
       if (sensor) {
@@ -1563,13 +1612,15 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
         if (!('error' in live)) {
           const results = searchLiveLenses(live.lenses, query, limit);
           return toolResult(id, {
-            schemaVersion: CATALOG_SNAPSHOT.schemaVersion,
-            generatedAt: CATALOG_SNAPSHOT.generatedAt,
+            schemaVersion: 'catalog.live.v1',
+            generatedAt: new Date().toISOString(),
             results,
             count: results.length,
             source: 'live-lambda-dynamodb-lens-catalog',
+            ...sensorQueryHint,
           });
         }
+        liveBackendError = live.error.message;
       }
     }
 
@@ -1581,6 +1632,14 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
       count: results.length,
       source: 'fixture-backed joined catalog snapshot',
       sourceWarning: FIXTURE_NOT_PRODUCT_TRUTH_WARNING,
+      ...(liveBackendError
+        ? {
+            liveBackendDegraded: true,
+            liveBackendError,
+            warnings: ['Live lens catalog was unavailable; these results come from the small fixture snapshot and may omit or misstate current products.'],
+          }
+        : {}),
+      ...sensorQueryHint,
     });
   }
 
@@ -1589,9 +1648,60 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
     const lensSkuError = validateSafeIdentifier(lensSku, 'lens_sku');
     if (lensSkuError) return rpcError(id, lensSkuError);
     const sku = normalizeSafeIdentifier(lensSku as string);
+
+    // Live-first: the fixture carries only a handful of scaffold lenses and at least
+    // one fixture SKU has diverged from the real product under the same part number.
+    // A visible tool must never serve a different lens's optics for a purchasable SKU.
+    if (isFovLiveBackendEnabled(env)) {
+      const sensor = await resolveSensor(env, SEARCH_REFERENCE_SENSOR);
+      if (sensor) {
+        const liveResult = await computeFovWithLiveBackend(env, {
+          lensSku: sku,
+          sensorPartNumber: sensor.partNumber,
+          sensor,
+        });
+        if (!('error' in liveResult)) {
+          const lenses = Array.isArray(liveResult.structuredContent.lenses)
+            ? (liveResult.structuredContent.lenses as SanitizedFovLens[])
+            : [];
+          const liveLens =
+            lenses.find((entry) => typeof entry.partNum === 'string' && entry.partNum.toUpperCase() === sku) ??
+            lenses.find((entry) => typeof entry.partNum === 'string' && entry.partNum.toUpperCase().startsWith(sku));
+          if (liveLens) {
+            return toolResult(id, {
+              schemaVersion: 'optics.distortion_profile.v1',
+              lensSku: liveLens.partNum,
+              profile: {
+                lens_sku: liveLens.partNum,
+                distortion_model: 'live_backend_lens_record',
+                distortion_status: liveLens.distortionAtFieldEdge?.status ?? 'unavailable',
+                ...(liveLens.distortionAtFieldEdge ? { distortion_at_field_edge: liveLens.distortionAtFieldEdge } : {}),
+                image_circle_mm: liveLens.imageCircle ?? null,
+                efl_mm: liveLens.efl ?? null,
+                f_number: liveLens.fNumber ?? null,
+                mount: liveLens.mount ?? null,
+                lens_type: liveLens.lensType ?? null,
+                source: 'aws-lambda-dynamodb-readonly',
+                warning:
+                  'Do not invent polynomial coefficients or claim measured distortion correction unless distortion_status is calculated.',
+              },
+              source: 'live-lambda-dynamodb-lens-catalog',
+              warnings: [
+                'Live lens record; use read_shopify_products for purchasable price, availability, and variant IDs.',
+              ],
+            });
+          }
+        }
+      }
+    }
+
     const lens = getLensBySku(sku);
     if (!lens) {
-      return rpcError(id, { code: -32004, message: `Lens not found: ${sku}` });
+      return rpcError(id, {
+        code: -32004,
+        message: `Lens not found: ${sku}`,
+        data: { hint: 'Verify the SKU with search_lens_catalog, then retry.' },
+      });
     }
 
     return toolResult(id, {
@@ -1602,6 +1712,7 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
       sourceWarning: FIXTURE_NOT_PRODUCT_TRUTH_WARNING,
       warnings: [
         'Fixture distortion profile is source-display/catalog scaffold data. Do not claim measured polynomial correction unless a live backend response marks distortion status as calculated.',
+        'Fixture optical specs (EFL, mount, image circle) can diverge from the live product under the same SKU; re-derive any customer-facing numbers from calculate_field_of_view or read_shopify_products.',
       ],
     });
   }
@@ -1625,19 +1736,22 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
   }
 
   if (toolName === 'get_sensor_specs') {
-    if (typeof args.partNumber !== 'string') {
-      return rpcError(id, { code: -32602, message: 'Invalid params: partNumber is required' });
+    const partError = validateSafeIdentifier(args.partNumber, 'partNumber');
+    if (partError) return rpcError(id, partError);
+    const partNumber = normalizeSafeIdentifier(args.partNumber as string);
+
+    const resolved = await resolveSensorWithSource(env, partNumber);
+    if (!resolved) {
+      return rpcError(id, await sensorNotFoundErrorAsync(env, partNumber));
     }
 
-    const sensor = await resolveSensor(env, args.partNumber);
-    if (!sensor) {
-      return rpcError(id, await sensorNotFoundErrorAsync(env, args.partNumber));
-    }
-
+    // Label provenance so agents can tell live sensor-table data from the small
+    // fixture fallback (a silent credential failure must not look like live truth).
     return toolResult(id, {
-      schemaVersion: CATALOG_SNAPSHOT.schemaVersion,
-      generatedAt: CATALOG_SNAPSHOT.generatedAt,
-      sensor,
+      schemaVersion: resolved.source === 'live' ? 'catalog.sensors.live.v1' : CATALOG_SNAPSHOT.schemaVersion,
+      generatedAt: resolved.source === 'live' ? new Date().toISOString() : CATALOG_SNAPSHOT.generatedAt,
+      sensor: resolved.sensor,
+      source: resolved.source === 'live' ? 'live-dynamodb-sensor-table' : 'fixture-backed sensor snapshot',
     });
   }
 
@@ -2085,6 +2199,33 @@ interface DistortionAtFieldEdge {
   status: 'source_display_only' | 'calculated' | 'unavailable';
 }
 
+// Module-level TTL cache for the live lens catalog, mirroring sensor-store.ts.
+// Catalog-mode backend calls trigger a Lambda invocation plus a DynamoDB lens-table
+// scan; on a public unauthenticated endpoint, every search/match/compare/recommend
+// call would otherwise pay (and bill) a fresh scan. Successful catalogs are cached
+// per sensor + working distance for a short TTL with in-flight request dedupe.
+// Errors are never cached so transient backend failures recover immediately.
+const LENS_CATALOG_CACHE_TTL_MS = 5 * 60 * 1000;
+const LENS_CATALOG_CACHE_MAX_ENTRIES = 24;
+
+interface LensCatalogCacheEntry {
+  lenses: LiveLensInput[];
+  fetchedAtMs: number;
+}
+
+const lensCatalogCache = new Map<string, LensCatalogCacheEntry>();
+const lensCatalogInFlight = new Map<string, Promise<{ lenses: LiveLensInput[] } | { error: JsonRpcError }>>();
+
+function lensCatalogCacheKey(sensor: SensorCatalogItem, workingDistanceMm?: number): string {
+  return `${sensor.partNumber.trim().toLowerCase()}|${workingDistanceMm ?? ''}`;
+}
+
+/** Test-only: clear the in-memory lens catalog cache between cases. */
+export function __resetLensCatalogCacheForTests(): void {
+  lensCatalogCache.clear();
+  lensCatalogInFlight.clear();
+}
+
 // Fetch the full live lens catalog (FoV backend, catalog mode) and normalize each
 // entry into the LiveLensInput shape the ranking tools consume. This is the product
 // truth source that replaces the scrambled fixture for ranking/comparison.
@@ -2093,23 +2234,44 @@ async function fetchLiveLensCatalog(
   sensor: SensorCatalogItem,
   workingDistanceMm?: number,
 ): Promise<{ lenses: LiveLensInput[] } | { error: JsonRpcError }> {
-  const result = await computeFovWithLiveBackend(env, {
-    sensorPartNumber: sensor.partNumber,
-    sensor,
-    ...(workingDistanceMm !== undefined ? { workingDistanceMm } : {}),
-  });
-  if ('error' in result) return { error: result.error };
-
-  const rawLenses = Array.isArray(result.structuredContent.lenses)
-    ? (result.structuredContent.lenses as SanitizedFovLens[])
-    : [];
-
-  const lenses: LiveLensInput[] = [];
-  for (const raw of rawLenses) {
-    const mapped = toLiveLensInput(raw, sensor);
-    if (mapped) lenses.push(mapped);
+  const key = lensCatalogCacheKey(sensor, workingDistanceMm);
+  const cached = lensCatalogCache.get(key);
+  if (cached && Date.now() - cached.fetchedAtMs < LENS_CATALOG_CACHE_TTL_MS) {
+    return { lenses: cached.lenses };
   }
-  return { lenses };
+  const inFlight = lensCatalogInFlight.get(key);
+  if (inFlight) return inFlight;
+
+  const load = (async (): Promise<{ lenses: LiveLensInput[] } | { error: JsonRpcError }> => {
+    const result = await computeFovWithLiveBackend(env, {
+      sensorPartNumber: sensor.partNumber,
+      sensor,
+      ...(workingDistanceMm !== undefined ? { workingDistanceMm } : {}),
+    });
+    if ('error' in result) return { error: result.error };
+
+    const rawLenses = Array.isArray(result.structuredContent.lenses)
+      ? (result.structuredContent.lenses as SanitizedFovLens[])
+      : [];
+
+    const lenses: LiveLensInput[] = [];
+    for (const raw of rawLenses) {
+      const mapped = toLiveLensInput(raw, sensor);
+      if (mapped) lenses.push(mapped);
+    }
+
+    if (lensCatalogCache.size >= LENS_CATALOG_CACHE_MAX_ENTRIES) {
+      const oldestKey = lensCatalogCache.keys().next().value;
+      if (oldestKey !== undefined) lensCatalogCache.delete(oldestKey);
+    }
+    lensCatalogCache.set(key, { lenses, fetchedAtMs: Date.now() });
+    return { lenses };
+  })().finally(() => {
+    lensCatalogInFlight.delete(key);
+  });
+
+  lensCatalogInFlight.set(key, load);
+  return load;
 }
 
 function toLiveLensInput(raw: SanitizedFovLens, sensor: SensorCatalogItem): LiveLensInput | null {
@@ -2127,6 +2289,14 @@ function toLiveLensInput(raw: SanitizedFovLens, sensor: SensorCatalogItem): Live
   const clipped = imageCircleMm > 0 && sensorDiagonalMm > imageCircleMm;
   const widthPx = sensor.resolution.widthPx;
   const heightPx = sensor.resolution.heightPx;
+
+  // Used sensor area: the full active area when the image circle covers it, otherwise
+  // the sensor rectangle scaled to inscribe the lens image circle. Computed, not
+  // fabricated — agents read these fields as real geometry.
+  const usedScale = clipped && sensorDiagonalMm > 0 ? imageCircleMm / sensorDiagonalMm : 1;
+  const usedWidthMm = Number((sensor.activeAreaMm.width * usedScale).toFixed(3));
+  const usedHeightMm = Number((sensor.activeAreaMm.height * usedScale).toFixed(3));
+  const usedDiagonalMm = Number(Math.hypot(usedWidthMm, usedHeightMm).toFixed(3));
 
   return {
     sku: raw.partNum,
@@ -2147,9 +2317,9 @@ function toLiveLensInput(raw: SanitizedFovLens, sensor: SensorCatalogItem): Live
     },
     imageCircle: {
       clipped,
-      usedWidthMm: 0,
-      usedHeightMm: 0,
-      usedDiagonalMm: 0,
+      usedWidthMm,
+      usedHeightMm,
+      usedDiagonalMm,
       lensImageCircleMm: imageCircleMm,
     },
     angularResolution: {
@@ -2214,6 +2384,23 @@ async function computeFovWithLiveBackend(
 
   if (!response.ok) {
     const isAuth = response.status === 401 || response.status === 403;
+    // Upstream 400 in single-lens mode means the backend could not resolve the
+    // requested lens; surface it as an actionable not-found (matching the
+    // sensor-not-found pattern) instead of an opaque internal error.
+    if (!isAuth && response.status === 400 && input.lensSku) {
+      return {
+        error: {
+          code: -32004,
+          message: `Lens not found by live FoV backend: ${input.lensSku}`,
+          data: {
+            upstreamStatus: response.status,
+            stage: 'live_fov_backend_response',
+            requestedLensSku: input.lensSku,
+            hint: 'Verify the SKU with search_lens_catalog, then retry with the exact part number.',
+          },
+        },
+      };
+    }
     return {
       error: {
         code: isAuth ? -32001 : -32603,
@@ -2724,7 +2911,8 @@ function searchLiveLenses(
   query: string,
   limit: number,
 ): Array<Record<string, unknown>> {
-  const safeLimit = Math.min(Math.max(Math.trunc(limit) || 10, 1), 50);
+  // Matches the tool inputSchema maximum of 25.
+  const safeLimit = Math.min(Math.max(Math.trunc(limit) || 10, 1), 25);
   const tokens = query.trim().toLowerCase().split(/\s+/u).filter(Boolean);
 
   const matched = tokens.length === 0
@@ -2775,48 +2963,48 @@ function summarizeLens(lens: LensCatalogItem): Omit<LensCatalogItem, 'source' | 
   return summary;
 }
 
-async function handleMcp(request: Request, env: Env): Promise<Response> {
+async function handleMcp(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
   const startedAt = Date.now();
   let parsedForTelemetry: JsonRpcRequest | null = null;
   let response: Response;
 
+  // In production, telemetry runs after the response is returned (waitUntil) so the
+  // second body parse never adds latency. Tests call handleMcp without ctx and await
+  // the write so telemetry assertions stay deterministic.
+  const recordTelemetry = async (finalResponse: Response): Promise<Response> => {
+    const write = writeMcpTelemetry(env, request, parsedForTelemetry, finalResponse, startedAt);
+    if (ctx) ctx.waitUntil(write);
+    else await write;
+    return finalResponse;
+  };
+
   const contentType = request.headers.get('content-type') ?? '';
   if (!contentType.toLowerCase().includes('application/json')) {
-    response = json({ error: 'unsupported_media_type' }, { status: 415 });
-    await writeMcpTelemetry(env, request, parsedForTelemetry, response, startedAt);
-    return response;
+    return recordTelemetry(json({ error: 'unsupported_media_type' }, { status: 415 }));
   }
 
   const contentLength = request.headers.get('content-length');
   if (contentLength && Number(contentLength) > MAX_MCP_BODY_BYTES) {
-    response = json({ error: 'payload_too_large' }, { status: 413 });
-    await writeMcpTelemetry(env, request, parsedForTelemetry, response, startedAt);
-    return response;
+    return recordTelemetry(json({ error: 'payload_too_large' }, { status: 413 }));
   }
 
   const bodyText = await request.text();
   if (new TextEncoder().encode(bodyText).byteLength > MAX_MCP_BODY_BYTES) {
-    response = json({ error: 'payload_too_large' }, { status: 413 });
-    await writeMcpTelemetry(env, request, parsedForTelemetry, response, startedAt);
-    return response;
+    return recordTelemetry(json({ error: 'payload_too_large' }, { status: 413 }));
   }
 
   let payload: unknown;
   try {
     payload = JSON.parse(bodyText);
   } catch {
-    response = rpcError(null, { code: -32700, message: 'Parse error' });
-    await writeMcpTelemetry(env, request, parsedForTelemetry, response, startedAt);
-    return response;
+    return recordTelemetry(rpcError(null, { code: -32700, message: 'Parse error' }));
   }
 
   const parsed = validateRpcRequest(payload);
   if ('code' in parsed) {
     const id = isRecord(payload) ? payload.id : null;
     parsedForTelemetry = isRecord(payload) ? payload : null;
-    response = rpcError(id, parsed);
-    await writeMcpTelemetry(env, request, parsedForTelemetry, response, startedAt);
-    return response;
+    return recordTelemetry(rpcError(id, parsed));
   }
 
   parsedForTelemetry = parsed;
@@ -2826,9 +3014,7 @@ async function handleMcp(request: Request, env: Env): Promise<Response> {
   // other notifications/*) after initialize; acknowledge with 202 and an empty body
   // instead of replying "Method not found".
   if (isJsonRpcNotification(parsed)) {
-    response = acceptedNotification();
-    await writeMcpTelemetry(env, request, parsedForTelemetry, response, startedAt);
-    return response;
+    return recordTelemetry(acceptedNotification());
   }
 
   if (parsed.method === 'initialize') response = initializeResponse(parsed.id, parsed.params);
@@ -2845,14 +3031,13 @@ async function handleMcp(request: Request, env: Env): Promise<Response> {
     });
   }
 
-  await writeMcpTelemetry(env, request, parsedForTelemetry, response, startedAt);
-  return response;
+  return recordTelemetry(response);
 }
 
 assertSafePublicCatalogUrls();
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
     if (url.pathname === '/healthz') {
@@ -2867,7 +3052,7 @@ export default {
 
     if (url.pathname === '/mcp') {
       if (request.method !== 'POST') return methodNotAllowed();
-      return handleMcp(request, env);
+      return handleMcp(request, env, ctx);
     }
 
     return json({ error: 'not_found' }, { status: 404 });

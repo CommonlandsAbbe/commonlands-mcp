@@ -17,7 +17,7 @@ Use Commonlands MCP for Commonlands precision-optics questions about M12 lenses,
 
 Treat fixture-backed catalog, recommendation, comparison, and handoff tools as scaffold/context only. Sensor specs prefer the read-only live sensor table when configured and fall back to fixtures when unavailable. Before giving purchasable facts—price, availability, Shopify Product/Variant IDs, product URLs, cart paths, or cart payloads—call read_shopify_products and cite that live result.
 
-Catalog EFL, image circle, max FoV/FOV@image-circle, and distortion display fields are insufficient to compute FoV on a specific sensor. Do not interpolate or estimate sensor FoV from those fields. Use compute_fov for one lens/sensor pair or compute_fov_catalog for catalog-wide per-sensor HFOV/VFOV/DFOV. For "find lenses for this sensor/target FoV" requests, call compute_fov_catalog first; there is no current find_lenses tool.
+Catalog EFL, image circle, max FoV/FOV@image-circle, and distortion display fields are insufficient to compute FoV on a specific sensor. Do not interpolate or estimate sensor FoV from those fields. Use calculate_field_of_view for one lens/sensor pair or match_lens_to_sensor for catalog-wide per-sensor HFOV/VFOV/DFOV. For "find lenses for this sensor/target FoV" requests, call match_lens_to_sensor first; there is no current find_lenses tool.
 
 Do not call create_cart or update_cart unless the buyer explicitly confirms line items and quantities. Do not claim Checkout MCP, cancel_cart, Shopify catalog writes, inventory writes, customer/order writes, Acumatica writes, payment collection, or raw card handling are available unless those tools appear in live tools/list and the operator explicitly approves the action.
 ```
@@ -39,12 +39,12 @@ Optional: allowlist read/catalog/FoV tools if you do not want cart tools visible
 url = "https://mcp.commonlands.com/mcp"
 tool_timeout_sec = 60
 enabled_tools = [
-  "search_lenses",
-  "get_lens_details",
+  "search_lens_catalog",
+  "search_lens_catalog",
   "get_sensor_specs",
-  "compute_fov",
-  "compute_fov_catalog",
-  "match_lenses_to_sensor",
+  "calculate_field_of_view",
+  "match_lens_to_sensor",
+  "match_lens_to_sensor",
   "compare_lenses",
   "read_shopify_products",
   "search_catalog",

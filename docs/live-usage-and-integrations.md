@@ -33,9 +33,9 @@ Use it to search the Commonlands lens catalog, shortlist lenses by sensor/applic
 
 ### Optical calculations
 
-Use `compute_fov` for one lens/sensor pair and `compute_fov_catalog` for catalog-wide FoV on one sensor. In production, these use the authenticated AWS Lambda/DynamoDB FoV backend when configured. Sensor specs come from the read-only live sensor table when configured, with fixture fallback when unavailable. Agent-facing FoV responses are sanitized before return and never expose raw distortion coefficients.
+Use `calculate_field_of_view` for one lens/sensor pair and `match_lens_to_sensor` for catalog-wide FoV on one sensor. In production, these use the authenticated AWS Lambda/DynamoDB FoV backend when configured. Sensor specs come from the read-only live sensor table when configured, with fixture fallback when unavailable. Agent-facing FoV responses are sanitized before return and never expose raw distortion coefficients.
 
-Catalog EFL, image circle, max FoV/FOV@image-circle, and distortion display fields are insufficient to compute field of view on a specific sensor. Agents must not interpolate interior-sensor FoV from those fields or run their own FoV scripts. For sensor-specific discovery, call `compute_fov_catalog` first and use the returned per-sensor `hfov`, `vfov`, `dfov`, nested `fov`, `coverageClass`, `coverage.pixelCounts`, `distortionAtFieldEdge`, and provenance/source metadata.
+Catalog EFL, image circle, max FoV/FOV@image-circle, and distortion display fields are insufficient to compute field of view on a specific sensor. Agents must not interpolate interior-sensor FoV from those fields or run their own FoV scripts. For sensor-specific discovery, call `match_lens_to_sensor` first and use the returned per-sensor `hfov`, `vfov`, `dfov`, nested `fov`, `coverageClass`, `coverage.pixelCounts`, `distortionAtFieldEdge`, and provenance/source metadata.
 
 ### Live Shopify product truth
 
@@ -49,7 +49,7 @@ If a buyer explicitly asks for a cart, the agent can use live Shopify Variant GI
 
 - **Live tool count:** 22
 - **Live Shopify product truth:** `read_shopify_products` is configured and read-only.
-- **Live FoV backend:** `compute_fov` and `compute_fov_catalog` use the authenticated AWS Lambda/DynamoDB backend when configured. The Worker sends the backend secret server-side; agents never receive it, and returned lens records are allowlisted.
+- **Live FoV backend:** `calculate_field_of_view` and `match_lens_to_sensor` use the authenticated AWS Lambda/DynamoDB backend when configured. The Worker sends the backend secret server-side; agents never receive it, and returned lens records are allowlisted.
 - **Sensor specs:** `get_sensor_specs` prefers the read-only live sensor table when configured and falls back to the Worker fixture sensor catalog when unavailable.
 - **Cart tools:** `create_cart`, `get_cart`, and `update_cart` are exposed through Shopify's standard Storefront MCP endpoint.
 - **Checkout tools:** hidden. `create_checkout` returns `Tool not found`; checkout still needs a validated Shopify Checkout MCP endpoint, Cloudflare protections, and explicit approval before exposure.
@@ -58,11 +58,11 @@ If a buyer explicitly asks for a cart, the agent can use live Shopify Variant GI
 ## Recommended agent workflow
 
 1. Start with `tools/list` and check the live tool surface.
-2. For sensor-specific lens finding, call `compute_fov_catalog` first. There is no current `find_lenses` tool.
-3. Use `search_catalog`, `search_lenses`, or `recommend_lenses_for_application` only for broad discovery/shortlist context.
+2. For sensor-specific lens finding, call `match_lens_to_sensor` first. There is no current `find_lenses` tool.
+3. Use `search_catalog`, `search_lens_catalog`, or `recommend_lenses_for_application` only for broad discovery/shortlist context.
 4. Use `get_sensor_specs` to confirm sensor pixels, pixel pitch, and active area when needed.
-5. Use `compute_fov` for one live FoV result or `compute_fov_catalog` for catalog-wide FoV when the Lambda/DynamoDB backend supports the request.
-6. Use `match_lenses_to_sensor`, `compare_lenses`, and `get_lens_details` for fixture-backed engineering context.
+5. Use `calculate_field_of_view` for one live FoV result or `match_lens_to_sensor` for catalog-wide FoV when the Lambda/DynamoDB backend supports the request.
+6. Use `match_lens_to_sensor`, `compare_lenses`, and `search_lens_catalog` for fixture-backed engineering context.
 7. Use `read_shopify_products` for live Shopify product/variant IDs, product URLs, price, inventory signals, and cart variant IDs.
 8. If the buyer explicitly asks for a cart, use live Shopify Variant GIDs from `read_shopify_products`, then call `create_cart`/`get_cart`/`update_cart`. Show the returned Shopify cart/continue URL to the buyer.
 9. Do not claim Checkout MCP is live. Send buyers to Shopify's returned cart/checkout handoff URL when present.
@@ -85,12 +85,12 @@ This table reflects a live `tools/list` check against the production MCP endpoin
 
 | Tool | Primary use | Required inputs | Optional inputs | Output shape / what to trust | Usefulness check |
 | --- | --- | --- | --- | --- | --- |
-| `search_lenses` | Legacy fixture search by SKU, title, mount, or lens type. | None; `query` is accepted but can be empty. | `query`, `limit` 1-25. | `catalog.snapshot.v1` with `results[]`, count, generated time, and `fixture_not_product_truth` warning. | Useful for broad discovery, not live SKU/price/stock truth. |
-| `get_lens_details` | Fixture-backed details for one Commonlands SKU. | `sku`. | None. | `catalog.snapshot.v1` with `lens` optical/commerce scaffold fields and fixture warning. | Useful for engineering context; must be followed by `read_shopify_products` before buying claims. |
+| `search_lens_catalog` | Legacy fixture search by SKU, title, mount, or lens type. | None; `query` is accepted but can be empty. | `query`, `limit` 1-25. | `catalog.snapshot.v1` with `results[]`, count, generated time, and `fixture_not_product_truth` warning. | Useful for broad discovery, not live SKU/price/stock truth. |
+| `search_lens_catalog` | Fixture-backed details for one Commonlands SKU. | `sku`. | None. | `catalog.snapshot.v1` with `lens` optical/commerce scaffold fields and fixture warning. | Useful for engineering context; must be followed by `read_shopify_products` before buying claims. |
 | `get_sensor_specs` | Sensor dimensions used by FoV and ranking tools. | `partNumber`. | None. | `catalog.snapshot.v1` with resolution, active area, and pixel size. | Primary path for sensor specs; production prefers the read-only live sensor table when configured, with fixture fallback when unavailable. |
-| `compute_fov` | FoV for one lens/sensor pair. | `lensSku`, `sensorPartNumber`. | `workingDistanceMm`. | `optics.fov.live.v1` when Lambda/DynamoDB has the lens; otherwise a fixture-backed FoV shape or a fail-closed error. Returned lens records include per-sensor HFOV/VFOV/DFOV, nested `fov`, `coverageClass`, `coverage.pixelCounts`, `distortionAtFieldEdge`, and provenance when the Worker can provide them. | Required path for sensor-specific FoV; failures are useful because they prevent unsupported calculations. |
-| `compute_fov_catalog` | FoV sweep for available catalog lenses on one sensor. | `sensorPartNumber`. | `workingDistanceMm`. | Live/sanitized catalog FoV records with per-sensor HFOV/VFOV/DFOV, nested `fov`, `coverageClass`, `coverage.pixelCounts`, `distortionAtFieldEdge`, payload/lens provenance, and sanitized errors when backend is enabled; never returns raw coefficients. | First-choice tool for sensor-specific lens finding; still needs product verification before recommendation. |
-| `match_lenses_to_sensor` | Fixture-backed ranking against a sensor and optional HFOV target. | `sensorPartNumber`. | `desiredHorizontalFovDeg`, `workingDistanceMm`, `mount`, `maxResults` 1-10. | `recommendations.v1` with ranked lenses, score, fit, FoV, image-circle notes, warnings. | Useful shortlist generator; not live product truth. |
+| `calculate_field_of_view` | FoV for one lens/sensor pair. | `lensSku`, `sensorPartNumber`. | `workingDistanceMm`. | `optics.fov.live.v1` when Lambda/DynamoDB has the lens; otherwise a fixture-backed FoV shape or a fail-closed error. Returned lens records include per-sensor HFOV/VFOV/DFOV, nested `fov`, `coverageClass`, `coverage.pixelCounts`, `distortionAtFieldEdge`, and provenance when the Worker can provide them. | Required path for sensor-specific FoV; failures are useful because they prevent unsupported calculations. |
+| `match_lens_to_sensor` | FoV sweep for available catalog lenses on one sensor. | `sensorPartNumber`. | `workingDistanceMm`. | Live/sanitized catalog FoV records with per-sensor HFOV/VFOV/DFOV, nested `fov`, `coverageClass`, `coverage.pixelCounts`, `distortionAtFieldEdge`, payload/lens provenance, and sanitized errors when backend is enabled; never returns raw coefficients. | First-choice tool for sensor-specific lens finding; still needs product verification before recommendation. |
+| `match_lens_to_sensor` | Fixture-backed ranking against a sensor and optional HFOV target. | `sensorPartNumber`. | `desiredHorizontalFovDeg`, `workingDistanceMm`, `mount`, `maxResults` 1-10. | `recommendations.v1` with ranked lenses, score, fit, FoV, image-circle notes, warnings. | Useful shortlist generator; not live product truth. |
 | `compare_lenses` | Compare selected SKUs on the same sensor. | `lensSkus` 1-10, `sensorPartNumber`. | `workingDistanceMm`. | `recommendations.v1` comparison records with rank, fit, FoV, tradeoffs. | Useful for explaining tradeoffs after the user or another tool chose candidate SKUs. |
 | `get_product_page_details` | Fixture product-page handoff and gated datasheet policy. | `sku`. | None. | `product_page.v1` with fixture product, specs, gated datasheet note, and safety warnings. | Useful for handoff context; not authoritative for current product URL, price, stock, or Variant GID. |
 | `get_catalog_snapshot_status` | Fixture catalog provenance and validation. | None. | None. | `catalog.snapshot_status.v1` with counts, validation status, sources, refresh mode. | Useful for deciding how much to trust fixture outputs. |
@@ -106,7 +106,7 @@ This table reflects a live `tools/list` check against the production MCP endpoin
 | `get_product` | UCP-style fixture product detail. | `catalog.id`. | `meta`. | `ucp.catalog.v1` product detail record with fixture metadata and warning. | Useful for UCP product-card context; verify live facts separately. |
 | `prepare_shopify_purchase_handoff` | Non-mutating purchase handoff plan for a SKU. | `sku`. | `quantity`, `sensorPartNumber`, `selectedVariantId`. | `shopify.purchase_handoff.v1` with product scaffold, transaction safety, warnings; no cart/checkout created. | Useful as a safe planning seam; any selected variant must come from `read_shopify_products` to be cart-ready. |
 | `get_purchase_route_options` | Explain available/planned purchase routes without mutation. | `sku`. | `quantity`, `sensorPartNumber`, `buyerIntent`, `agentType`. | `commerce.purchase_routes.v1` with routes, safety flags, required checks, warnings. | Useful to explain next steps and boundaries; it does not buy anything. |
-| `recommend_lenses_for_application` | Fixture-backed application-specific shortlist. | `sensorPartNumber`. | `application`, `desiredHorizontalFovDeg`, `workingDistanceMm`, `mount`, `preferLowDistortion`, `requireInStock`, `maxResults` 1-10. | `recommendations.v1` with ranked application-fit records, tradeoffs, warnings. | Useful for natural-language application triage; may later consolidate with `match_lenses_to_sensor`. |
+| `recommend_lenses_for_application` | Fixture-backed application-specific shortlist. | `sensorPartNumber`. | `application`, `desiredHorizontalFovDeg`, `workingDistanceMm`, `mount`, `preferLowDistortion`, `requireInStock`, `maxResults` 1-10. | `recommendations.v1` with ranked application-fit records, tradeoffs, warnings. | Useful for natural-language application triage; may later consolidate with `match_lens_to_sensor`. |
 
 ## Safety boundaries
 
@@ -124,7 +124,7 @@ This table reflects a live `tools/list` check against the production MCP endpoin
 
 The output excerpts below are from live-safe calls to the production endpoint unless marked otherwise. Mutable cart tools are documented with their input contract and expected output shape; this documentation pass did **not** create or update a live cart.
 
-### `search_lenses`
+### `search_lens_catalog`
 
 **Use for:** fixture-backed legacy lens catalog search by SKU, title, mount, or lens type.
 
@@ -133,7 +133,7 @@ The output excerpts below are from live-safe calls to the production endpoint un
 **Tool call:**
 
 ```json
-{"name":"search_lenses","arguments":{"query":"CIL250","limit":1}}
+{"name":"search_lens_catalog","arguments":{"query":"CIL250","limit":1}}
 ```
 
 **Actual output excerpt:**
@@ -156,7 +156,7 @@ The output excerpts below are from live-safe calls to the production endpoint un
 }
 ```
 
-### `get_lens_details`
+### `search_lens_catalog`
 
 **Use for:** fixture-backed optical/product details for one lens SKU.
 
@@ -165,7 +165,7 @@ The output excerpts below are from live-safe calls to the production endpoint un
 **Tool call:**
 
 ```json
-{"name":"get_lens_details","arguments":{"sku":"CIL250"}}
+{"name":"search_lens_catalog","arguments":{"sku":"CIL250"}}
 ```
 
 **Actual output excerpt:**
@@ -214,7 +214,7 @@ The output excerpts below are from live-safe calls to the production endpoint un
 }
 ```
 
-### `compute_fov`
+### `calculate_field_of_view`
 
 **Use for:** FoV for one lens/sensor pair. In production this is wired to authenticated AWS Lambda/DynamoDB when the lens exists in the Lambda table. The Lambda lens table is maintained separately, so coverage can change by SKU.
 
@@ -223,7 +223,7 @@ The output excerpts below are from live-safe calls to the production endpoint un
 **Tool call:**
 
 ```json
-{"name":"compute_fov","arguments":{"lensSku":"CIL160","sensorPartNumber":"IMX477"}}
+{"name":"calculate_field_of_view","arguments":{"lensSku":"CIL160","sensorPartNumber":"IMX477"}}
 ```
 
 **Expected sanitized output shape after the current Worker change:**
@@ -281,7 +281,7 @@ Live backend records are allowlisted by the Worker before they are returned to a
 { "code": -32603, "message": "Live FoV backend rejected request" }
 ```
 
-### `compute_fov_catalog`
+### `match_lens_to_sensor`
 
 **Use for:** FoV for the available lens catalog on one sensor.
 
@@ -290,7 +290,7 @@ Live backend records are allowlisted by the Worker before they are returned to a
 **Tool call:**
 
 ```json
-{"name":"compute_fov_catalog","arguments":{"sensorPartNumber":"IMX477"}}
+{"name":"match_lens_to_sensor","arguments":{"sensorPartNumber":"IMX477"}}
 ```
 
 **Expected sanitized output shape:**
@@ -336,7 +336,7 @@ Live backend records are allowlisted by the Worker before they are returned to a
 
 Live catalog mode depends on the Lambda supporting a bounded catalog scan when no `partNums` are supplied. If the live backend is disabled, the Worker returns fixture-backed catalog FoV scaffold data instead.
 
-### `match_lenses_to_sensor`
+### `match_lens_to_sensor`
 
 **Use for:** fixture-backed ranking of catalog lenses for a sensor and optional target FoV.
 
@@ -345,7 +345,7 @@ Live catalog mode depends on the Lambda supporting a bounded catalog scan when n
 **Tool call:**
 
 ```json
-{"name":"match_lenses_to_sensor","arguments":{"sensorPartNumber":"IMX477","desiredHorizontalFovDeg":50,"maxResults":2}}
+{"name":"match_lens_to_sensor","arguments":{"sensorPartNumber":"IMX477","desiredHorizontalFovDeg":50,"maxResults":2}}
 ```
 
 **Actual output excerpt:**
@@ -811,7 +811,7 @@ Note: the readiness text is conservative/static. The live `tools/list` is author
 
 ### `recommend_lenses_for_application`
 
-**Use for:** fixture-backed application-specific shortlist. This may later be consolidated into `match_lenses_to_sensor`; for now it is still live in `tools/list`.
+**Use for:** fixture-backed application-specific shortlist. This may later be consolidated into `match_lens_to_sensor`; for now it is still live in `tools/list`.
 
 **Example prompt:** `Recommend M12 lenses for robotics navigation on IMX477 near 50° horizontal FoV.`
 
@@ -889,7 +889,7 @@ curl -s -X POST 'https://mcp.commonlands.com/mcp' \
   -H 'content-type: application/json' \
   -H 'accept: application/json' \
   -H 'user-agent: Mozilla/5.0 commonlands-mcp-smoke' \
-  --data-binary '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"compute_fov","arguments":{"lensSku":"CIL160","sensorPartNumber":"IMX477"}}}' | python3 -m json.tool
+  --data-binary '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"calculate_field_of_view","arguments":{"lensSku":"CIL160","sensorPartNumber":"IMX477"}}}' | python3 -m json.tool
 ```
 
 Check that checkout is hidden:
