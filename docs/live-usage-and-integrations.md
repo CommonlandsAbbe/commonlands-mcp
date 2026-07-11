@@ -96,8 +96,8 @@ This table reflects a live `tools/list` check against the production MCP endpoin
 | `get_catalog_snapshot_status` | Fixture catalog provenance and validation. | None. | None. | `catalog.snapshot_status.v1` with counts, validation status, sources, refresh mode. | Useful for deciding how much to trust fixture outputs. |
 | `get_shopify_ucp_readiness` | Conservative Storefront/UCP readiness metadata. | None. | None. | `shopify.ucp_readiness.v1` with compatibility target, readiness, catalog counts, blockers/safeguards. | Useful for planning; `tools/list` is still authoritative for live exposure. |
 | `get_shopify_readonly_config_status` | Sanitized read-only Shopify connector config. | None. | None. | `shopify.readonly_config_status.v1` with redacted binding/scopes status and safety flags. | Useful for debugging connector configuration without exposing secrets or calling Shopify. |
-| `read_shopify_products` | Live Shopify product truth. | At least one of `sku`, `handle`, or `query` should be supplied for useful results. | `limit` 1-25, `includeMetafields` true/false. | `shopify.live_read.v1` with live Product/Variant GIDs, SKU, price, inventory signal, product URL, media, metafields when requested, read-only safety flags. | Essential before final purchasable claims or cart handoff. This is the main truth tool. |
-| `read_shopify_metaobjects` | Live read-only metaobject preview. | `type`. | `handle`, `limit` 1-25. | `shopify.live_read.v1` with redacted `metaobjects[]`, connector status, safety flags. | Useful for diagnostics/content checks, not product truth. |
+| `read_shopify_products` | Live Shopify product truth (public data only). | At least one of `sku`, `handle`, or `query` should be supplied for useful results. | `limit` 1-25, `includeMetafields` true/false (default false; allowlisted `custom.*` display fields only). | `shopify.live_read.v1` with live Product/Variant GIDs, SKU, price, coarse `availability`, product URL, media, allowlisted metafields when requested, read-only safety flags. ACTIVE products only; no exact inventory counts. | Essential before final purchasable claims or cart handoff. This is the main truth tool. |
+| `read_shopify_metaobjects` | Removed from the public surface in v0.2.0 (Admin metaobjects can hold non-public data). | n/a | n/a | Actionable -32601 error pointing to `read_shopify_products`. | Do not call. |
 | `create_cart` | Create Shopify-owned cart from confirmed live Variant GIDs. | `cart.line_items[]` with `quantity` and `item.id` Variant GID. | `meta`, `cart.context`, `cart.signals`. | `commonlands.cart_ucp.v1` with connector status, Shopify-owned cart payload when returned, safety flags. | Useful only after explicit buyer line-item/quantity confirmation. Mutates Shopify cart state; does not checkout or collect payment. |
 | `get_cart` | Retrieve a Shopify-owned cart by ID. | `id` Shopify Cart GID. | `meta`. | `commonlands.cart_ucp.v1` with cart payload when Shopify returns one, persistence notes, safety flags. | Useful for cart refresh/resume if the agent retained the cart ID. |
 | `update_cart` | Add variants, change quantities, or remove lines in a Shopify-owned cart. | `id`, `cart`. | `cart.line_items`, `cart.update_items`, `cart.remove_line_ids`, `context`, `signals`, `meta`. | `commonlands.cart_ucp.v1` with operation status, cart payload when returned, and safety flags. | Useful for buyer-confirmed cart edits; mutates cart only, not checkout/order/customer/inventory/catalog. |
@@ -571,31 +571,9 @@ Note: the readiness text is conservative/static. The live `tools/list` is author
 }
 ```
 
-### `read_shopify_metaobjects`
+### `read_shopify_metaobjects` (removed in v0.2.0)
 
-**Use for:** live read-only metaobject preview by type/handle. Returns redacted previews only.
-
-**Example prompt:** `Check whether lens_specification metaobjects are visible.`
-
-**Tool call:**
-
-```json
-{"name":"read_shopify_metaobjects","arguments":{"type":"lens_specification","limit":1}}
-```
-
-**Actual output excerpt:**
-
-```json
-{
-  "schemaVersion": "shopify.live_read.v1",
-  "mode": "shopify_admin_graphql_read_only",
-  "configured": true,
-  "source": { "productTruth": false, "readOnly": true, "writesShopify": false },
-  "connector": { "status": "ok", "messages": [] },
-  "metaobjects": [],
-  "safety": { "readOnly": true, "writesShopify": false, "exposesSecrets": false }
-}
-```
+**Removed from the public surface:** Admin metaobject definitions can hold non-public store content, so this tool no longer exists on the public endpoint (Anthropic directory review, 2026-07). Calls return an actionable `-32601` error pointing to `read_shopify_products`, which serves the public product-page data agents actually need.
 
 ### `create_cart`
 

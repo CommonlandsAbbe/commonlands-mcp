@@ -19,7 +19,7 @@ import { buildProductPageDetails } from './product-page';
 import { getPurchaseRouteOptions } from './purchase-routes';
 import { callShopifyCartUcp, type CartOperation } from './shopify-cart-ucp';
 import { callShopifyCheckoutMcp, type CheckoutOperation } from './shopify-checkout-mcp';
-import { readShopifyMetaobjects, readShopifyProducts } from './shopify-read-adapter';
+import { readShopifyProducts } from './shopify-read-adapter';
 import {
   compareLenses,
   compareLensesLive,
@@ -67,6 +67,15 @@ export interface Env {
   AWS_SECRET_ACCESS_KEY?: string;
   AWS_SESSION_TOKEN?: string;
   MCP_ANALYTICS?: AnalyticsEngineDataset;
+  /** Per-IP limiter for all /mcp requests (wrangler.toml ratelimit binding). */
+  MCP_RATE_LIMITER?: RateLimiterBinding;
+  /** Stricter per-IP limiter for cart mutations (create_cart/update_cart). */
+  CART_RATE_LIMITER?: RateLimiterBinding;
+}
+
+/** Cloudflare Workers Rate Limiting API binding (wrangler [[unsafe.bindings]] type "ratelimit"). */
+interface RateLimiterBinding {
+  limit(options: { key: string }): Promise<{ success: boolean }>;
 }
 
 interface AnalyticsEngineDataset {
@@ -106,7 +115,7 @@ interface ToolAnnotations {
 
 const SERVER_INFO = {
   name: 'commonlands-mcp',
-  version: '0.1.5',
+  version: '0.2.0',
 } as const;
 
 const PUBLIC_MCP_ENDPOINT = 'https://mcp.commonlands.com/mcp';
@@ -483,7 +492,7 @@ const TOOLS: ToolDefinition[] = [
     name: 'read_shopify_products',
     title: 'Read Shopify products',
     description:
-      'Use this for live purchasable product truth: product and variant IDs, SKUs, prices, inventory signals, product URLs, and metafields. Read-only; does not create carts, checkouts, orders, customers, inventory mutations, or Shopify writes. Fixture catalog tools are scaffold data only.',
+      'Use this for live purchasable product truth: product and variant IDs, SKUs, prices, coarse availability, product URLs, and public product-page metafields. Public data only: active products, no exact inventory counts, and metafields limited to the custom.* display fields shown on commonlands.com product pages. Read-only; does not create carts, checkouts, orders, customers, inventory mutations, or Shopify writes. Fixture catalog tools are scaffold data only.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -491,24 +500,13 @@ const TOOLS: ToolDefinition[] = [
         handle: { type: 'string', description: 'Optional Shopify product handle.' },
         query: { type: 'string', description: 'Optional safe Shopify product/variant search text.' },
         limit: { type: 'integer', minimum: 1, maximum: 25, default: 10 },
-        includeMetafields: { type: 'boolean', default: true },
+        includeMetafields: {
+          type: 'boolean',
+          default: false,
+          description:
+            'When true, include the allowlisted public product-page metafields (custom.* display specs). Non-public namespaces and keys are never returned.',
+        },
       },
-      additionalProperties: false,
-    },
-  },
-  {
-    name: 'read_shopify_metaobjects',
-    title: 'Read Shopify metaobjects',
-    description:
-      'Read live Shopify Admin metaobjects by type, optionally filtered by handle, through approved read-only scopes. Returns redacted field previews only and never writes metaobjects or metafields.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        type: { type: 'string', description: 'Metaobject definition type.' },
-        handle: { type: 'string', description: 'Optional metaobject handle filter.' },
-        limit: { type: 'integer', minimum: 1, maximum: 25, default: 10 },
-      },
-      required: ['type'],
       additionalProperties: false,
     },
   },
@@ -1586,6 +1584,16 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
   }
 
   const toolName = canonicalToolName(params.name);
+  if (toolName === 'read_shopify_metaobjects') {
+    // Removed from the public surface (Anthropic directory review, 2026-07):
+    // Admin metaobjects can hold non-public store content. Old callers get an
+    // actionable message instead of a generic tool-not-found.
+    return rpcError(id, {
+      code: -32601,
+      message:
+        'read_shopify_metaobjects was removed from the public surface: Admin metaobjects can contain non-public store data. Use read_shopify_products for public product data and product-page metafields.',
+    });
+  }
   if (!isKnownToolName(toolName) || !isToolEnabled(toolName, env)) {
     return rpcError(id, { code: -32601, message: `Tool not found: ${params.name}` });
   }
@@ -1977,9 +1985,6 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
     return toolResult(id, await readShopifyProducts(env, args));
   }
 
-  if (toolName === 'read_shopify_metaobjects') {
-    return toolResult(id, await readShopifyMetaobjects(env, args));
-  }
 
   if (isCartTool(toolName)) {
     return toolResult(id, await callShopifyCartUcp(env, toolName, args));
@@ -2963,6 +2968,50 @@ function summarizeLens(lens: LensCatalogItem): Omit<LensCatalogItem, 'source' | 
   return summary;
 }
 
+/**
+ * Per-IP abuse controls for the public endpoint. Returns a 429 response when
+ * a limit is exceeded, or null to continue. Limiter internal errors fail open
+ * (availability over strictness); absent bindings (local dev, tests) skip the
+ * check — production bindings are declared in wrangler.toml.
+ */
+async function enforceRateLimits(request: Request, env: Env, parsed: JsonRpcRequest): Promise<Response | null> {
+  const clientIp = request.headers.get('cf-connecting-ip') ?? request.headers.get('x-forwarded-for') ?? 'unknown';
+  const id = parsed.id ?? null;
+
+  const exceeded = (scope: 'requests' | 'cart_mutations'): Response =>
+    json(
+      {
+        jsonrpc: '2.0',
+        id,
+        error: {
+          code: -32000,
+          message: `Rate limit exceeded for ${scope} from this address. Retry after 60 seconds.`,
+        },
+      },
+      { status: 429, headers: { 'retry-after': '60' } },
+    );
+
+  try {
+    if (env.MCP_RATE_LIMITER) {
+      const globalDecision = await env.MCP_RATE_LIMITER.limit({ key: clientIp });
+      if (!globalDecision.success) return exceeded('requests');
+    }
+
+    if (env.CART_RATE_LIMITER && parsed.method === 'tools/call' && isRecord(parsed.params)) {
+      const rawName = parsed.params.name;
+      const toolName = typeof rawName === 'string' ? canonicalToolName(rawName) : '';
+      if (toolName === 'create_cart' || toolName === 'update_cart') {
+        const cartDecision = await env.CART_RATE_LIMITER.limit({ key: clientIp });
+        if (!cartDecision.success) return exceeded('cart_mutations');
+      }
+    }
+  } catch (error) {
+    console.warn('rate limiter unavailable; failing open', error);
+  }
+
+  return null;
+}
+
 async function handleMcp(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
   const startedAt = Date.now();
   let parsedForTelemetry: JsonRpcRequest | null = null;
@@ -3008,6 +3057,16 @@ async function handleMcp(request: Request, env: Env, ctx?: ExecutionContext): Pr
   }
 
   parsedForTelemetry = parsed;
+
+  // Abuse controls: per-IP rate limits on the public endpoint. The global
+  // limiter covers every request; cart mutations get a stricter budget since
+  // any caller can create or modify Shopify-owned carts. Limits live in
+  // wrangler.toml ([[unsafe.bindings]] type "ratelimit"); when a binding is
+  // absent (local dev, tests) the check is skipped.
+  const rateDecision = await enforceRateLimits(request, env, parsed);
+  if (rateDecision) {
+    return recordTelemetry(rateDecision);
+  }
 
   // JSON-RPC notifications carry no id and MUST NOT receive a response object.
   // Per the MCP lifecycle the client sends notifications/initialized (and may send

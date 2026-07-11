@@ -1,20 +1,16 @@
+// Narrowed for the public-data-only surface (Anthropic directory review,
+// 2026-07): metaobject, marketing, payment-terms, and shipping scopes were
+// removed because no public tool needs them. Requesting fewer Admin scopes
+// keeps the exchanged token unable to read non-public store data even if a
+// future code path regresses.
 const APPROVED_READ_SCOPES = [
-  'read_discovery',
   'read_files',
   'read_inventory',
-  'read_legal_policies',
-  'read_locations',
-  'read_marketing_integrated_campaigns',
-  'read_marketing_events',
-  'read_metaobject_definitions',
-  'read_metaobjects',
   'read_online_store_navigation',
   'read_online_store_pages',
-  'read_payment_terms',
   'read_product_feeds',
   'read_product_listings',
   'read_products',
-  'read_shipping',
   'read_content',
 ] as const;
 

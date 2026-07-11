@@ -31,3 +31,19 @@ SENSOR_DDB_REGION = "us-west-2"
 [[analytics_engine_datasets]]
 binding = "MCP_ANALYTICS"
 dataset = "commonlands_mcp_events"
+
+# Per-IP abuse controls for the public endpoint (Workers Rate Limiting API).
+# Global budget for all /mcp requests, plus a stricter budget for cart
+# mutations (create_cart/update_cart) since the endpoint is unauthenticated.
+# Code fails open if a binding is absent (local dev, tests).
+[[unsafe.bindings]]
+name = "MCP_RATE_LIMITER"
+type = "ratelimit"
+namespace_id = "1001"
+simple = { limit = 120, period = 60 }
+
+[[unsafe.bindings]]
+name = "CART_RATE_LIMITER"
+type = "ratelimit"
+namespace_id = "1002"
+simple = { limit = 10, period = 60 }
