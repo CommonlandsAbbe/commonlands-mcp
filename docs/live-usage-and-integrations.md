@@ -8,7 +8,7 @@ The live server is:
 - **Discovery profile:** `https://mcp.commonlands.com/.well-known/ucp`
 - **Health check:** `https://mcp.commonlands.com/healthz`
 
-The current public surface was verified after the PR #26 deployment on 2026-05-03 PDT. It exposes 22 tools. UCP discovery advertises catalog + cart discovery. Checkout tools and `cancel_cart` are intentionally hidden.
+The current public surface (v0.2.0) exposes **20 tools** with intent-named optics tools (`calculate_field_of_view`, `match_lens_to_sensor`, `search_lens_catalog`, `get_lens_distortion_profile`). UCP discovery advertises catalog + cart discovery. Checkout tools, `cancel_cart`, and `read_shopify_metaobjects` are not exposed. The pre-v0.2.0 optics names (`compute_fov`, `compute_fov_catalog`, `match_lenses_to_sensor`, `search_lenses`, `get_lens_details`) still dispatch as hidden aliases but do not appear in `tools/list`.
 
 ## The short version
 
@@ -363,7 +363,7 @@ Live catalog mode depends on the Lambda supporting a bounded catalog scan when n
       "fov": { "horizontalDeg": 51.3, "verticalDeg": 39.6, "diagonalDeg": 61.9 }
     },
     {
-      "lens": { "sku": "CIL121", "title": "CIL121 C-mount machine vision lens" },
+      "lens": { "sku": "CIL121", "title": "CIL121 M12 machine vision lens" },
       "score": 67,
       "rank": 2,
       "fit": "conditional",

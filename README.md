@@ -51,12 +51,13 @@ If fixture data conflicts with `read_shopify_products` or the live FoV/sensor ba
 
 ## Current live surface
 
-The production surface currently exposes catalog/search, FoV, Shopify read-only, cart, UCP catalog, and purchase-handoff tools. Checkout tools and `cancel_cart` are intentionally hidden unless they appear in live `tools/list`.
+The production surface currently exposes **20 tools** across catalog/search, FoV, Shopify read-only, cart, UCP catalog, and purchase-handoff. Checkout tools, `cancel_cart`, and `read_shopify_metaobjects` are not exposed. Always trust the live `tools/list` over any doc.
 
 Key tools:
 
 - Public optics routing: `calculate_field_of_view`, `match_lens_to_sensor`, `search_lens_catalog`, `get_lens_distortion_profile`.
-- Compatibility/context: `search_lenses`, `search_catalog`, `get_lens_details`, `get_product_page_details`, `get_product`, `lookup_catalog`, `match_lenses_to_sensor`, `compare_lenses`, `recommend_lenses_for_application`.
+- Catalog/context (in `tools/list`): `search_catalog`, `lookup_catalog`, `get_product`, `get_product_page_details`, `compare_lenses`, `recommend_lenses_for_application`.
+- Legacy hidden aliases (still dispatch for old clients, not listed in `tools/list`): `compute_fov`, `compute_fov_catalog`, `match_lenses_to_sensor`, `search_lenses`, `get_lens_details`.
 - Resources/prompts: `commonlands://sensors/{part}`, `commonlands://lenses/{sku}`, `commonlands://catalog/sensors`, `commonlands://catalog/lenses`, and prompt `select_lens_for_sensor_fov_working_distance`.
 - Live Shopify read-only truth: `read_shopify_products`, `get_shopify_readonly_config_status`.
 - Buyer-confirmed Shopify cart handoff: `create_cart`, `get_cart`, `update_cart` when visible in `tools/list`.
