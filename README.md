@@ -58,9 +58,51 @@ Key tools:
 - Public optics routing: `calculate_field_of_view`, `match_lens_to_sensor`, `search_lens_catalog`, `get_lens_distortion_profile`.
 - Compatibility/context: `search_lenses`, `search_catalog`, `get_lens_details`, `get_product_page_details`, `get_product`, `lookup_catalog`, `match_lenses_to_sensor`, `compare_lenses`, `recommend_lenses_for_application`.
 - Resources/prompts: `commonlands://sensors/{part}`, `commonlands://lenses/{sku}`, `commonlands://catalog/sensors`, `commonlands://catalog/lenses`, and prompt `select_lens_for_sensor_fov_working_distance`.
-- Live Shopify read-only truth: `read_shopify_products`, `read_shopify_metaobjects`, `get_shopify_readonly_config_status`.
+- Live Shopify read-only truth: `read_shopify_products`, `get_shopify_readonly_config_status`.
 - Buyer-confirmed Shopify cart handoff: `create_cart`, `get_cart`, `update_cart` when visible in `tools/list`.
 - Diagnostics/readiness: `get_catalog_snapshot_status`, `get_shopify_ucp_readiness`, `prepare_shopify_purchase_handoff`, `get_purchase_route_options`.
+
+## Public-data scope (Shopify reads)
+
+The endpoint is public and unauthenticated, so `read_shopify_products` returns
+**only data that is already public on commonlands.com** (enforced server-side
+in `src/shopify-read-adapter.ts`, see `PUBLIC_DATA_POLICY`):
+
+- **Active products only.** DRAFT and ARCHIVED products are filtered out and
+  the internal `status` field is never returned.
+- **No exact inventory.** Variants carry a coarse `availability` signal
+  (`in_stock` / `low_stock` / `out_of_stock` / `untracked`); raw counts and
+  inventory item IDs are never returned.
+- **Metafields are opt-in and allowlisted.** `includeMetafields` defaults to
+  `false`; when enabled, only the `custom.*` display fields rendered on public
+  product pages are returned. App/private namespaces and non-allowlisted keys
+  (including `custom.docsend_page`) are always dropped.
+- **`read_shopify_metaobjects` was removed** from the public surface
+  (2026-07): Admin metaobject definitions can hold non-public store content.
+  Calls return an actionable error pointing to `read_shopify_products`.
+- The requested Admin scopes were narrowed to the read scopes the surface
+  actually needs (no metaobject, marketing, payment-terms, or shipping
+  scopes).
+
+## Abuse controls (cart and endpoint)
+
+Cart tools are deliberately reachable without authentication — the same trust
+model as Shopify's own public Storefront cart — but they are bounded:
+
+- **Per-IP rate limits** (Workers Rate Limiting API, `wrangler.toml`):
+  120 requests/min per IP across `/mcp`, and 10 cart mutations/min per IP for
+  `create_cart`/`update_cart`. Exceeding either returns HTTP 429 with
+  `retry-after: 60`.
+- **Strict payloads:** 1–25 line items per cart, quantity 1–999 per line, and
+  item IDs must be live Shopify ProductVariant GIDs — fixture IDs, SKUs, and
+  numeric IDs are rejected before any Shopify call.
+- **Carts are Shopify-owned and expire.** The Worker is a stateless proxy;
+  cart state, TTL, and expiry (`expiryAuthority: shopify_cart_ttl_expires_at`)
+  belong to Shopify, which prunes abandoned carts automatically. No cart,
+  session, customer, or payment state is ever stored in the Worker.
+- **No checkout surface:** checkout/cancel tools are hidden; the server cannot
+  take payment, create orders or customers, apply discounts, or write
+  inventory, so an abusive caller cannot mutate anything durable.
 
 ## Safety boundaries
 

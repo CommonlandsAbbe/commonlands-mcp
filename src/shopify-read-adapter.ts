@@ -5,6 +5,54 @@ export interface ShopifyReadAdapterEnv extends ShopifyReadonlyEnv {
   SHOPIFY_ADMIN_API_VERSION?: string;
 }
 
+/**
+ * PUBLIC_DATA_POLICY
+ *
+ * This adapter serves an unauthenticated public MCP endpoint, so it must only
+ * ever return data that is already public on commonlands.com:
+ *
+ * - Products: ACTIVE products only. DRAFT and ARCHIVED products are filtered
+ *   out server-side and the internal `status` field is never returned.
+ * - Inventory: exact quantities are admin-only. Variants expose a coarse
+ *   `availability` signal (in_stock / low_stock / out_of_stock / untracked)
+ *   derived from tracked inventory; raw counts and inventory item IDs are
+ *   never returned.
+ * - Metafields: off by default. When requested, only the allowlisted
+ *   `custom.*` display fields that are rendered on public product pages are
+ *   returned. All other namespaces (app-private, SEO apps, channels) and all
+ *   non-allowlisted keys are dropped. `custom.docsend_page` stays excluded:
+ *   datasheet access is gated by design.
+ * - Metaobjects: not exposed as a public tool. Admin metaobject definitions
+ *   can hold non-public store content, so `read_shopify_metaobjects` was
+ *   removed from the tool surface (Anthropic directory review, 2026-07).
+ */
+export const PUBLIC_METAFIELD_NAMESPACE = 'custom';
+export const PUBLIC_METAFIELD_KEYS = new Set([
+  'short_partnumber',
+  'product_group_id',
+  'group_id',
+  'headline_description',
+  'efl',
+  'f_number',
+  'field_of_view',
+  'distortion',
+  'image_circle',
+  'compatible_resolution',
+  'mechanical_drawing',
+  'mechanical_drawing_alt_text',
+  '3d_model',
+  'ir_cut_off_filter',
+  'compatibility_company_list',
+  'compatibility_table_result',
+  'product_long_description',
+  'features_titles',
+  'features_description',
+  'faq_questions',
+  'faq_answers',
+]);
+
+const LOW_STOCK_THRESHOLD = 5;
+
 export interface ShopifyProductReadArgs {
   sku?: unknown;
   handle?: unknown;
@@ -100,9 +148,12 @@ export interface ShopifyReadonlyVariant {
   sku: string;
   title: string;
   price?: string;
-  inventoryQuantity?: number;
-  inventoryTracked?: boolean;
-  inventoryItemId?: string;
+  /**
+   * Coarse public availability signal derived from tracked inventory.
+   * Exact inventory counts are intentionally never returned on the public
+   * surface (see PUBLIC_DATA_POLICY).
+   */
+  availability?: 'in_stock' | 'low_stock' | 'out_of_stock' | 'untracked';
   storefrontCartPath?: string;
   recommendedCreateCartPayload?: ShopifyCartCreatePayloadRecommendation;
   metafields: ShopifyReadonlyMetafield[];
@@ -303,7 +354,9 @@ function parseProductArgs(args: ShopifyProductReadArgs):
     ...(handle.value ? { handle: handle.value.toLowerCase() } : {}),
     ...(query.value ? { query: query.value } : {}),
     limit: limit.value,
-    includeMetafields: args.includeMetafields !== false,
+    // Public-data default: metafields are opt-in, and even then only the
+    // allowlisted public display fields are returned (PUBLIC_DATA_POLICY).
+    includeMetafields: args.includeMetafields === true,
   };
 }
 
@@ -587,6 +640,8 @@ function errorMessage(error: unknown): string {
 
 function normalizeProductByHandle(product: ProductNode | null | undefined, includeMetafields: boolean): ShopifyReadonlyProduct[] {
   if (!product) return [];
+  // Public-data policy: only ACTIVE products exist on the public surface.
+  if (!isActiveProduct(product)) return [];
   const productId = stringOrUndefined(product.id) ?? 'unknown-product';
   const normalized = buildProduct(productId, product, includeMetafields);
   normalized.variants = normalizeVariants(product.variants?.nodes ?? [], includeMetafields);
@@ -606,9 +661,9 @@ function normalizeVariants(nodes: ProductVariantNode[], includeMetafields: boole
     };
     assignIfPresent(normalizedVariant, 'numericId', numericId);
     assignIfPresent(normalizedVariant, 'price', stringOrUndefined(variant.price));
-    assignIfPresent(normalizedVariant, 'inventoryQuantity', typeof variant.inventoryQuantity === 'number' ? variant.inventoryQuantity : undefined);
-    assignIfPresent(normalizedVariant, 'inventoryTracked', typeof variant.inventoryItem?.tracked === 'boolean' ? variant.inventoryItem.tracked : undefined);
-    assignIfPresent(normalizedVariant, 'inventoryItemId', stringOrUndefined(variant.inventoryItem?.id));
+    // Public-data policy: coarse availability only; never raw inventory
+    // counts or admin inventory item IDs.
+    assignIfPresent(normalizedVariant, 'availability', deriveAvailability(variant));
     assignIfPresent(normalizedVariant, 'storefrontCartPath', numericId ? `/cart/${numericId}:1` : undefined);
     assignIfPresent(normalizedVariant, 'recommendedCreateCartPayload', createCartPayloadForVariant(variantId));
     return normalizedVariant;
@@ -620,6 +675,8 @@ function normalizeProducts(nodes: ProductVariantNode[], includeMetafields: boole
 
   for (const variant of nodes) {
     const product = variant.product;
+    // Public-data policy: only ACTIVE products exist on the public surface.
+    if (!isActiveProduct(product)) continue;
     const productId = stringOrUndefined(product?.id) ?? 'unknown-product';
     const existing = byProductId.get(productId) ?? buildProduct(productId, product, includeMetafields);
 
@@ -629,6 +686,10 @@ function normalizeProducts(nodes: ProductVariantNode[], includeMetafields: boole
   }
 
   return [...byProductId.values()];
+}
+
+function isActiveProduct(product: ProductNode | null | undefined): boolean {
+  return stringOrUndefined(product?.status)?.toUpperCase() === 'ACTIVE';
 }
 
 function buildProduct(productId: string, product: ProductNode | null | undefined, includeMetafields: boolean): ShopifyReadonlyProduct {
@@ -644,7 +705,8 @@ function buildProduct(productId: string, product: ProductNode | null | undefined
     variants: [],
   };
   assignIfPresent(normalized, 'numericId', numericIdFromGid(productId));
-  assignIfPresent(normalized, 'status', stringOrUndefined(product?.status));
+  // `status` is intentionally not returned: only ACTIVE products pass the
+  // public filter, so the field would only ever leak internal states.
   assignIfPresent(normalized, 'productType', stringOrUndefined(product?.productType));
   assignIfPresent(normalized, 'vendor', stringOrUndefined(product?.vendor));
   assignIfPresent(normalized, 'productUrl', safePublicUrl(product?.onlineStoreUrl) ?? (handle ? `https://commonlands.com/products/${handle}` : undefined));
@@ -652,16 +714,34 @@ function buildProduct(productId: string, product: ProductNode | null | undefined
 }
 
 function normalizeMetafields(nodes: MetafieldNode[]): ShopifyReadonlyMetafield[] {
-  return nodes.map((node) => {
-    const normalized: ShopifyReadonlyMetafield = {
-      namespace: stringOrUndefined(node.namespace) ?? '',
-      key: stringOrUndefined(node.key) ?? '',
-      type: stringOrUndefined(node.type) ?? '',
-    };
-    assignIfPresent(normalized, 'valuePreview', previewValue(node.value));
-    assignIfPresent(normalized, 'reference', normalizeReference(node.reference));
-    return normalized;
-  });
+  return nodes
+    .filter((node) => isPublicMetafield(node))
+    .map((node) => {
+      const normalized: ShopifyReadonlyMetafield = {
+        namespace: stringOrUndefined(node.namespace) ?? '',
+        key: stringOrUndefined(node.key) ?? '',
+        type: stringOrUndefined(node.type) ?? '',
+      };
+      assignIfPresent(normalized, 'valuePreview', previewValue(node.value));
+      assignIfPresent(normalized, 'reference', normalizeReference(node.reference));
+      return normalized;
+    });
+}
+
+function isPublicMetafield(node: MetafieldNode): boolean {
+  const namespace = stringOrUndefined(node.namespace);
+  const key = stringOrUndefined(node.key);
+  return namespace === PUBLIC_METAFIELD_NAMESPACE && key !== undefined && PUBLIC_METAFIELD_KEYS.has(key);
+}
+
+function deriveAvailability(variant: ProductVariantNode): ShopifyReadonlyVariant['availability'] {
+  const tracked = variant.inventoryItem?.tracked;
+  if (tracked !== true) return 'untracked';
+  const quantity = typeof variant.inventoryQuantity === 'number' ? variant.inventoryQuantity : undefined;
+  if (quantity === undefined) return undefined;
+  if (quantity <= 0) return 'out_of_stock';
+  if (quantity <= LOW_STOCK_THRESHOLD) return 'low_stock';
+  return 'in_stock';
 }
 
 function normalizeReference(reference: MetafieldReference | null | undefined): ShopifyReadonlyMetafield['reference'] | undefined {
@@ -825,7 +905,6 @@ const VARIANT_FIELDS = `
   price
   inventoryQuantity
   inventoryItem {
-    id
     tracked
   }
   ...VariantMetafields
