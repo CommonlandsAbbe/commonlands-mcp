@@ -3,7 +3,7 @@
   "name": "com.commonlands/optics-mcp",
   "title": "Commonlands Optics: M12 Lens and C-Mount Lens Finder + Field-of-View Calculator",
   "description": "M12 lens and C-mount lens finder with image-sensor matching and field-of-view calculator.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "websiteUrl": "https://commonlands.com/pages/agentic-mcp-for-m12-lenses-and-optics",
   "repository": {
     "url": "https://github.com/CommonlandsAbbe/commonlands-mcp",

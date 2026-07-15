@@ -282,7 +282,7 @@ describe('Commonlands MCP Worker', () => {
       id: 1,
       result: {
         protocolVersion: '2025-11-25',
-        serverInfo: { name: 'commonlands-mcp', version: '0.2.0' },
+        serverInfo: { name: 'commonlands-mcp', version: '0.3.0' },
         capabilities: { tools: {}, resources: {}, prompts: {} },
       },
     });
@@ -383,6 +383,7 @@ describe('Commonlands MCP Worker', () => {
       'prepare_shopify_purchase_handoff',
       'get_purchase_route_options',
       'recommend_lenses_for_application',
+      'submit_rfq',
     ]);
     expect(toolNames).not.toContain('search_lenses');
     expect(toolNames).not.toContain('get_lens_details');
@@ -1447,6 +1448,82 @@ describe('Commonlands MCP Worker', () => {
     );
 
     expect(response.status).toBe(200);
+  });
+
+  it('submit_rfq: routes to the contact page when SendGrid is not configured, without sending mail', async () => {
+    let called = false;
+    globalThis.fetch = (async () => { called = true; return new Response('unexpected', { status: 500 }); }) as typeof fetch;
+
+    const { body } = await rpc(
+      'tools/call',
+      { name: 'submit_rfq', arguments: { message: 'Do you have a 6mm M12 lens for IMX477?', email: 'buyer@example.com' } },
+      'rfq-not-configured',
+      shopifyReadonlyEnv,
+    );
+    const structuredContent = getStructuredContent(body);
+
+    expect(called).toBe(false);
+    expect(structuredContent).toMatchObject({
+      schemaVersion: 'commonlands.rfq.v1',
+      configured: false,
+      status: 'not_configured',
+      handoff: { url: 'https://commonlands.com/pages/contact' },
+    });
+  });
+
+  it('submit_rfq: validates message and email before doing anything', async () => {
+    let called = false;
+    globalThis.fetch = (async () => { called = true; return new Response('unexpected', { status: 500 }); }) as typeof fetch;
+
+    const missing = getStructuredContent((await rpc('tools/call', { name: 'submit_rfq', arguments: { email: 'a@b.com' } }, 'rfq-no-msg', shopifyReadonlyEnv)).body);
+    expect(missing).toMatchObject({ status: 'invalid_request' });
+    expect(String(missing.message)).toContain('message is required');
+
+    const badEmail = getStructuredContent((await rpc('tools/call', { name: 'submit_rfq', arguments: { message: 'hi', email: 'not-an-email' } }, 'rfq-bad-email', shopifyReadonlyEnv)).body);
+    expect(badEmail).toMatchObject({ status: 'invalid_request' });
+    expect(String(badEmail.message)).toContain('valid address');
+
+    expect(called).toBe(false);
+  });
+
+  it('submit_rfq: sends via SendGrid to the fixed inbox and never leaks the API key', async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      calls.push(init ? { url, init } : { url });
+      expect(url).toBe('https://api.sendgrid.com/v3/mail/send');
+      return new Response(null, { status: 202 });
+    }) as typeof fetch;
+
+    const rfqEnv = {
+      ...shopifyReadonlyEnv,
+      SENDGRID_API_KEY: 'SG.secret_never_return',
+      RFQ_TO_EMAIL: 'sales@commonlands.com',
+      RFQ_FROM_EMAIL: 'mcp@commonlands.com',
+      RFQ_FROM_NAME: 'Commonlands MCP',
+    } as Env;
+
+    const { body } = await rpc(
+      'tools/call',
+      {
+        name: 'submit_rfq',
+        arguments: {
+          kind: 'rfq', message: 'Quote for 50 units on an IMX477 build.', email: 'buyer@example.com',
+          name: 'Ada Buyer', company: 'RoboCo', partNumbers: ['CIL250', 'CIL078'], sensor: 'IMX477', quantity: 50,
+        },
+      },
+      'rfq-submit',
+      rfqEnv,
+    );
+    const structuredContent = getStructuredContent(body);
+
+    expect(calls).toHaveLength(1);
+    const payload = JSON.parse(String(calls[0]?.init?.body));
+    expect(payload.personalizations[0].to[0].email).toBe('sales@commonlands.com'); // fixed recipient
+    expect(payload.reply_to.email).toBe('buyer@example.com');
+    expect(String((calls[0]?.init?.headers as Record<string, string>).authorization)).toContain('Bearer');
+    expect(structuredContent).toMatchObject({ schemaVersion: 'commonlands.rfq.v1', configured: true, status: 'submitted' });
+    expect(JSON.stringify(getResult(body))).not.toMatch(/SG\.secret_never_return/);
   });
 
   it('rejects unsafe Shopify read adapter params without calling Shopify', async () => {

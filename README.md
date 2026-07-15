@@ -61,6 +61,7 @@ Key tools:
 - Resources/prompts: `commonlands://sensors/{part}`, `commonlands://lenses/{sku}`, `commonlands://catalog/sensors`, `commonlands://catalog/lenses`, and prompt `select_lens_for_sensor_fov_working_distance`.
 - Live Shopify read-only truth: `read_shopify_products`, `get_shopify_readonly_config_status`.
 - Buyer-confirmed Shopify cart handoff: `create_cart`, `get_cart`, `update_cart` when visible in `tools/list`.
+- RFQ / question handoff: `submit_rfq` forwards a buyer quote request or question to the fixed Commonlands engineering inbox (SendGrid). The agent cannot choose the recipient; it sends an inquiry only (no order, payment, or Shopify write) and stays inert (routes to the contact page) until `SENDGRID_API_KEY` + `RFQ_TO_EMAIL` + `RFQ_FROM_EMAIL` are configured.
 - Diagnostics/readiness: `get_catalog_snapshot_status`, `get_shopify_ucp_readiness`, `prepare_shopify_purchase_handoff`, `get_purchase_route_options`.
 
 ## Public-data scope (Shopify reads)

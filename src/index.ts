@@ -20,6 +20,7 @@ import { getPurchaseRouteOptions } from './purchase-routes';
 import { callShopifyCartUcp, type CartOperation } from './shopify-cart-ucp';
 import { callShopifyCheckoutMcp, type CheckoutOperation } from './shopify-checkout-mcp';
 import { readShopifyProducts } from './shopify-read-adapter';
+import { submitRfq } from './rfq';
 import {
   compareLenses,
   compareLensesLive,
@@ -69,8 +70,13 @@ export interface Env {
   MCP_ANALYTICS?: AnalyticsEngineDataset;
   /** Per-IP limiter for all /mcp requests (wrangler.toml ratelimit binding). */
   MCP_RATE_LIMITER?: RateLimiterBinding;
-  /** Stricter per-IP limiter for cart mutations (create_cart/update_cart). */
+  /** Stricter per-IP limiter for write/side-effect tools (carts, submit_rfq). */
   CART_RATE_LIMITER?: RateLimiterBinding;
+  /** SendGrid submission for submit_rfq; inert when unset. */
+  SENDGRID_API_KEY?: string;
+  RFQ_TO_EMAIL?: string;
+  RFQ_FROM_EMAIL?: string;
+  RFQ_FROM_NAME?: string;
 }
 
 /** Cloudflare Workers Rate Limiting API binding (wrangler [[unsafe.bindings]] type "ratelimit"). */
@@ -115,7 +121,7 @@ interface ToolAnnotations {
 
 const SERVER_INFO = {
   name: 'commonlands-mcp',
-  version: '0.2.0',
+  version: '0.3.0',
 } as const;
 
 const PUBLIC_MCP_ENDPOINT = 'https://mcp.commonlands.com/mcp';
@@ -877,6 +883,31 @@ const TOOLS: ToolDefinition[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: 'submit_rfq',
+    title: 'Submit an RFQ or question to Commonlands',
+    description:
+      'Forward a buyer request-for-quote or engineering question to the Commonlands engineering team. Use after the buyer provides their question and a reply-to email. The recipient is fixed to the Commonlands inbox (the agent cannot choose it); this only sends an inquiry and never creates an order, charges a card, or writes Shopify/customer data. Include part numbers, sensor, quantity, and application when known so the team can reply with a quote. Commonlands replies by email.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        message: { type: 'string', description: "The buyer's question or RFQ details.", maxLength: 4000 },
+        email: { type: 'string', description: "The buyer's reply-to email so Commonlands can respond." },
+        name: { type: 'string', description: "Optional buyer name." },
+        company: { type: 'string', description: 'Optional company name.' },
+        kind: { type: 'string', enum: ['rfq', 'question'], description: "Whether this is a quote request or a general question. Defaults to question." },
+        partNumbers: {
+          description: 'Optional Commonlands SKUs of interest (string or array).',
+          anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' }, maxItems: 25 }],
+        },
+        sensor: { type: 'string', description: 'Optional sensor part number for context.' },
+        quantity: { type: 'integer', minimum: 1, description: 'Optional quantity for the quote.' },
+        application: { type: 'string', description: 'Optional application note.' },
+      },
+      required: ['message', 'email'],
+      additionalProperties: false,
+    },
+  },
 ];
 
 const RESOURCES = [
@@ -1180,6 +1211,9 @@ const MUTATING_TOOL_NAMES = new Set([
   'update_checkout',
   'complete_checkout',
   'cancel_checkout',
+  // Non-Shopify side effect: sends an email inquiry. A write, not idempotent
+  // (each call sends again), but destroys nothing.
+  'submit_rfq',
 ]);
 
 // Per MCP spec, destructiveHint marks tools that may delete or irreversibly change
@@ -1983,6 +2017,10 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
 
   if (toolName === 'read_shopify_products') {
     return toolResult(id, await readShopifyProducts(env, args));
+  }
+
+  if (toolName === 'submit_rfq') {
+    return toolResult(id, await submitRfq(env, args));
   }
 
 
@@ -3000,7 +3038,7 @@ async function enforceRateLimits(request: Request, env: Env, parsed: JsonRpcRequ
     if (env.CART_RATE_LIMITER && parsed.method === 'tools/call' && isRecord(parsed.params)) {
       const rawName = parsed.params.name;
       const toolName = typeof rawName === 'string' ? canonicalToolName(rawName) : '';
-      if (toolName === 'create_cart' || toolName === 'update_cart') {
+      if (toolName === 'create_cart' || toolName === 'update_cart' || toolName === 'submit_rfq') {
         const cartDecision = await env.CART_RATE_LIMITER.limit({ key: clientIp });
         if (!cartDecision.success) return exceeded('cart_mutations');
       }
