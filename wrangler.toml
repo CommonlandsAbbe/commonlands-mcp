@@ -27,6 +27,14 @@ FOV_BACKEND_SCANS_FULL_CATALOG = "true"
 # Cloudflare dashboard or `wrangler secret put`, never committed.
 SENSOR_DDB_TABLE = "SensorData-orz4gwks4bef7engytv7spr2ha-dev"
 SENSOR_DDB_REGION = "us-west-2"
+# submit_rfq (SendGrid). RFQ_TO_EMAIL / RFQ_FROM_EMAIL / RFQ_FROM_NAME are
+# non-secret config; set them here or as dashboard vars. SENDGRID_API_KEY is a
+# secret (`wrangler secret put SENDGRID_API_KEY`), never committed. RFQ_FROM_EMAIL
+# must be a SendGrid-verified sender. The tool stays inert (returns a routed
+# contact-page handoff) until all three are set.
+# RFQ_TO_EMAIL = "sales@commonlands.com"
+# RFQ_FROM_EMAIL = "mcp@commonlands.com"
+# RFQ_FROM_NAME = "Commonlands MCP"
 
 [[analytics_engine_datasets]]
 binding = "MCP_ANALYTICS"
