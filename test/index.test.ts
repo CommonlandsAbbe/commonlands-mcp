@@ -282,7 +282,7 @@ describe('Commonlands MCP Worker', () => {
       id: 1,
       result: {
         protocolVersion: '2025-11-25',
-        serverInfo: { name: 'commonlands-mcp', version: '0.3.0' },
+        serverInfo: { name: 'commonlands-mcp', version: '0.3.1' },
         capabilities: { tools: {}, resources: {}, prompts: {} },
       },
     });
@@ -1524,6 +1524,29 @@ describe('Commonlands MCP Worker', () => {
     expect(String((calls[0]?.init?.headers as Record<string, string>).authorization)).toContain('Bearer');
     expect(structuredContent).toMatchObject({ schemaVersion: 'commonlands.rfq.v1', configured: true, status: 'submitted' });
     expect(JSON.stringify(getResult(body))).not.toMatch(/SG\.secret_never_return/);
+  });
+
+  it('submit_rfq: accepts RFQ_TO/RFQ_FROM aliases and omits from.name when unset', async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      calls.push(init ? { url, init } : { url });
+      return new Response(null, { status: 202 });
+    }) as typeof fetch;
+
+    const { body } = await rpc(
+      'tools/call',
+      { name: 'submit_rfq', arguments: { message: 'Quote please', email: 'buyer@example.com' } },
+      'rfq-alias-env',
+      { ...shopifyReadonlyEnv, SENDGRID_API_KEY: 'SG.secret', RFQ_TO: 'sales@commonlands.com', RFQ_FROM: 'engineering@commonlands.com' } as Env,
+    );
+
+    expect(calls).toHaveLength(1);
+    const payload = JSON.parse(String(calls[0]?.init?.body));
+    expect(payload.personalizations[0].to[0].email).toBe('sales@commonlands.com');
+    expect(payload.from.email).toBe('engineering@commonlands.com');
+    expect(payload.from.name).toBeUndefined();
+    expect(getStructuredContent(body)).toMatchObject({ configured: true, status: 'submitted' });
   });
 
   it('rejects unsafe Shopify read adapter params without calling Shopify', async () => {

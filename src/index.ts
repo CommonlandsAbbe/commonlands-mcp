@@ -72,10 +72,13 @@ export interface Env {
   MCP_RATE_LIMITER?: RateLimiterBinding;
   /** Stricter per-IP limiter for write/side-effect tools (carts, submit_rfq). */
   CART_RATE_LIMITER?: RateLimiterBinding;
-  /** SendGrid submission for submit_rfq; inert when unset. */
+  /** SendGrid submission for submit_rfq; inert when unset. Recipient/sender
+   *  accept either RFQ_TO_EMAIL/RFQ_FROM_EMAIL or the shorter RFQ_TO/RFQ_FROM. */
   SENDGRID_API_KEY?: string;
   RFQ_TO_EMAIL?: string;
   RFQ_FROM_EMAIL?: string;
+  RFQ_TO?: string;
+  RFQ_FROM?: string;
   RFQ_FROM_NAME?: string;
 }
 
@@ -121,7 +124,7 @@ interface ToolAnnotations {
 
 const SERVER_INFO = {
   name: 'commonlands-mcp',
-  version: '0.3.0',
+  version: '0.3.1',
 } as const;
 
 const PUBLIC_MCP_ENDPOINT = 'https://mcp.commonlands.com/mcp';

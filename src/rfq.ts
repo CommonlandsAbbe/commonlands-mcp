@@ -19,9 +19,21 @@ import { fetchWithTimeout } from './http-safety';
 
 export interface RfqEnv {
   SENDGRID_API_KEY?: string;
+  // Recipient/sender accept either the *_EMAIL names or the shorter RFQ_TO /
+  // RFQ_FROM names (whichever is set in Cloudflare). RFQ_FROM_NAME is optional.
   RFQ_TO_EMAIL?: string;
   RFQ_FROM_EMAIL?: string;
+  RFQ_TO?: string;
+  RFQ_FROM?: string;
   RFQ_FROM_NAME?: string;
+}
+
+function rfqToEmail(env: RfqEnv): string | undefined {
+  return env.RFQ_TO_EMAIL ?? env.RFQ_TO;
+}
+
+function rfqFromEmail(env: RfqEnv): string | undefined {
+  return env.RFQ_FROM_EMAIL ?? env.RFQ_FROM;
 }
 
 export interface RfqArgs {
@@ -50,7 +62,7 @@ function hasDisallowedControlChars(value: string): boolean {
 type RfqResult = Record<string, unknown>;
 
 function baseResult(env: RfqEnv): RfqResult {
-  const configured = Boolean(env.SENDGRID_API_KEY && env.RFQ_TO_EMAIL && env.RFQ_FROM_EMAIL);
+  const configured = Boolean(env.SENDGRID_API_KEY && rfqToEmail(env) && rfqFromEmail(env));
   return {
     schemaVersion: 'commonlands.rfq.v1',
     configured,
@@ -122,7 +134,9 @@ export async function submitRfq(env: RfqEnv, args: RfqArgs): Promise<RfqResult> 
   };
 
   // Not configured: return a routed handoff instead of failing.
-  if (!env.SENDGRID_API_KEY || !env.RFQ_TO_EMAIL || !env.RFQ_FROM_EMAIL) {
+  const toEmail = rfqToEmail(env);
+  const fromEmail = rfqFromEmail(env);
+  if (!env.SENDGRID_API_KEY || !toEmail || !fromEmail) {
     return {
       ...baseResult(env),
       status: 'not_configured',
@@ -150,8 +164,9 @@ export async function submitRfq(env: RfqEnv, args: RfqArgs): Promise<RfqResult> 
   ].filter((line): line is string => line !== undefined);
 
   const payload = {
-    personalizations: [{ to: [{ email: env.RFQ_TO_EMAIL }] }],
-    from: { email: env.RFQ_FROM_EMAIL, name: env.RFQ_FROM_NAME ?? 'Commonlands MCP' },
+    personalizations: [{ to: [{ email: toEmail }] }],
+    // from.name is optional; internal engineering-to-sales mail needs no display name.
+    from: { email: fromEmail, ...(env.RFQ_FROM_NAME ? { name: env.RFQ_FROM_NAME } : {}) },
     reply_to: { email: emailRaw, ...(fields.name ? { name: fields.name } : {}) },
     subject: subjectParts.join(' - ').slice(0, 200),
     content: [{ type: 'text/plain', value: lines.join('\n') }],
