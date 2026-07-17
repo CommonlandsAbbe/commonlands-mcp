@@ -124,7 +124,7 @@ interface ToolAnnotations {
 
 const SERVER_INFO = {
   name: 'commonlands-mcp',
-  version: '0.3.1',
+  version: '0.3.2',
 } as const;
 
 const PUBLIC_MCP_ENDPOINT = 'https://mcp.commonlands.com/mcp';
@@ -137,9 +137,12 @@ const FOV_BACKEND_TIMEOUT_MS = 4_000;
 const FOV_BACKEND_MAX_RESPONSE_BYTES = 128 * 1024;
 const FOV_SINGLE_MAX_RESULTS = 10;
 const FOV_CATALOG_MAX_RESULTS = 250;
+const CALCULATOR_P95_LATENCY_TARGET_MS = 1_500;
+const LIVE_CATALOG_CACHE_TTL_MS = 5 * 60 * 1_000;
 // Reference sensor used only to enumerate the live lens catalog for spec/text search
 // (lens specs and type are sensor-independent). IMX477 is always present in the table.
 const SEARCH_REFERENCE_SENSOR = 'IMX477';
+const liveCatalogResponseCache = new Map<string, { expiresAt: number; result: { structuredContent: Record<string, unknown> } }>();
 const UNKNOWN_ANALYTICS_VALUE = 'unknown';
 const FOV_COMPUTATION_RULE =
   'FoV rule: catalog EFL, image circle, max FoV/FOV@image-circle, and distortion display fields are insufficient to compute field of view on a specific sensor; do not interpolate or estimate interior sensor FoV from those fields. Always call calculate_field_of_view for one lens/sensor pair or match_lens_to_sensor for catalog-wide per-sensor HFOV/VFOV/DFOV selection.';
@@ -243,6 +246,7 @@ const SERVER_INSTRUCTIONS = [
   'Do not run DIY optics math, interpolate catalog FoV, infer coverage, or assemble sensor-specific optical numbers outside Commonlands MCP computed responses.',
   'Source-labeling policy: label every optical or commerce claim with its source; preserve returned provenance.method, provenance.rev, coverage class, distortion-at-field-edge status, and Shopify live-read versus fixture/source-warning distinctions.',
   'For sensor-specific lens finding, prefer match_lens_to_sensor when the user gives a sensor or target FoV, then call calculate_field_of_view for each final lens/sensor FoV claim. Use search_lens_catalog only for broad SKU/title/mount discovery.',
+  `Latency target: calculator tools should return p95 under ${CALCULATOR_P95_LATENCY_TARGET_MS}ms. If a live backend call returns an auth, timeout, or upstream error, report the actionable error and retry path; do not self-compute FoV as a fallback.`,
   'Safety boundaries: fixture-backed tools are scaffold/context only; Shopify product/cart truth is read-only unless approved cart tools are explicitly listed in tools/list; cancel, checkout, payment, customer, order, inventory, and product writes remain hidden/gated unless separately approved. Do not pass arbitrary URLs or client-supplied downstream tokens; Commonlands uses fixed allowlisted endpoints and server-side secrets only, and does not accept client-supplied downstream tokens.',
 ].join(' ');
 
@@ -1246,13 +1250,21 @@ function withToolAnnotations(tool: ToolDefinition): ToolDefinition {
   };
 }
 
-function resourceListResponse(id: unknown): Response {
-  const lensResources = CATALOG_SNAPSHOT.lenses.map((lens) => ({
-    uri: `commonlands://lenses/${lens.sku}`,
-    name: `Commonlands lens ${lens.sku}`,
-    description: `Per-lens Commonlands optical/catalog resource for ${lens.sku}: mount, focal length, image circle, distortion status, and product handoff fields.`,
-    mimeType: 'application/json',
-  }));
+async function resourceListResponse(id: unknown, env: Env): Promise<Response> {
+  const lensResources = new Map<string, { uri: string; name: string; description: string; mimeType: string }>();
+  for (const lens of CATALOG_SNAPSHOT.lenses) {
+    lensResources.set(lens.sku, lensResourceSummary(lens.sku, 'fixture catalog'));
+  }
+
+  const liveCatalog = await fetchLiveCatalogForResources(env);
+  if (liveCatalog && !('error' in liveCatalog)) {
+    for (const lens of liveCatalog.lenses) {
+      if (lens.partNum) {
+        lensResources.set(normalizeSafeIdentifier(lens.partNum), lensResourceSummary(lens.partNum, 'live FoV backend catalog'));
+      }
+    }
+  }
+
   const sensorResources = CATALOG_SNAPSHOT.sensors.map((sensor) => ({
     uri: `commonlands://sensors/${sensor.partNumber}`,
     name: `Commonlands sensor ${sensor.partNumber}`,
@@ -1260,7 +1272,17 @@ function resourceListResponse(id: unknown): Response {
     mimeType: 'application/json',
   }));
 
-  return rpcResult(id, { resources: [...RESOURCES, ...lensResources, ...sensorResources] });
+  return rpcResult(id, { resources: [...RESOURCES, ...lensResources.values(), ...sensorResources] });
+}
+
+function lensResourceSummary(sku: string, source: string): { uri: string; name: string; description: string; mimeType: string } {
+  const normalizedSku = normalizeSafeIdentifier(sku);
+  return {
+    uri: `commonlands://lenses/${normalizedSku}`,
+    name: `Commonlands lens ${normalizedSku}`,
+    description: `Per-lens Commonlands optical/catalog resource for ${normalizedSku} from ${source}: mount, focal length, image circle, distortion status, FoV fields when available, and product handoff fields.`,
+    mimeType: 'application/json',
+  };
 }
 
 async function resourceReadResponse(id: unknown, params: unknown, env: Env): Promise<Response> {
@@ -1324,7 +1346,36 @@ async function resourceReadResponse(id: unknown, params: unknown, env: Env): Pro
   if (lensMatch) {
     const sku = normalizeSafeIdentifier(lensMatch[1] as string);
     const lens = getLensBySku(sku);
-    if (!lens) return rpcError(id, { code: -32004, message: `Lens not found: ${sku}` });
+    if (!lens) {
+      const liveCatalog = await fetchLiveCatalogForResources(env);
+      if (liveCatalog && 'error' in liveCatalog) {
+        return rpcError(id, {
+          ...liveCatalog.error,
+          message: `Lens resource lookup for ${sku} could not query the live catalog: ${liveCatalog.error.message}`,
+          data: {
+            ...(isRecord(liveCatalog.error.data) ? liveCatalog.error.data : {}),
+            requestedSku: sku,
+            retryToolName: 'search_lens_catalog',
+            retryArguments: { query: sku, limit: 5 },
+            hint: 'Do not self-compute lens facts. Retry search_lens_catalog or calculate_field_of_view after the live catalog error is resolved.',
+          },
+        });
+      }
+
+      const liveLens = liveCatalog?.lenses.find((entry) => normalizeSafeIdentifier(entry.partNum ?? '') === sku);
+      if (!liveLens) return rpcError(id, lensNotFoundError(sku, liveCatalog?.lenses));
+
+      return rpcResult(id, {
+        contents: [
+          {
+            uri: params.uri,
+            mimeType: 'application/json',
+            text: JSON.stringify(buildLiveLensResource(liveLens)),
+          },
+        ],
+      });
+    }
+
     return rpcResult(id, {
       contents: [
         {
@@ -1366,6 +1417,97 @@ async function resourceReadResponse(id: unknown, params: unknown, env: Env): Pro
   }
 
   return rpcError(id, { code: -32602, message: `Unknown resource: ${params.uri}` });
+}
+
+async function fetchLiveCatalogForResources(env: Env): Promise<{ lenses: SanitizedFovLens[] } | { error: JsonRpcError } | undefined> {
+  if (!isFovLiveBackendEnabled(env)) return undefined;
+
+  const sensor = await resolveSensor(env, SEARCH_REFERENCE_SENSOR);
+  if (!sensor) {
+    return {
+      error: {
+        code: -32603,
+        message: `Live lens catalog resource lookup requires reference sensor ${SEARCH_REFERENCE_SENSOR}, but that sensor could not be resolved`,
+        data: {
+          stage: 'resource_live_catalog_reference_sensor',
+          referenceSensor: SEARCH_REFERENCE_SENSOR,
+          retryToolName: 'get_sensor_specs',
+        },
+      },
+    };
+  }
+
+  const liveResult = await computeFovWithLiveBackend(env, {
+    sensorPartNumber: sensor.partNumber,
+    sensor,
+  });
+  if ('error' in liveResult) return { error: liveResult.error };
+
+  const lenses = Array.isArray(liveResult.structuredContent.lenses)
+    ? (liveResult.structuredContent.lenses as SanitizedFovLens[])
+    : [];
+  return { lenses };
+}
+
+function buildLiveLensResource(lens: SanitizedFovLens): Record<string, unknown> {
+  const sku = normalizeSafeIdentifier(lens.partNum ?? 'UNKNOWN');
+  const distortionStatus = lens.distortion?.status ?? lens.distortionAtFieldEdge?.status ?? 'unavailable';
+  return {
+    schemaVersion: 'commonlands.lens_resource.v1',
+    lens: {
+      sku,
+      source: 'live-lambda-dynamodb-lens-catalog',
+      ...stringField('mount', lens.mount),
+      ...stringField('lensType', lens.lensType),
+      ...numberField('eflMm', lens.efl),
+      ...numberField('fNumber', lens.fNumber),
+      ...numberField('imageCircleMm', lens.imageCircle),
+      ...stringField('resolution', lens.resolution),
+      ...stringField('productUrl', lens.url),
+      ...(lens.fov ? { fov: lens.fov } : {}),
+      ...(lens.coverageClass ? { coverageClass: lens.coverageClass } : {}),
+      ...(lens.coverage ? { coverage: lens.coverage } : {}),
+      ...(lens.provenance ? { provenance: lens.provenance } : {}),
+    },
+    distortionProfile: {
+      lens_sku: sku,
+      distortion_model: describeDistortionModel(distortionStatus),
+      distortion_status: distortionStatus,
+      correction_status: distortionStatus === 'calculated'
+        ? 'live_backend_calculated_distortion_fields'
+        : 'source_display_only_no_measured_polynomial_correction_claim',
+      image_circle_mm: lens.imageCircle ?? null,
+      source_display: lens.distortion?.display ?? lens.distortionAtFieldEdge?.display ?? null,
+      source: 'live-lambda-dynamodb-lens-catalog',
+      mtf: 'not_present_in_current_live_resource',
+      cra: 'not_present_in_current_live_resource',
+      bfl: 'not_present_in_current_live_resource',
+      warning: 'Do not invent polynomial coefficients or measured distortion correction unless distortion_status is calculated.',
+    },
+    latencyTarget: {
+      calculator_p95_ms: CALCULATOR_P95_LATENCY_TARGET_MS,
+    },
+  };
+}
+
+function lensNotFoundError(sku: string, liveLenses: SanitizedFovLens[] | undefined): JsonRpcError {
+  const fixtureSkus = CATALOG_SNAPSHOT.lenses.map((lens) => lens.sku);
+  const liveSkus = liveLenses
+    ?.map((lens) => lens.partNum)
+    .filter((partNum): partNum is string => typeof partNum === 'string' && partNum.trim() !== '')
+    .map(normalizeSafeIdentifier);
+  return {
+    code: -32004,
+    message: `Lens not found: ${sku}`,
+    data: {
+      requestedSku: sku,
+      availableFixtureLensSkus: fixtureSkus,
+      ...(liveSkus && liveSkus.length > 0 ? { availableLiveLensSkus: liveSkus.slice(0, 50) } : {}),
+      retryToolName: 'search_lens_catalog',
+      retryArguments: { query: sku, limit: 5 },
+      hint: 'Use search_lens_catalog to discover the exact SKU, then call calculate_field_of_view for sensor-specific FoV. Do not self-compute from focal length as a fallback.',
+    },
+  };
 }
 
 function promptListResponse(id: unknown): Response {
@@ -2170,6 +2312,15 @@ function fovBackendScansFullCatalog(env: Env): boolean {
   return env.FOV_BACKEND_SCANS_FULL_CATALOG === 'true';
 }
 
+function liveCatalogCacheKey(env: Env, endpointUrl: string, input: LiveFovInput): string {
+  return JSON.stringify({
+    endpointUrl,
+    scansFullCatalog: fovBackendScansFullCatalog(env),
+    sensorPartNumber: normalizeSafeIdentifier(input.sensorPartNumber),
+    workingDistanceMm: input.workingDistanceMm ?? null,
+  });
+}
+
 interface LiveFovInput {
   lensSku?: string;
   sensorPartNumber: string;
@@ -2383,12 +2534,34 @@ async function computeFovWithLiveBackend(
   const endpoint = parseFovBackendEndpoint(env.FOV_LAMBDA_ENDPOINT);
   if ('error' in endpoint) return { error: endpoint.error };
   if (!env.FOV_API_KEY || env.FOV_API_KEY.trim() === '') {
-    return { error: { code: -32603, message: 'Live FoV backend is missing authentication configuration' } };
+    return {
+      error: {
+        code: -32603,
+        message: 'Live FoV backend is missing authentication configuration: FOV_API_KEY is required',
+        data: {
+          missingParam: 'FOV_API_KEY',
+          stage: 'live_fov_backend_auth_config',
+          retryToolName: input.lensSku ? 'calculate_field_of_view' : 'match_lens_to_sensor',
+          hint: 'Do not self-compute FoV. Retry the MCP tool after backend authentication is configured.',
+        },
+      },
+    };
   }
 
   const sensor = input.sensor ?? getSensorByPartNumber(input.sensorPartNumber);
   if (!sensor) {
-    return { error: { code: -32004, message: 'Sensor not found' } };
+    return {
+      error: {
+        code: -32004,
+        message: `Sensor not found: ${input.sensorPartNumber}`,
+        data: {
+          requestedPartNumber: input.sensorPartNumber,
+          availableSensorPartNumbers: getKnownSensorPartNumbers(),
+          retryToolName: 'get_sensor_specs',
+          hint: 'Use one of availableSensorPartNumbers. Do not self-compute FoV with unknown sensor dimensions.',
+        },
+      },
+    };
   }
 
   const requestBody = {
@@ -2413,6 +2586,15 @@ async function computeFovWithLiveBackend(
     ...(input.workingDistanceMm !== undefined ? { workingDistanceMm: input.workingDistanceMm } : {}),
   };
 
+  const cacheKey = input.lensSku ? undefined : liveCatalogCacheKey(env, endpoint.url, input);
+  if (cacheKey) {
+    const cached = liveCatalogResponseCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.result;
+    }
+    if (cached) liveCatalogResponseCache.delete(cacheKey);
+  }
+
   let response: Response;
   try {
     response = await fetchWithTimeout(endpoint.url, {
@@ -2424,8 +2606,20 @@ async function computeFovWithLiveBackend(
       },
       body: JSON.stringify(requestBody),
     }, FOV_BACKEND_TIMEOUT_MS);
-  } catch {
-    return { error: { code: -32603, message: 'Live FoV backend request failed' } };
+  } catch (error) {
+    return {
+      error: {
+        code: -32603,
+        message: `Live FoV backend request failed before response: ${errorMessage(error)}`,
+        data: {
+          stage: 'live_fov_backend_request',
+          timeoutMs: FOV_BACKEND_TIMEOUT_MS,
+          latencyTargetP95Ms: CALCULATOR_P95_LATENCY_TARGET_MS,
+          retryToolName: input.lensSku ? 'calculate_field_of_view' : 'match_lens_to_sensor',
+          hint: 'Retry the MCP tool. Do not self-compute sensor-specific FoV after a backend timeout or network failure.',
+        },
+      },
+    };
   }
 
   if (!response.ok) {
@@ -2456,6 +2650,11 @@ async function computeFovWithLiveBackend(
         data: {
           upstreamStatus: response.status,
           stage: 'live_fov_backend_response',
+          latencyTargetP95Ms: CALCULATOR_P95_LATENCY_TARGET_MS,
+          retryToolName: input.lensSku ? 'calculate_field_of_view' : 'match_lens_to_sensor',
+          hint: isAuth
+            ? 'Fix FOV_API_KEY / Lambda auth, then retry the MCP tool. Do not self-compute FoV as an auth fallback.'
+            : 'Retry the MCP tool after the upstream service recovers. Do not self-compute sensor-specific FoV after an upstream 5xx.',
         },
       },
     };
@@ -2465,7 +2664,17 @@ async function computeFovWithLiveBackend(
     maxBytes: FOV_BACKEND_MAX_RESPONSE_BYTES,
   });
   if ('error' in parsed) {
-    return { error: { code: -32603, message: 'Live FoV backend returned invalid response' } };
+    return {
+      error: {
+        code: -32603,
+        message: `Live FoV backend returned invalid response: ${parsed.error}`,
+        data: {
+          stage: 'live_fov_backend_parse',
+          retryToolName: input.lensSku ? 'calculate_field_of_view' : 'match_lens_to_sensor',
+          hint: 'Retry the MCP tool after backend response formatting is fixed. Do not self-compute FoV from catalog fields.',
+        },
+      },
+    };
   }
 
   const resultLimit = input.lensSku ? FOV_SINGLE_MAX_RESULTS : FOV_CATALOG_MAX_RESULTS;
@@ -2480,7 +2689,7 @@ async function computeFovWithLiveBackend(
   );
   const backendLensCount = sanitizeCount(parsed.data.count, parsed.data.lenses);
 
-  return {
+  const result = {
     structuredContent: {
       schemaVersion: 'optics.fov.live.v1',
       modelVersion: 'lambda-dynamodb-fov-0.1.0',
@@ -2509,6 +2718,13 @@ async function computeFovWithLiveBackend(
       ],
     },
   };
+  if (cacheKey) {
+    liveCatalogResponseCache.set(cacheKey, {
+      expiresAt: Date.now() + LIVE_CATALOG_CACHE_TTL_MS,
+      result,
+    });
+  }
+  return result;
 }
 
 function sanitizeCount(count: unknown, lenses: unknown): number {
@@ -2831,6 +3047,9 @@ function parseFovBackendEndpoint(value: string | undefined): { url: string } | {
   }
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : 'unknown error';
+}
 
 function validateSafeIdentifier(value: unknown, fieldName: string): JsonRpcError | null {
   if (typeof value !== 'string') return { code: -32602, message: `Invalid params: ${fieldName} is required` };
@@ -3120,7 +3339,7 @@ async function handleMcp(request: Request, env: Env, ctx?: ExecutionContext): Pr
   if (parsed.method === 'initialize') response = initializeResponse(parsed.id, parsed.params);
   else if (parsed.method === 'tools/list') response = toolListResponse(parsed.id, env);
   else if (parsed.method === 'tools/call') response = await toolCallResponse(parsed.id, parsed.params, env);
-  else if (parsed.method === 'resources/list') response = resourceListResponse(parsed.id);
+  else if (parsed.method === 'resources/list') response = await resourceListResponse(parsed.id, env);
   else if (parsed.method === 'resources/read') response = await resourceReadResponse(parsed.id, parsed.params, env);
   else if (parsed.method === 'prompts/list') response = promptListResponse(parsed.id);
   else if (parsed.method === 'prompts/get') response = promptGetResponse(parsed.id, parsed.params);
@@ -3135,6 +3354,10 @@ async function handleMcp(request: Request, env: Env, ctx?: ExecutionContext): Pr
 }
 
 assertSafePublicCatalogUrls();
+
+export function __resetLiveCatalogResponseCacheForTests(): void {
+  liveCatalogResponseCache.clear();
+}
 
 export default {
   async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {

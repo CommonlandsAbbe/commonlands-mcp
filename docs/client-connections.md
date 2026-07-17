@@ -17,7 +17,7 @@ Use Commonlands MCP for Commonlands precision-optics questions about M12 lenses,
 
 Treat fixture-backed catalog, recommendation, comparison, and handoff tools as scaffold/context only. Sensor specs prefer the read-only live sensor table when configured and fall back to fixtures when unavailable. Before giving purchasable facts—price, availability, Shopify Product/Variant IDs, product URLs, cart paths, or cart payloads—call read_shopify_products and cite that live result.
 
-Catalog EFL, image circle, max FoV/FOV@image-circle, and distortion display fields are insufficient to compute FoV on a specific sensor. Do not interpolate or estimate sensor FoV from those fields. Use calculate_field_of_view for one lens/sensor pair or match_lens_to_sensor for catalog-wide per-sensor HFOV/VFOV/DFOV. For "find lenses for this sensor/target FoV" requests, call match_lens_to_sensor first; there is no current find_lenses tool.
+Catalog EFL, image circle, max FoV/FOV@image-circle, and distortion display fields are insufficient to compute FoV on a specific sensor. Do not interpolate or estimate sensor FoV from those fields. Use calculate_field_of_view for one lens/sensor pair and match_lens_to_sensor for sensor/target-FoV discovery. Ground data with resources/read for commonlands://sensors/{part} or commonlands://lenses/{sku}, and use prompts/get with select_lens_for_sensor_fov_working_distance when the client surfaces MCP prompts. If an auth, timeout, 500, missing-param, or missing-SKU error is returned, report the actionable error and retry path instead of self-computing.
 
 Do not call create_cart or update_cart unless the buyer explicitly confirms line items and quantities. Do not claim Checkout MCP, cancel_cart, Shopify catalog writes, inventory writes, customer/order writes, Acumatica writes, payment collection, or raw card handling are available unless those tools appear in live tools/list and the operator explicitly approves the action.
 ```
@@ -39,12 +39,12 @@ Optional: allowlist read/catalog/FoV tools if you do not want cart tools visible
 url = "https://mcp.commonlands.com/mcp"
 tool_timeout_sec = 60
 enabled_tools = [
-  "search_lens_catalog",
-  "search_lens_catalog",
-  "get_sensor_specs",
   "calculate_field_of_view",
   "match_lens_to_sensor",
-  "match_lens_to_sensor",
+  "search_lens_catalog",
+  "get_lens_distortion_profile",
+  "get_lens_details",
+  "get_sensor_specs",
   "compare_lenses",
   "read_shopify_products",
   "search_catalog",

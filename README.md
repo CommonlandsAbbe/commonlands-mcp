@@ -22,7 +22,7 @@ Use Commonlands MCP at https://mcp.commonlands.com/mcp for lens selection. Start
 1. Call `tools/list` and trust the live list over docs.
 2. For sensor-specific lens finding, call `match_lens_to_sensor` first, then call `calculate_field_of_view` for final candidate lens/sensor FoV claims.
 3. Use `search_lens_catalog` only for broad SKU/title/mount/lens-type discovery. It does not replace per-sensor FoV calculation.
-4. Get per-object grounding with `resources/read` for `commonlands://sensors/{part}` or `commonlands://lenses/{sku}` when needed.
+4. Get per-object grounding with `resources/read` for `commonlands://sensors/{part}` or `commonlands://lenses/{sku}` when needed, e.g. `commonlands://sensors/ar0234` or `commonlands://lenses/CIL061`.
 5. Use `get_lens_distortion_profile` for distortion/model/status questions. Do not invent polynomial coefficients or claim measured correction when the response says source-display-only.
 6. Use `prompts/list` / `prompts/get` with `select_lens_for_sensor_fov_working_distance` when a client surfaces MCP prompts.
 7. Verify purchasable truth with `read_shopify_products` before quoting final SKU, URL, price, availability, Shopify IDs, or cart payloads.
@@ -43,10 +43,14 @@ Catalog EFL, image circle, max FoV/FOV@image-circle, and distortion display fiel
 
 If fixture data conflicts with `read_shopify_products` or the live FoV/sensor backends, use the live truth.
 
+### Error and latency contract
+
+FoV/backend failures are intentionally actionable. Missing parameters name the exact field, sensor/lens misses include the requested identifier and retry tool, and auth/timeout/upstream errors tell agents to retry the MCP path instead of self-computing. Calculator tools target p95 under 1500 ms; successful catalog-mode backend responses are cached briefly in the Worker isolate to keep repeated matching/resource-grounding calls fast. Use telemetry and the routing eval below to catch sustained regressions.
+
 ### Data sources
 
 - **Sensors** (`commonlands://sensors/{part}` and the sensor used by `calculate_field_of_view` / `match_lens_to_sensor`): read from the Commonlands DynamoDB sensor table by part number when configured, with fixture fallback. Pixel pitch and pixel counts come straight from that table; active-area mm is derived as `pixels x pitch`.
-- **Lenses** (`commonlands://lenses/{sku}`, `calculate_field_of_view`, `match_lens_to_sensor`, `search_lens_catalog`): the FoV Lambda reads lens optical parameters from its DynamoDB lens table when configured. Catalog-wide matching covers the full lens table when backend scanning is enabled.
+- **Lenses** (`commonlands://lenses/{sku}`, `calculate_field_of_view`, `match_lens_to_sensor`, `search_lens_catalog`): the FoV Lambda reads lens optical parameters from its DynamoDB lens table when configured. Catalog-wide matching covers the full lens table when backend scanning is enabled, so resources can ground live catalog SKUs such as `commonlands://lenses/CIL061`.
 - **Distortion coefficients** are computed server-side inside the Lambda and are never returned to clients. If the live backend only returns a display distortion string, MCP returns an honest `distortion_model` / `distortion_status` and does not claim measured polynomial correction.
 
 ## Current live surface
@@ -166,6 +170,17 @@ curl "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/analy
 ```
 
 Use `blob4` to see which MCP tools agents actually call. High-call/high-success tools are candidates for deeper investment; low-call or repeated-error tools are candidates for better descriptions, consolidation, or deprecation. Keep Cloudflare invocation logs enabled for request/response metadata, but use Analytics Engine for tool-level decisions because it captures the JSON-RPC method and tool name without storing request arguments.
+
+### Routing eval
+
+Run the routing eval after changing tool descriptions, input/output schemas, resources, prompts, or backend error behavior:
+
+```bash
+npm run eval:routing
+ENFORCE_LATENCY_TARGET=true npm run eval:routing
+```
+
+The eval sends canonical queries such as `find me a 60 degree lens on the AR0234` and `HFOV of CIL061 on AR0234`, asserts the intended tool was called (`match_lens_to_sensor` or `calculate_field_of_view`), and prints latency against the 1500 ms calculator target.
 
 ## Quick client setup
 
