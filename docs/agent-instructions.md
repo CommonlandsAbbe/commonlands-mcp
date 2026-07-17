@@ -14,6 +14,8 @@ Catalog EFL, image circle, max FoV/FOV@image-circle, and distortion display fiel
 
 Compatibility aliases such as `compute_fov`, `compute_fov_catalog`, and `match_lenses_to_sensor` may still dispatch where practical, but new clients should route through the intent-named tools above.
 
+There is no `find_lenses` tool in the current public surface; route those requests through `match_lens_to_sensor`.
+
 ## Default Lens-Selection Workflow
 
 1. Call `tools/list` and trust the live tool list over documentation.

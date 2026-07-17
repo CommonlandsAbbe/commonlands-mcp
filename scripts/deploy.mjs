@@ -12,11 +12,14 @@
  */
 
 import { execFileSync, spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 
 const gitSha = execFileSync('git', ['rev-parse', '--short', 'HEAD'], { encoding: 'utf8' }).trim();
 const status = execFileSync('git', ['status', '--porcelain'], { encoding: 'utf8' }).trim();
 const sha = status ? `${gitSha}-dirty` : gitSha;
-const version = process.env.npm_package_version ?? '0.1.0';
+const version =
+  process.env.npm_package_version ??
+  JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 const extraArgs = process.argv.slice(2);
 
 const result = spawnSync(

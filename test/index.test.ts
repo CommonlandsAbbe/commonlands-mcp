@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import worker, { __resetLiveCatalogResponseCacheForTests, type Env } from '../src/index';
+import worker, {
+  __resetLensCatalogCacheForTests,
+  __resetLiveCatalogResponseCacheForTests,
+  type Env,
+} from '../src/index';
 import { signDynamoRequest } from '../src/aws-sigv4';
 import { __resetSensorStoreCacheForTests } from '../src/sensor-store';
 
@@ -15,7 +19,7 @@ const shopifyReadonlyEnv: Env = {
   SHOPIFY_CLIENT_SECRET: 'client-secret-test',
   SHOPIFY_SHOP_DOMAIN: 'commonlands-store.myshopify.com',
   SHOPIFY_SCOPES:
-    'read_discovery,read_files,read_inventory,read_legal_policies,read_locations,read_marketing_integrated_campaigns,read_marketing_events,read_metaobject_definitions,read_metaobjects,read_online_store_navigation,read_online_store_pages,read_payment_terms,read_product_feeds,read_product_listings,read_products,read_shipping,read_content',
+    'read_files,read_inventory,read_online_store_navigation,read_online_store_pages,read_product_feeds,read_product_listings,read_products,read_content',
 };
 
 const shopifyCartEnv: Env = {
@@ -261,6 +265,7 @@ describe('Commonlands MCP Worker', () => {
     globalThis.fetch = originalFetch;
     __resetLiveCatalogResponseCacheForTests();
     __resetSensorStoreCacheForTests();
+    __resetLensCatalogCacheForTests();
   });
 
   it('returns deploy metadata from /healthz', async () => {
@@ -314,7 +319,7 @@ describe('Commonlands MCP Worker', () => {
       id: 1,
       result: {
         protocolVersion: '2025-11-25',
-        serverInfo: { name: 'commonlands-mcp', version: '0.1.4' },
+        serverInfo: { name: 'commonlands-mcp', version: '0.3.1' },
         capabilities: { tools: {}, resources: {}, prompts: {} },
       },
     });
@@ -409,13 +414,13 @@ describe('Commonlands MCP Worker', () => {
       'get_shopify_ucp_readiness',
       'get_shopify_readonly_config_status',
       'read_shopify_products',
-      'read_shopify_metaobjects',
       'search_catalog',
       'lookup_catalog',
       'get_product',
       'prepare_shopify_purchase_handoff',
       'get_purchase_route_options',
       'recommend_lenses_for_application',
+      'submit_rfq',
     ]);
     expect(toolNames).not.toContain('search_lenses');
     expect(toolNames).not.toContain('get_lens_details');
@@ -482,7 +487,8 @@ describe('Commonlands MCP Worker', () => {
     const { body } = await rpc('tools/list', undefined, 'annotated-tools', shopifyCartEnv);
     const tools = getResult(body).tools as ToolSummary[];
 
-    expect(tools.length).toBeGreaterThan(20);
+    expect(tools.length).toBeGreaterThanOrEqual(20);
+    expect(tools.map((tool) => tool.name)).not.toContain('read_shopify_metaobjects');
     for (const tool of tools) {
       expect(tool.annotations).toMatchObject({
         title: tool.title,
@@ -501,15 +507,48 @@ describe('Commonlands MCP Worker', () => {
       destructiveHint: false,
     });
 
-    const cartTools = tools.filter((tool) => ['create_cart', 'get_cart', 'update_cart'].includes(tool.name));
-    expect(cartTools).toHaveLength(3);
-    for (const tool of cartTools) {
-      expect(tool.annotations).toMatchObject({
-        readOnlyHint: false,
-        destructiveHint: true,
-      });
+    // get_cart is a read: read-only and idempotent, never destructive. create_cart
+    // writes new state but destroys nothing. update_cart overwrites existing state.
+    const getCart = tools.find((tool) => tool.name === 'get_cart');
+    expect(getCart?.annotations).toMatchObject({
+      readOnlyHint: true,
+      idempotentHint: true,
+      destructiveHint: false,
+    });
+    const createCart = tools.find((tool) => tool.name === 'create_cart');
+    expect(createCart?.annotations).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: false,
+    });
+    const updateCart = tools.find((tool) => tool.name === 'update_cart');
+    expect(updateCart?.annotations).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: true,
+    });
+  });
+
+  it('never references hidden tool names inside visible tool descriptions', async () => {
+    const { body } = await rpc('tools/list', undefined, 'visible-descriptions', shopifyCartEnv);
+    const tools = getResult(body).tools as ToolSummary[];
+    const visibleNames = new Set(tools.map((tool) => tool.name));
+    const hiddenNames = [
+      'compute_fov_catalog',
+      'compute_fov',
+      'match_lenses_to_sensor',
+      'search_lenses',
+      'get_lens_details',
+    ].filter((name) => !visibleNames.has(name));
+
+    for (const tool of tools) {
+      for (const hidden of hiddenNames) {
+        expect(
+          `${tool.description ?? ''}`.includes(hidden),
+          `visible tool ${tool.name} description references hidden tool ${hidden}`,
+        ).toBe(false);
+      }
     }
   });
+
 
   it('returns MCP initialize instructions with usage, SEO, and security metadata', async () => {
     const { body } = await rpc(
@@ -992,7 +1031,7 @@ describe('Commonlands MCP Worker', () => {
 
     const { body } = await rpc(
       'tools/call',
-      { name: 'read_shopify_products', arguments: { sku: 'CIL250', limit: 1 } },
+      { name: 'read_shopify_products', arguments: { sku: 'CIL250', limit: 1, includeMetafields: true } },
       'read-shopify-products-sku-fallback',
       { ...shopifyReadonlyEnv, SHOPIFY_CLIENT_ID: 'client-id-fallback-test' },
     );
@@ -1012,7 +1051,10 @@ describe('Commonlands MCP Worker', () => {
           variants: [
             {
               sku: 'NOT-CIL250-SKU',
-              metafields: [{ namespace: 'mm-google-shopping', key: 'mpn', valuePreview: 'CIL250' }],
+              // mm-google-shopping is not a public namespace: the Shopify-side
+              // MPN text search still matches, but the metafield itself is
+              // filtered out by the public allowlist.
+              metafields: [],
               recommendedCreateCartPayload: {
                 cart: {
                   line_items: [
@@ -1099,7 +1141,7 @@ describe('Commonlands MCP Worker', () => {
         numericId: '111',
         sku: 'ABC123-F1.8-M12A650',
         price: '49.00',
-        inventoryQuantity: 10,
+        availability: 'in_stock',
         storefrontCartPath: '/cart/111:1',
         recommendedCreateCartPayload: {
           cart: {
@@ -1201,8 +1243,7 @@ describe('Commonlands MCP Worker', () => {
             {
               variantId: 'gid://shopify/ProductVariant/123',
               sku: 'CIL250',
-              inventoryQuantity: 42,
-              inventoryTracked: true,
+              availability: 'in_stock',
               recommendedCreateCartPayload: {
                 cart: {
                   line_items: [
@@ -1320,27 +1361,89 @@ describe('Commonlands MCP Worker', () => {
     expect(JSON.stringify(getResult(body))).not.toMatch(/shpat_error_token_never_return|client-secret-test|client-id-error-test|Authorization|Bearer/i);
   });
 
-  it('reads Shopify metaobjects with field previews only', async () => {
-    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+  it('rejects read_shopify_metaobjects as removed from the public surface without calling Shopify', async () => {
+    let called = false;
+    globalThis.fetch = (async () => {
+      called = true;
+      return new Response('unexpected fetch', { status: 500 });
+    }) as typeof fetch;
+
+    const { body } = await rpc(
+      'tools/call',
+      { name: 'read_shopify_metaobjects', arguments: { type: 'lens_spec', handle: 'cil250', limit: 5 } },
+      'read-shopify-metaobjects-removed',
+      shopifyReadonlyEnv,
+    );
+
+    expect(called).toBe(false);
+    const removalError = body.error as JsonObject;
+    expect(removalError).toMatchObject({ code: -32601 });
+    expect(String(removalError.message)).toContain('removed from the public surface');
+
+    const { body: toolsBody } = await rpc('tools/list', {}, 'tools-list-after-metaobject-removal');
+    const toolNames = ((getResult(toolsBody).tools as JsonObject[]) ?? []).map((tool) => tool.name);
+    expect(toolNames).not.toContain('read_shopify_metaobjects');
+  });
+
+  it('filters non-public metafields and DRAFT products from read_shopify_products', async () => {
+    globalThis.fetch = (async (input: string | URL | Request) => {
       const url = input instanceof Request ? input.url : input.toString();
       if (url.endsWith('/admin/oauth/access_token')) {
-        return Response.json({ access_token: 'shpat_metaobject_token_never_return', expires_in: 86400, scope: shopifyReadonlyEnv.SHOPIFY_SCOPES });
+        return Response.json({ access_token: 'shpat_policy_token_never_return', expires_in: 86400 });
       }
       if (url.endsWith('/admin/api/2026-04/graphql.json')) {
-        expect(String(init?.body)).toContain('metaobjects');
-        expect(String(init?.body)).not.toMatch(/mutation/i);
         return Response.json({
           data: {
-            metaobjects: {
+            productVariants: {
               nodes: [
                 {
-                  id: 'gid://shopify/Metaobject/1',
-                  type: 'lens_spec',
-                  handle: 'cil250',
-                  fields: [
-                    { key: 'sku', type: 'single_line_text_field', value: 'CIL250' },
-                    { key: 'private_note', type: 'multi_line_text_field', value: 'internal value that should be previewed only' },
-                  ],
+                  id: 'gid://shopify/ProductVariant/901',
+                  sku: 'CIL250',
+                  title: 'Default Title',
+                  price: '34.00',
+                  inventoryQuantity: 3,
+                  inventoryItem: { tracked: true },
+                  metafields: { nodes: [] },
+                  product: {
+                    id: 'gid://shopify/Product/901',
+                    handle: 'cil250',
+                    title: 'CIL250 M12 lens',
+                    status: 'ACTIVE',
+                    productType: 'Lens',
+                    vendor: 'Commonlands',
+                    tags: [],
+                    onlineStoreUrl: 'https://commonlands.com/products/cil250',
+                    metafields: {
+                      nodes: [
+                        { namespace: 'custom', key: 'efl', type: 'single_line_text_field', value: '25mm' },
+                        { namespace: 'custom', key: 'docsend_page', type: 'url', value: 'https://docsend.com/view/private' },
+                        { namespace: 'shopify--discovery--product_recommendation', key: 'related', type: 'list', value: 'internal' },
+                        { namespace: 'mm-google-shopping', key: 'mpn', type: 'single_line_text_field', value: 'CIL250' },
+                      ],
+                    },
+                    media: { nodes: [] },
+                  },
+                },
+                {
+                  id: 'gid://shopify/ProductVariant/902',
+                  sku: 'PROTO-1',
+                  title: 'Default Title',
+                  price: '99.00',
+                  inventoryQuantity: 50,
+                  inventoryItem: { tracked: true },
+                  metafields: { nodes: [] },
+                  product: {
+                    id: 'gid://shopify/Product/902',
+                    handle: 'unreleased-prototype',
+                    title: 'Unreleased prototype lens',
+                    status: 'DRAFT',
+                    productType: 'Lens',
+                    vendor: 'Commonlands',
+                    tags: [],
+                    onlineStoreUrl: null,
+                    metafields: { nodes: [] },
+                    media: { nodes: [] },
+                  },
                 },
               ],
             },
@@ -1352,30 +1455,198 @@ describe('Commonlands MCP Worker', () => {
 
     const { body } = await rpc(
       'tools/call',
-      { name: 'read_shopify_metaobjects', arguments: { type: 'lens_spec', handle: 'cil250', limit: 5 } },
-      'read-shopify-metaobjects',
+      { name: 'read_shopify_products', arguments: { query: 'lens', includeMetafields: true, limit: 5 } },
+      'read-shopify-products-public-policy',
+      { ...shopifyReadonlyEnv, SHOPIFY_CLIENT_ID: 'client-id-policy-test' },
+    );
+    const structuredContent = getStructuredContent(body);
+    const products = structuredContent.products as JsonObject[];
+
+    // DRAFT product is filtered out entirely.
+    expect(products).toHaveLength(1);
+    expect(products[0]).toMatchObject({ handle: 'cil250' });
+    expect(JSON.stringify(products)).not.toContain('unreleased-prototype');
+
+    // Internal status never appears in output.
+    expect(products[0]?.status).toBeUndefined();
+
+    // Only the allowlisted public metafield survives; docsend and app
+    // namespaces are dropped.
+    expect(products[0]?.metafields).toEqual([
+      expect.objectContaining({ namespace: 'custom', key: 'efl', valuePreview: '25mm' }),
+    ]);
+    expect(JSON.stringify(products)).not.toMatch(/docsend|mm-google-shopping|product_recommendation/);
+
+    // Coarse availability only: low_stock at quantity 3, no raw counts.
+    const variants = products[0]?.variants as JsonObject[];
+    expect(variants[0]).toMatchObject({ sku: 'CIL250', availability: 'low_stock' });
+    expect(JSON.stringify(variants)).not.toMatch(/inventoryQuantity|inventoryItemId/);
+  });
+
+  it('defaults read_shopify_products to metafields off', async () => {
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      if (url.endsWith('/admin/oauth/access_token')) {
+        return Response.json({ access_token: 'shpat_default_token_never_return', expires_in: 86400 });
+      }
+      if (url.endsWith('/admin/api/2026-04/graphql.json')) {
+        // With metafields off the query uses the empty __typename fragments.
+        expect(String(init?.body)).not.toContain('metafields(first: 100)');
+        return Response.json({ data: { productVariants: { nodes: [] } } });
+      }
+      return new Response('unexpected fetch', { status: 500 });
+    }) as typeof fetch;
+
+    const { body } = await rpc(
+      'tools/call',
+      { name: 'read_shopify_products', arguments: { sku: 'CIL250', limit: 1 } },
+      'read-shopify-products-default-metafields-off',
+      { ...shopifyReadonlyEnv, SHOPIFY_CLIENT_ID: 'client-id-default-test' },
+    );
+    const structuredContent = getStructuredContent(body);
+    expect(structuredContent.source).toMatchObject({ includesMetafields: false });
+  });
+
+  it('returns 429 when the cart mutation rate limit is exceeded', async () => {
+    const { response, body } = await rpc(
+      'tools/call',
+      { name: 'create_cart', arguments: { cart: { line_items: [{ quantity: 1, item: { id: 'gid://shopify/ProductVariant/1' } }] } } },
+      'cart-rate-limited',
+      {
+        ...shopifyCartEnv,
+        MCP_RATE_LIMITER: { limit: async () => ({ success: true }) },
+        CART_RATE_LIMITER: { limit: async () => ({ success: false }) },
+      } as Env,
+    );
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get('retry-after')).toBe('60');
+    const rateError = body.error as JsonObject;
+    expect(rateError).toMatchObject({ code: -32000 });
+    expect(String(rateError.message)).toContain('cart_mutations');
+  });
+
+  it('returns 429 when the global request rate limit is exceeded', async () => {
+    const { response, body } = await rpc(
+      'tools/list',
+      {},
+      'global-rate-limited',
+      { MCP_RATE_LIMITER: { limit: async () => ({ success: false }) } } as Env,
+    );
+
+    expect(response.status).toBe(429);
+    const rateError = body.error as JsonObject;
+    expect(String(rateError.message)).toContain('requests');
+  });
+
+  it('fails open when the rate limiter binding throws', async () => {
+    const { response } = await rpc(
+      'tools/list',
+      {},
+      'rate-limiter-fail-open',
+      { MCP_RATE_LIMITER: { limit: async () => { throw new Error('limiter outage'); } } } as Env,
+    );
+
+    expect(response.status).toBe(200);
+  });
+
+  it('submit_rfq: routes to the contact page when SendGrid is not configured, without sending mail', async () => {
+    let called = false;
+    globalThis.fetch = (async () => { called = true; return new Response('unexpected', { status: 500 }); }) as typeof fetch;
+
+    const { body } = await rpc(
+      'tools/call',
+      { name: 'submit_rfq', arguments: { message: 'Do you have a 6mm M12 lens for IMX477?', email: 'buyer@example.com' } },
+      'rfq-not-configured',
       shopifyReadonlyEnv,
     );
     const structuredContent = getStructuredContent(body);
 
+    expect(called).toBe(false);
     expect(structuredContent).toMatchObject({
-      schemaVersion: 'shopify.live_read.v1',
-      configured: true,
-      query: { kind: 'metaobjects', type: 'lens_spec', handle: 'cil250', limit: 5 },
-      connector: { status: 'ok', source: 'live_shopify_admin_graphql' },
-      metaobjects: [
-        {
-          id: 'gid://shopify/Metaobject/1',
-          type: 'lens_spec',
-          handle: 'cil250',
-          fields: [
-            { key: 'sku', type: 'single_line_text_field', valuePreview: 'CIL250' },
-            { key: 'private_note', type: 'multi_line_text_field', valuePreview: 'internal value that should be previewed only' },
-          ],
-        },
-      ],
+      schemaVersion: 'commonlands.rfq.v1',
+      configured: false,
+      status: 'not_configured',
+      handoff: { url: 'https://commonlands.com/pages/contact' },
     });
-    expect(JSON.stringify(getResult(body))).not.toMatch(/shpat_metaobject_token_never_return|client-secret-test|client-id-test|Authorization|Bearer/i);
+  });
+
+  it('submit_rfq: validates message and email before doing anything', async () => {
+    let called = false;
+    globalThis.fetch = (async () => { called = true; return new Response('unexpected', { status: 500 }); }) as typeof fetch;
+
+    const missing = getStructuredContent((await rpc('tools/call', { name: 'submit_rfq', arguments: { email: 'a@b.com' } }, 'rfq-no-msg', shopifyReadonlyEnv)).body);
+    expect(missing).toMatchObject({ status: 'invalid_request' });
+    expect(String(missing.message)).toContain('message is required');
+
+    const badEmail = getStructuredContent((await rpc('tools/call', { name: 'submit_rfq', arguments: { message: 'hi', email: 'not-an-email' } }, 'rfq-bad-email', shopifyReadonlyEnv)).body);
+    expect(badEmail).toMatchObject({ status: 'invalid_request' });
+    expect(String(badEmail.message)).toContain('valid address');
+
+    expect(called).toBe(false);
+  });
+
+  it('submit_rfq: sends via SendGrid to the fixed inbox and never leaks the API key', async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      calls.push(init ? { url, init } : { url });
+      expect(url).toBe('https://api.sendgrid.com/v3/mail/send');
+      return new Response(null, { status: 202 });
+    }) as typeof fetch;
+
+    const rfqEnv = {
+      ...shopifyReadonlyEnv,
+      SENDGRID_API_KEY: 'SG.secret_never_return',
+      RFQ_TO_EMAIL: 'sales@commonlands.com',
+      RFQ_FROM_EMAIL: 'mcp@commonlands.com',
+      RFQ_FROM_NAME: 'Commonlands MCP',
+    } as Env;
+
+    const { body } = await rpc(
+      'tools/call',
+      {
+        name: 'submit_rfq',
+        arguments: {
+          kind: 'rfq', message: 'Quote for 50 units on an IMX477 build.', email: 'buyer@example.com',
+          name: 'Ada Buyer', company: 'RoboCo', partNumbers: ['CIL250', 'CIL078'], sensor: 'IMX477', quantity: 50,
+        },
+      },
+      'rfq-submit',
+      rfqEnv,
+    );
+    const structuredContent = getStructuredContent(body);
+
+    expect(calls).toHaveLength(1);
+    const payload = JSON.parse(String(calls[0]?.init?.body));
+    expect(payload.personalizations[0].to[0].email).toBe('sales@commonlands.com'); // fixed recipient
+    expect(payload.reply_to.email).toBe('buyer@example.com');
+    expect(String((calls[0]?.init?.headers as Record<string, string>).authorization)).toContain('Bearer');
+    expect(structuredContent).toMatchObject({ schemaVersion: 'commonlands.rfq.v1', configured: true, status: 'submitted' });
+    expect(JSON.stringify(getResult(body))).not.toMatch(/SG\.secret_never_return/);
+  });
+
+  it('submit_rfq: accepts RFQ_TO/RFQ_FROM aliases and omits from.name when unset', async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      calls.push(init ? { url, init } : { url });
+      return new Response(null, { status: 202 });
+    }) as typeof fetch;
+
+    const { body } = await rpc(
+      'tools/call',
+      { name: 'submit_rfq', arguments: { message: 'Quote please', email: 'buyer@example.com' } },
+      'rfq-alias-env',
+      { ...shopifyReadonlyEnv, SENDGRID_API_KEY: 'SG.secret', RFQ_TO: 'sales@commonlands.com', RFQ_FROM: 'engineering@commonlands.com' } as Env,
+    );
+
+    expect(calls).toHaveLength(1);
+    const payload = JSON.parse(String(calls[0]?.init?.body));
+    expect(payload.personalizations[0].to[0].email).toBe('sales@commonlands.com');
+    expect(payload.from.email).toBe('engineering@commonlands.com');
+    expect(payload.from.name).toBeUndefined();
+    expect(getStructuredContent(body)).toMatchObject({ configured: true, status: 'submitted' });
   });
 
   it('rejects unsafe Shopify read adapter params without calling Shopify', async () => {
@@ -3377,7 +3648,7 @@ describe('Commonlands MCP Worker', () => {
 
     const { body } = await rpc(
       'tools/call',
-      { name: 'get_sensor_specs', arguments: { partNumber: 'DOES_NOT_EXIST' } },
+      { name: 'get_sensor_specs', arguments: { partNumber: 'DOES-NOT-EXIST' } },
       'live-sensor-missing',
       sensorEnv,
     );

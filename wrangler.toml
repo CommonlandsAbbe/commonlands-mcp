@@ -27,7 +27,32 @@ FOV_BACKEND_SCANS_FULL_CATALOG = "true"
 # Cloudflare dashboard or `wrangler secret put`, never committed.
 SENSOR_DDB_TABLE = "SensorData-orz4gwks4bef7engytv7spr2ha-dev"
 SENSOR_DDB_REGION = "us-west-2"
+# submit_rfq (SendGrid). Recipient/sender accept RFQ_TO_EMAIL/RFQ_FROM_EMAIL or the
+# shorter RFQ_TO/RFQ_FROM. RFQ_FROM_NAME is optional. These are
+# non-secret config; set them here or as dashboard vars. SENDGRID_API_KEY is a
+# secret (`wrangler secret put SENDGRID_API_KEY`), never committed. RFQ_FROM_EMAIL
+# must be a SendGrid-verified sender. The tool stays inert (returns a routed
+# contact-page handoff) until all three are set.
+# RFQ_TO_EMAIL = "sales@commonlands.com"
+# RFQ_FROM_EMAIL = "mcp@commonlands.com"
+# RFQ_FROM_NAME = "Commonlands MCP"
 
 [[analytics_engine_datasets]]
 binding = "MCP_ANALYTICS"
 dataset = "commonlands_mcp_events"
+
+# Per-IP abuse controls for the public endpoint (Workers Rate Limiting API).
+# Global budget for all /mcp requests, plus a stricter budget for cart
+# mutations (create_cart/update_cart) since the endpoint is unauthenticated.
+# Code fails open if a binding is absent (local dev, tests).
+[[unsafe.bindings]]
+name = "MCP_RATE_LIMITER"
+type = "ratelimit"
+namespace_id = "1001"
+simple = { limit = 120, period = 60 }
+
+[[unsafe.bindings]]
+name = "CART_RATE_LIMITER"
+type = "ratelimit"
+namespace_id = "1002"
+simple = { limit = 10, period = 60 }
