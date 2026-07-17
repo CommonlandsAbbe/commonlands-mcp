@@ -124,7 +124,7 @@ interface ToolAnnotations {
 
 const SERVER_INFO = {
   name: 'commonlands-mcp',
-  version: '0.3.1',
+  version: '0.3.2',
 } as const;
 
 const PUBLIC_MCP_ENDPOINT = 'https://mcp.commonlands.com/mcp';

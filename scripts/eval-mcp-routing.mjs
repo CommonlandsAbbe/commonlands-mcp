@@ -3,6 +3,11 @@
 const endpoint = process.env.MCP_ENDPOINT ?? 'https://mcp.commonlands.com/mcp';
 const latencyTargetMs = Number(process.env.CALCULATOR_P95_TARGET_MS ?? '1500');
 const enforceLatency = process.env.ENFORCE_LATENCY_TARGET === 'true';
+const warmSampleCount = Number(process.env.WARM_LATENCY_SAMPLES ?? '20');
+
+if (!Number.isInteger(warmSampleCount) || warmSampleCount < 1) {
+  throw new Error('WARM_LATENCY_SAMPLES must be a positive integer');
+}
 
 const evals = [
   {
@@ -43,25 +48,38 @@ for (const item of evals) {
     continue;
   }
 
-  const started = performance.now();
   try {
-    const result = await rpc('tools/call', {
-      name: item.toolName,
-      arguments: item.arguments,
-    });
-    const durationMs = Math.round(performance.now() - started);
-    const structuredContent = result.structuredContent;
-    if (!structuredContent || typeof structuredContent !== 'object') {
-      throw new Error('expected structuredContent object');
+    const samples = [];
+    for (let sampleIndex = 0; sampleIndex <= warmSampleCount; sampleIndex += 1) {
+      const started = performance.now();
+      const result = await rpc('tools/call', {
+        name: item.toolName,
+        arguments: item.arguments,
+      });
+      const durationMs = Math.round(performance.now() - started);
+      const structuredContent = result.structuredContent;
+      if (!structuredContent || typeof structuredContent !== 'object') {
+        throw new Error(`sample ${sampleIndex + 1}: expected structuredContent object`);
+      }
+      item.assertStructuredContent(structuredContent);
+      samples.push(durationMs);
     }
-    item.assertStructuredContent(structuredContent);
 
-    const latencyText = durationMs <= latencyTargetMs
-      ? `${durationMs}ms <= ${latencyTargetMs}ms target`
-      : `${durationMs}ms > ${latencyTargetMs}ms target`;
-    console.log(`PASS ${item.expectedTool}: "${item.query}" called ${item.toolName}; ${latencyText}`);
-    if (durationMs > latencyTargetMs && enforceLatency) {
-      failures.push(`${item.query}: ${item.toolName} latency ${durationMs}ms exceeded ${latencyTargetMs}ms target`);
+    const [firstCallMs, ...warmSamples] = samples;
+    const warmP95Ms = percentile(warmSamples, 0.95);
+    const latencyText = warmP95Ms <= latencyTargetMs
+      ? `${warmP95Ms}ms <= ${latencyTargetMs}ms target`
+      : `${warmP95Ms}ms > ${latencyTargetMs}ms target`;
+    console.log(
+      `PASS ${item.expectedTool}: "${item.query}" called ${item.toolName}; `
+      + `first-call ${firstCallMs}ms (cold-start candidate, excluded); `
+      + `warm p95 ${latencyText} across ${warmSampleCount} samples`,
+    );
+    if (warmP95Ms > latencyTargetMs && enforceLatency) {
+      failures.push(
+        `${item.query}: ${item.toolName} warm p95 ${warmP95Ms}ms exceeded ${latencyTargetMs}ms target `
+        + `across ${warmSampleCount} samples`,
+      );
     }
   } catch (error) {
     failures.push(`${item.query}: ${error instanceof Error ? error.message : String(error)}`);
@@ -72,6 +90,12 @@ if (failures.length > 0) {
   console.error(`\n${failures.length} routing eval failure(s):`);
   for (const failure of failures) console.error(`- ${failure}`);
   process.exit(1);
+}
+
+function percentile(samples, percentileValue) {
+  const sorted = [...samples].sort((left, right) => left - right);
+  const index = Math.max(0, Math.ceil(percentileValue * sorted.length) - 1);
+  return sorted[index];
 }
 
 async function rpc(method, params) {
