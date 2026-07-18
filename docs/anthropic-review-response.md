@@ -17,7 +17,7 @@ engineering record of what changed.
 enforces it server-side (see `PUBLIC_DATA_POLICY` in
 `src/shopify-read-adapter.ts`):
 
-1. **`read_shopify_metaobjects` is removed** from the tool surface (20 tools
+1. **`read_shopify_metaobjects` is removed** from the tool surface (21 tools
    now). Calling it returns an actionable error directing agents to
    `read_shopify_products`. Admin metaobject definitions can hold non-public
    store content, so no public tool reads them at all.

@@ -8,7 +8,7 @@ The live server is:
 - **Discovery profile:** `https://mcp.commonlands.com/.well-known/ucp`
 - **Health check:** `https://mcp.commonlands.com/healthz`
 
-The current public surface (v0.2.0) exposes **20 tools** with intent-named optics tools (`calculate_field_of_view`, `match_lens_to_sensor`, `search_lens_catalog`, `get_lens_distortion_profile`). UCP discovery advertises catalog + cart discovery. Checkout tools, `cancel_cart`, and `read_shopify_metaobjects` are not exposed. The pre-v0.2.0 optics names (`compute_fov`, `compute_fov_catalog`, `match_lenses_to_sensor`, `search_lenses`, `get_lens_details`) still dispatch as hidden aliases but do not appear in `tools/list`.
+The current public surface (v0.2.0) exposes **21 tools** with intent-named optics tools (`calculate_field_of_view`, `match_lens_to_sensor`, `search_lens_catalog`, `get_lens_distortion_profile`). UCP discovery advertises catalog + cart discovery. Checkout tools, `cancel_cart`, and `read_shopify_metaobjects` are not exposed. The pre-v0.2.0 optics names (`compute_fov`, `compute_fov_catalog`, `match_lenses_to_sensor`, `search_lenses`, `get_lens_details`) still dispatch as hidden aliases but do not appear in `tools/list`.
 
 ## The short version
 
@@ -47,7 +47,7 @@ If a buyer explicitly asks for a cart, the agent can use live Shopify Variant GI
 
 ## Current production status
 
-- **Live tool count:** 22
+- **Live tool count:** 21
 - **Live Shopify product truth:** `read_shopify_products` is configured and read-only.
 - **Live FoV backend:** `calculate_field_of_view` and `match_lens_to_sensor` use the authenticated AWS Lambda/DynamoDB backend when configured. The Worker sends the backend secret server-side; agents never receive it, and returned lens records are allowlisted.
 - **Sensor specs:** `get_sensor_specs` prefers the read-only live sensor table when configured and falls back to the Worker fixture sensor catalog when unavailable.
