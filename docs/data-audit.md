@@ -1,6 +1,6 @@
 # Data Audit Plan
 
-The Worker does not yet connect to AWS, Shopify, Acumatica, or a database. Phase 1/2/3/4/5/6/7 catalog, FoV, recommendation, product-page detail, snapshot-status, Shopify/UCP-readiness, UCP alias, and purchase-handoff behavior is fixture-backed until the real data contracts below are confirmed.
+The Worker now connects read-only to the live AWS FoV/sensor backends and to Shopify product truth, and it exposes buyer-confirmed Shopify cart handoff through Shopify's merchant MCP endpoint. The remaining catalog, product-page, snapshot-status, UCP-readiness, UCP-alias, and purchase-handoff fixtures are engineering context only until the real joined-data contracts below are confirmed. Acumatica is not connected.
 
 ## Confirmed from planning/discovery
 
@@ -75,7 +75,7 @@ Before replacing Phase 3 fixture ranking with production ranking, confirm:
 
 ## Shopify Storefront MCP / UCP compatibility audit requirements
 
-Phase 7 exposes fixture-backed aliases only. Before replacing them with live Shopify-backed behavior or claiming production UCP compliance, confirm:
+The Worker exposes fixture-backed UCP catalog aliases plus separate live Shopify product reads and buyer-confirmed cart handoff. Before claiming production UCP catalog compliance or replacing the aliases with joined live data, confirm:
 
 - Stable Shopify product and variant identifiers to return in UCP-shaped `id` fields.
 - Whether Commonlands should expose UCP aliases directly or keep Commonlands-native tools plus compatibility metadata.
@@ -86,7 +86,7 @@ Phase 7 exposes fixture-backed aliases only. Before replacing them with live Sho
 - Whether the fixture `/.well-known/ucp` profile shape is sufficient for target clients, or whether a separate UCP catalog endpoint is required in addition to `/mcp`.
 - Whether legacy `/sse` support is required, or Streamable HTTP at `/mcp` is sufficient.
 
-Cart, checkout, customer-account, order, and return tools require separate approval, OAuth/protected-customer-data review where relevant, and a write-safety design. They are intentionally absent from the public read-only MVP.
+Cart creation and updates are exposed only through Shopify's merchant-owned MCP endpoint after buyer confirmation. Checkout, cart cancellation, customer-account, order, and return tools remain outside the public surface and require separate approval plus OAuth/protected-customer-data and write-safety review where relevant.
 
 
 ## Independence and Shopify integration notes
