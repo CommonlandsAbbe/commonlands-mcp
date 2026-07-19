@@ -282,7 +282,7 @@ describe('Commonlands MCP Worker', () => {
       id: 1,
       result: {
         protocolVersion: '2025-11-25',
-        serverInfo: { name: 'commonlands-mcp', version: '0.3.1' },
+        serverInfo: { name: 'commonlands-mcp', version: '0.3.2' },
         capabilities: { tools: {}, resources: {}, prompts: {} },
       },
     });
@@ -941,7 +941,10 @@ describe('Commonlands MCP Worker', () => {
       connector: {
         status: 'ok',
         source: 'live_shopify_admin_graphql',
-        messages: ['Exact Shopify SKU search returned no results; retried as safe text search for short part number/MPN metafields.'],
+        messages: [
+          'Exact Shopify SKU search returned no results; retried as safe text search for short part number/MPN metafields.',
+          'Shopify returned the requested limit of 1 variant record(s); results may be truncated. Retry with a higher limit (maximum 25) before treating the variant set as complete.',
+        ],
       },
       products: [
         {
@@ -1133,7 +1136,11 @@ describe('Commonlands MCP Worker', () => {
       configured: true,
       query: { kind: 'product_variants', sku: 'CIL250', limit: 1 },
       shopify: { shopDomainFormat: 'myshopify_domain', apiVersion: '2026-04', token: 'exchanged_and_redacted' },
-      connector: { status: 'ok', source: 'live_shopify_admin_graphql', messages: [] },
+      connector: {
+        status: 'ok',
+        source: 'live_shopify_admin_graphql',
+        messages: ['Shopify returned the requested limit of 1 variant record(s); results may be truncated. Retry with a higher limit (maximum 25) before treating the variant set as complete.'],
+      },
       products: [
         {
           productId: 'gid://shopify/Product/789',
@@ -1219,7 +1226,11 @@ describe('Commonlands MCP Worker', () => {
     const structuredContent = getStructuredContent(body);
 
     expect(structuredContent).toMatchObject({
-      connector: { status: 'ok', source: 'live_shopify_admin_graphql' },
+      connector: {
+        status: 'ok',
+        source: 'live_shopify_admin_graphql',
+        messages: ['Shopify returned the requested limit of 1 variant record(s); results may be truncated. Retry with a higher limit (maximum 25) before treating the variant set as complete.'],
+      },
       products: [
         {
           handle: 'cil250',
