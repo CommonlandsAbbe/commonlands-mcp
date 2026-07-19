@@ -574,7 +574,11 @@ async function readProductNodes(
       first: parsed.limit,
     });
     if ('error' in response) return response;
-    return { products: normalizeProductByHandle(response.data.productByHandle, parsed.includeMetafields) };
+    const variantCount = response.data.productByHandle?.variants?.nodes?.length ?? 0;
+    return {
+      products: normalizeProductByHandle(response.data.productByHandle, parsed.includeMetafields),
+      messages: variantLimitMessages(variantCount, parsed.limit),
+    };
   }
 
   const response = await shopifyGraphQl<ProductVariantsGraphQlData>(client, productVariantsQuery(parsed.includeMetafields), {
@@ -584,7 +588,12 @@ async function readProductNodes(
   if ('error' in response) return response;
 
   const products = normalizeProducts(response.data.productVariants?.nodes ?? [], parsed.includeMetafields);
-  if (products.length > 0 || !parsed.sku || parsed.query) return { products };
+  if (products.length > 0 || !parsed.sku || parsed.query) {
+    return {
+      products,
+      messages: variantLimitMessages(response.data.productVariants?.nodes?.length ?? 0, parsed.limit),
+    };
+  }
 
   const fallbackResponse = await shopifyGraphQl<ProductVariantsGraphQlData>(client, productVariantsQuery(parsed.includeMetafields), {
     query: escapeShopifySearchValue(parsed.sku),
@@ -593,8 +602,16 @@ async function readProductNodes(
   if ('error' in fallbackResponse) return fallbackResponse;
   return {
     products: normalizeProducts(fallbackResponse.data.productVariants?.nodes ?? [], parsed.includeMetafields),
-    messages: ['Exact Shopify SKU search returned no results; retried as safe text search for short part number/MPN metafields.'],
+    messages: [
+      'Exact Shopify SKU search returned no results; retried as safe text search for short part number/MPN metafields.',
+      ...variantLimitMessages(fallbackResponse.data.productVariants?.nodes?.length ?? 0, parsed.limit),
+    ],
   };
+}
+
+function variantLimitMessages(resultCount: number, limit: number): string[] {
+  if (resultCount < limit) return [];
+  return [`Shopify returned the requested limit of ${limit} variant record(s); results may be truncated. Retry with a higher limit (maximum 25) before treating the variant set as complete.`];
 }
 
 async function shopifyGraphQl<T>(client: { shopDomain: string; apiVersion: string; accessToken: string }, query: string, variables: Record<string, unknown>): Promise<{ data: T } | { error: string }> {

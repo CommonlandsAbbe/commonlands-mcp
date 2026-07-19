@@ -124,7 +124,7 @@ interface ToolAnnotations {
 
 const SERVER_INFO = {
   name: 'commonlands-mcp',
-  version: '0.3.1',
+  version: '0.3.2',
 } as const;
 
 const PUBLIC_MCP_ENDPOINT = 'https://mcp.commonlands.com/mcp';
@@ -305,7 +305,13 @@ const TOOLS: ToolDefinition[] = [
       type: 'object',
       properties: {
         query: { type: 'string', description: 'SKU, title, mount, lens type, application, sensor, or field-of-view search text.' },
-        limit: { type: 'integer', minimum: 1, maximum: 25, default: 10 },
+        limit: {
+          type: 'integer',
+          minimum: 1,
+          maximum: 25,
+          default: 10,
+          description: 'Maximum variant records returned. If the limit is reached, the response warns that the product variant set may be incomplete.',
+        },
       },
       additionalProperties: false,
     },
