@@ -37,6 +37,10 @@ SENSOR_DDB_REGION = "us-west-2"
 # RFQ_FROM_EMAIL = "mcp@commonlands.com"
 # RFQ_FROM_NAME = "Commonlands MCP"
 
+# Existing-cart access is capability-bound. Store a random value of at least 32
+# characters only as the Worker secret CART_CAPABILITY_SECRET. If absent,
+# create_cart may remain available but get_cart/update_cart stay hidden.
+
 [[analytics_engine_datasets]]
 binding = "MCP_ANALYTICS"
 dataset = "commonlands_mcp_events"

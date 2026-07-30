@@ -46,7 +46,7 @@ export function getShopifyUcpReadiness(snapshot: CatalogSnapshot = CATALOG_SNAPS
       ucpCatalogVersion: UCP_VERSION,
       referenceTools: ['search_catalog', 'lookup_catalog', 'get_product'],
       nonGoals: [
-        'Cart tools create_cart, get_cart, and update_cart may be exposed when explicitly approved/configured; cancel_cart and checkout tools remain hidden until endpoint support and approval are verified.',
+        'Authless create_cart may be exposed when explicitly approved/configured. Existing-cart tools require a Commonlands-issued cart capability bound to the cart id; cancel_cart and checkout tools remain hidden until endpoint support and approval are verified.',
         'Customer-account/order tools require OAuth and protected customer-data approval before any implementation.',
         'Live catalog connectors remain separate from the Cart/Checkout MCP proxies and require audited read-only enrichment before replacing fixture defaults.',
       ],
@@ -85,7 +85,7 @@ export function getShopifyUcpReadiness(snapshot: CatalogSnapshot = CATALOG_SNAPS
     ],
     launchBlockers: [
       'Confirm Shopify read-only API path, product IDs, variant IDs, handle mapping, and mechanical drawing metafield/file-reference source.',
-      'Confirm tools/list in the target environment before promising cart support; create_cart/get_cart/update_cart require approval/configuration, while cancel_cart and checkout tools stay hidden until endpoint support and approval are verified.',
+      'Confirm tools/list in the target environment before promising cart support; create_cart requires approval/configuration, get_cart/update_cart additionally require CART_CAPABILITY_SECRET and the create-issued cart_token, while cancel_cart and checkout tools stay hidden until endpoint support and approval are verified.',
       'Confirm Cloudflare route, /.well-known/ucp profile, and whether any legacy /sse compatibility endpoint is required.',
       'Confirm public policy/FAQ source if search_shop_policies_and_faqs parity is desired.',
     ],

@@ -1,9 +1,88 @@
-# Response to Anthropic Connectors Directory review (2026-07)
+# Responses to Anthropic Connectors Directory review (2026-07)
 
-Anthropic's review of `com.commonlands/optics-mcp` raised two findings. Both
-are addressed server-side in v0.2.0 (this repo), deployed at
-`https://mcp.commonlands.com/mcp`. This document is the draft reply plus the
-engineering record of what changed.
+This document records both Anthropic review rounds for
+`com.commonlands/optics-mcp` and the exact submission reply.
+
+## Status
+
+Implemented for v0.3.2 on `zernike/anthropic-session-cart-rfq-confirm`;
+pending code review, merge, production secret configuration, deployment, and
+Anthropic portal update.
+
+## Problem
+
+Anthropic found that a caller-supplied Shopify cart id could read or mutate an
+existing cart without ownership proof, and that `submit_rfq` could send buyer
+details without an explicit confirmation parameter. The submission's declared
+tool list also omitted the live `submit_rfq` tool.
+
+## Deliverables
+
+- Cart-bound, create-issued, 24-hour bearer capabilities for every existing-cart operation.
+- Fail-closed hiding of existing-cart tools when capability signing is not configured.
+- Required `confirm: true` gate before SendGrid delivery.
+- Exact 21-tool Anthropic submission list including `submit_rfq`.
+
+## Verification
+
+`npm run verify` passes ESLint, TypeScript, version parity, and 100 Vitest tests.
+Tests prove missing, cross-cart, and expired capabilities never call Shopify,
+and missing RFQ confirmation never calls SendGrid. Verification does not
+execute a live cart mutation or send a live email.
+
+## Risks / Blockers
+
+- Production needs a random `CART_CAPABILITY_SECRET` stored as a Cloudflare Worker secret. If absent, `get_cart`/`update_cart` safely disappear from `tools/list`.
+- The Anthropic portal's declared tool list must be updated by an authorized directory owner after deployment.
+- Live Analytics Engine usage counts require Microsoft SSO or an approved read-only Cloudflare credential.
+
+## Reviewer Needed
+
+An authorized Commonlands MCP code reviewer must review the exact PR head.
+After merge, an operator with Cloudflare and Anthropic directory access owns
+secret configuration, deployment verification, and the listing update.
+
+## Follow-up review — cart ownership and RFQ confirmation
+
+### Finding 1 — existing-cart ownership
+
+`create_cart` remains authless. It now returns a 24-hour opaque `cart_token`
+capability signed by Commonlands and bound to the exact Shopify cart id.
+`get_cart`, `update_cart`, and future `cancel_cart` require both that id and its
+matching token. Missing, expired, modified, or cross-cart tokens are rejected
+before any Shopify call. When `CART_CAPABILITY_SECRET` is absent, existing-cart
+tools are omitted from `tools/list`; only authless creation may remain exposed.
+Request arguments and response bodies are not written to telemetry, so the
+capability is not logged by the Worker.
+
+### Finding 2 — RFQ confirmation and declared tool list
+
+`submit_rfq` now requires `confirm: true` in its input schema. Without that
+exact boolean, the server returns `confirmation_required` with the proposed
+message/reply-to details and sends no email. The Anthropic submission package
+in `docs/directory-submissions.md` now declares all 21 live tools explicitly,
+including `submit_rfq`.
+
+### Suggested follow-up reply
+
+> Thanks — both follow-up findings are now addressed server-side.
+>
+> `create_cart` remains available without authentication, but it issues a
+> short-lived opaque `cart_token` bound to the returned Shopify cart id.
+> `get_cart` and `update_cart` require both that id and its matching token;
+> missing, expired, modified, or cross-cart tokens are rejected before Shopify
+> is called. If the capability-signing secret is absent, those existing-cart
+> tools are not listed at all.
+>
+> `submit_rfq` now requires explicit `confirm: true`. Calls without it return a
+> confirmation-required proposal and send nothing. We also updated the
+> submission's declared 21-tool list to include `submit_rfq`, matching the live
+> server.
+
+## Initial review — Shopify public-data scope and cart abuse controls
+
+Anthropic's initial review raised two earlier findings. Both were addressed
+server-side in v0.2.0.
 
 ## Finding 1 — Shopify data scope
 

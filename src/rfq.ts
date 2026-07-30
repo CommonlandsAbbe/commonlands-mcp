@@ -10,6 +10,8 @@ import { fetchWithTimeout } from './http-safety';
  *   be used to send mail to arbitrary third parties.
  * - The buyer's own reply-to email is required so Commonlands can respond; it
  *   is validated and only used as the SendGrid reply-to.
+ * - Sending is fail-closed behind confirm: true, which must represent the
+ *   buyer's approval of the exact message and reply-to address.
  * - Outbound is limited to the allowlisted SendGrid API host.
  * - Env-gated: with no SENDGRID_API_KEY / RFQ_TO_EMAIL / RFQ_FROM_EMAIL, the
  *   tool stays inert and returns a routed handoff to the public contact page
@@ -46,6 +48,7 @@ export interface RfqArgs {
   quantity?: unknown;
   application?: unknown;
   kind?: unknown;
+  confirm?: unknown;
 }
 
 const SENDGRID_ENDPOINT = 'https://api.sendgrid.com/v3/mail/send';
@@ -68,7 +71,14 @@ function baseResult(env: RfqEnv): RfqResult {
     configured,
     channel: 'commonlands_engineering_inbox',
     contactPage: CONTACT_PAGE,
-    safety: { sendsEmail: true, fixedRecipient: true, writesShopify: false, createsOrder: false, collectsPayment: false },
+    safety: {
+      sendsEmail: true,
+      requiresExplicitConfirmation: true,
+      fixedRecipient: true,
+      writesShopify: false,
+      createsOrder: false,
+      collectsPayment: false,
+    },
   };
 }
 
@@ -132,6 +142,16 @@ export async function submitRfq(env: RfqEnv, args: RfqArgs): Promise<RfqResult> 
     ...(fields.application ? { application: fields.application } : {}),
     message: message.value,
   };
+
+  if (args.confirm !== true) {
+    return {
+      ...baseResult(env),
+      status: 'confirmation_required',
+      message:
+        'Nothing was sent. Ask the buyer to confirm this exact RFQ and reply-to email, then call submit_rfq again with confirm: true.',
+      proposal: summary,
+    };
+  }
 
   // Not configured: return a routed handoff instead of failing.
   const toEmail = rfqToEmail(env);

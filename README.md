@@ -14,7 +14,7 @@ Public MCP server for Commonlands precision optics. Use it to choose M12/C-mount
 ## Copy-paste agent instruction
 
 ```text
-Use Commonlands MCP at https://mcp.commonlands.com/mcp for lens selection. Start with tools/list. Catalog EFL, image circle, max FoV/FOV@image-circle, and distortion display fields are insufficient to compute FoV on a specific sensor; do not interpolate or estimate sensor FoV from those fields. Use calculate_field_of_view for one lens/sensor pair, match_lens_to_sensor for sensor/target-FoV selection, search_lens_catalog for broad catalog discovery, and get_lens_distortion_profile for distortion status. Preserve the returned method, distortion_model, coverage_ok, image_circle_mm, sensor_diagonal_mm, and rectilinear_comparison. Call read_shopify_products before stating live price, availability, Product/Variant GIDs, URL, SKU, media, metafields, inventory, or cart payload. Only call create_cart/update_cart after the buyer confirms exact live Variant GIDs and quantities. Checkout tools are not live unless they appear in tools/list. Never ask for card data or perform Shopify catalog/inventory/order/customer writes.
+Use Commonlands MCP at https://mcp.commonlands.com/mcp for lens selection. Start with tools/list. Catalog EFL, image circle, max FoV/FOV@image-circle, and distortion display fields are insufficient to compute FoV on a specific sensor; do not interpolate or estimate sensor FoV from those fields. Use calculate_field_of_view for one lens/sensor pair, match_lens_to_sensor for sensor/target-FoV selection, search_lens_catalog for broad catalog discovery, and get_lens_distortion_profile for distortion status. Preserve the returned method, distortion_model, coverage_ok, image_circle_mm, sensor_diagonal_mm, and rectilinear_comparison. Call read_shopify_products before stating live price, availability, Product/Variant GIDs, URL, SKU, media, metafields, inventory, or cart payload. Only call create_cart/update_cart after the buyer confirms exact live Variant GIDs and quantities. Retain the cart_token returned by create_cart; get_cart/update_cart reject a cart id without its matching token. Call submit_rfq with confirm:true only after the buyer approves the exact message and reply-to email. Checkout tools are not live unless they appear in tools/list. Never ask for card data or perform Shopify catalog/inventory/order/customer writes.
 ```
 
 ## Agent workflow
@@ -26,8 +26,9 @@ Use Commonlands MCP at https://mcp.commonlands.com/mcp for lens selection. Start
 5. Use `get_lens_distortion_profile` for distortion/model/status questions. Do not invent polynomial coefficients or claim measured correction when the response says source-display-only.
 6. Use `prompts/list` / `prompts/get` with `select_lens_for_sensor_fov_working_distance` when a client surfaces MCP prompts.
 7. Verify purchasable truth with `read_shopify_products` before quoting final SKU, URL, price, availability, Shopify IDs, or cart payloads.
-8. Create/update a Shopify cart only after explicit buyer confirmation of line items and quantities.
-9. Send the buyer to Shopify's returned cart/checkout URL. Do not claim Checkout MCP is live until checkout tools appear in `tools/list`.
+8. Create/update a Shopify cart only after explicit buyer confirmation of line items and quantities. Retain the `cart_token` from `create_cart`; existing-cart tools require it with the matching cart id.
+9. Submit an RFQ only after showing the exact message and reply-to email to the buyer; `submit_rfq` requires `confirm: true`.
+10. Send the buyer to Shopify's returned cart/checkout URL. Do not claim Checkout MCP is live until checkout tools appear in `tools/list`.
 
 ## FoV rule
 
@@ -51,7 +52,7 @@ If fixture data conflicts with `read_shopify_products` or the live FoV/sensor ba
 
 ## Current live surface
 
-The production surface currently exposes **20 tools** across catalog/search, FoV, Shopify read-only, cart, UCP catalog, and purchase-handoff. Checkout tools, `cancel_cart`, and `read_shopify_metaobjects` are not exposed. Always trust the live `tools/list` over any doc.
+The production surface currently exposes **21 tools** across catalog/search, FoV, Shopify read-only, cart, UCP catalog, purchase-handoff, and RFQ handoff. Checkout tools, `cancel_cart`, and `read_shopify_metaobjects` are not exposed. Always trust the live `tools/list` over any doc.
 
 Key tools:
 
@@ -60,8 +61,8 @@ Key tools:
 - Legacy hidden aliases (still dispatch for old clients, not listed in `tools/list`): `compute_fov`, `compute_fov_catalog`, `match_lenses_to_sensor`, `search_lenses`, `get_lens_details`.
 - Resources/prompts: `commonlands://sensors/{part}`, `commonlands://lenses/{sku}`, `commonlands://catalog/sensors`, `commonlands://catalog/lenses`, and prompt `select_lens_for_sensor_fov_working_distance`.
 - Live Shopify read-only truth: `read_shopify_products`, `get_shopify_readonly_config_status`.
-- Buyer-confirmed Shopify cart handoff: `create_cart`, `get_cart`, `update_cart` when visible in `tools/list`.
-- RFQ / question handoff: `submit_rfq` forwards a buyer quote request or question to the fixed Commonlands engineering inbox (SendGrid). The agent cannot choose the recipient; it sends an inquiry only (no order, payment, or Shopify write) and stays inert (routes to the contact page) until `SENDGRID_API_KEY` + `RFQ_TO_EMAIL` + `RFQ_FROM_EMAIL` are configured.
+- Buyer-confirmed Shopify cart handoff: `create_cart`; `get_cart` and `update_cart` appear only when cart capabilities are configured and require the matching `cart_token` issued by `create_cart`.
+- RFQ / question handoff: `submit_rfq` forwards a buyer quote request or question to the fixed Commonlands engineering inbox (SendGrid) only when `confirm: true` is supplied after the buyer approves the exact message and reply-to email. The agent cannot choose the recipient; it never creates an order, takes payment, or writes Shopify/customer data.
 - Diagnostics/readiness: `get_catalog_snapshot_status`, `get_shopify_ucp_readiness`, `prepare_shopify_purchase_handoff`, `get_purchase_route_options`.
 
 ## Public-data scope (Shopify reads)

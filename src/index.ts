@@ -18,6 +18,7 @@ import { computeFov } from './optics';
 import { buildProductPageDetails } from './product-page';
 import { getPurchaseRouteOptions } from './purchase-routes';
 import { callShopifyCartUcp, type CartOperation } from './shopify-cart-ucp';
+import { isCartCapabilityConfigured } from './cart-capability';
 import { callShopifyCheckoutMcp, type CheckoutOperation } from './shopify-checkout-mcp';
 import { readShopifyProducts } from './shopify-read-adapter';
 import { submitRfq } from './rfq';
@@ -53,6 +54,7 @@ export interface Env {
   SHOPIFY_SCOPES?: string;
   SHOPIFY_ADMIN_API_VERSION?: string;
   SHOPIFY_CART_MCP_ENDPOINT?: string;
+  CART_CAPABILITY_SECRET?: string;
   SHOPIFY_CHECKOUT_MCP_ENDPOINT?: string;
   SHOPIFY_UCP_AGENT_PROFILE?: string;
   ENABLE_COMMERCE_MUTATION_TOOLS?: string;
@@ -124,7 +126,7 @@ interface ToolAnnotations {
 
 const SERVER_INFO = {
   name: 'commonlands-mcp',
-  version: '0.3.1',
+  version: '0.3.2',
 } as const;
 
 const PUBLIC_MCP_ENDPOINT = 'https://mcp.commonlands.com/mcp';
@@ -523,7 +525,7 @@ const TOOLS: ToolDefinition[] = [
     name: 'create_cart',
     title: 'Create Shopify cart',
     description:
-      'Create a Shopify-owned cart for selected variant line items through the configured Shopify Cart/Storefront MCP endpoint. Commonlands MCP is a stateless proxy: cart state is stored and mutated by Shopify, not in the Worker.',
+      'Create a Shopify-owned cart for selected variant line items through the configured Shopify Cart/Storefront MCP endpoint. When cart resume is enabled, the result includes a short-lived cart_token capability that must accompany this cart id in get_cart or update_cart; callers that only have the cart id cannot read or mutate it.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -559,11 +561,15 @@ const TOOLS: ToolDefinition[] = [
   {
     name: 'get_cart',
     title: 'Get Shopify cart',
-    description: 'Retrieve a Shopify-owned cart by cart id. Cart persistence comes from Shopify; agents must retain cart id or continue_url across sessions.',
+    description: 'Retrieve a Shopify-owned cart only with both its cart id and the short-lived cart_token issued by create_cart. A caller-supplied cart id alone is rejected.',
     inputSchema: {
       type: 'object',
-      properties: { meta: { type: 'object' }, id: { type: 'string', description: 'Shopify Cart gid.' } },
-      required: ['id'],
+      properties: {
+        meta: { type: 'object' },
+        id: { type: 'string', description: 'Shopify Cart gid returned by create_cart.' },
+        cart_token: { type: 'string', description: 'Bearer cart capability returned by the same create_cart response.' },
+      },
+      required: ['id', 'cart_token'],
       additionalProperties: false,
     },
   },
@@ -571,12 +577,13 @@ const TOOLS: ToolDefinition[] = [
     name: 'update_cart',
     title: 'Update Shopify cart',
     description:
-      'Update a Shopify-owned cart through the configured Cart/Storefront MCP endpoint. With UCP endpoints, treat updates as full-state PUT semantics; with the confirmed standard Storefront MCP endpoint, Commonlands maps line_items to Shopify add_items, update_items to quantity changes, and remove_line_ids to explicit removals. Quantity 0 in update_items removes a line.',
+      'Update a Shopify-owned cart only with both its cart id and the short-lived cart_token issued by create_cart. With the confirmed standard Storefront MCP endpoint, Commonlands maps line_items to Shopify add_items, update_items to quantity changes, and remove_line_ids to explicit removals. Quantity 0 in update_items removes a line.',
     inputSchema: {
       type: 'object',
       properties: {
         meta: { type: 'object' },
         id: { type: 'string' },
+        cart_token: { type: 'string', description: 'Bearer cart capability returned by the same create_cart response.' },
         cart: {
           type: 'object',
           properties: {
@@ -623,7 +630,7 @@ const TOOLS: ToolDefinition[] = [
           additionalProperties: false,
         },
       },
-      required: ['id', 'cart'],
+      required: ['id', 'cart_token', 'cart'],
       additionalProperties: false,
     },
   },
@@ -633,8 +640,12 @@ const TOOLS: ToolDefinition[] = [
     description: 'Cancel a Shopify-owned UCP cart by id. Requires a validated UCP Cart MCP endpoint and meta["idempotency-key"] UUID for retry safety; the confirmed standard Storefront MCP endpoint does not expose cancel_cart.',
     inputSchema: {
       type: 'object',
-      properties: { meta: { type: 'object' }, id: { type: 'string' } },
-      required: ['id', 'meta'],
+      properties: {
+        meta: { type: 'object' },
+        id: { type: 'string' },
+        cart_token: { type: 'string', description: 'Bearer cart capability returned by the same create_cart response.' },
+      },
+      required: ['id', 'cart_token', 'meta'],
       additionalProperties: false,
     },
   },
@@ -906,8 +917,13 @@ const TOOLS: ToolDefinition[] = [
         sensor: { type: 'string', description: 'Optional sensor part number for context.' },
         quantity: { type: 'integer', minimum: 1, description: 'Optional quantity for the quote.' },
         application: { type: 'string', description: 'Optional application note.' },
+        confirm: {
+          type: 'boolean',
+          const: true,
+          description: 'Required explicit confirmation that the buyer approved sending this exact RFQ and reply-to email to Commonlands.',
+        },
       },
-      required: ['message', 'email'],
+      required: ['message', 'email', 'confirm'],
       additionalProperties: false,
     },
   },
@@ -1197,7 +1213,11 @@ function visibleTools(env: Env): ToolDefinition[] {
 
 function isToolEnabled(name: string, env: Env): boolean {
   if (name === 'cancel_cart' && !cartEndpointSupportsCancel(env)) return false;
-  if (isCartTool(name)) return env.ENABLE_COMMERCE_MUTATION_TOOLS === 'true';
+  if (isCartTool(name)) {
+    if (env.ENABLE_COMMERCE_MUTATION_TOOLS !== 'true') return false;
+    if (name === 'create_cart') return true;
+    return isCartCapabilityConfigured(env.CART_CAPABILITY_SECRET);
+  }
   if (name === 'create_checkout' || name === 'get_checkout') return env.ENABLE_CHECKOUT_MUTATION_TOOLS === 'true';
   if (name === 'update_checkout' || name === 'complete_checkout' || name === 'cancel_checkout') return env.ENABLE_EXTRA_CHECKOUT_MUTATION_TOOLS === 'true';
   return true;

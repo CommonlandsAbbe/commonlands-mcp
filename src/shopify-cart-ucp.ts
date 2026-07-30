@@ -1,9 +1,16 @@
 import { fetchWithTimeout, readJsonWithLimit } from './http-safety';
 import { UCP_VERSION } from './ucp-catalog';
+import {
+  issueCartCapability,
+  isCartCapabilityConfigured,
+  verifyCartCapability,
+  type CartCapability,
+} from './cart-capability';
 
 export interface ShopifyCartUcpEnv {
   SHOPIFY_CART_MCP_ENDPOINT?: string;
   SHOPIFY_UCP_AGENT_PROFILE?: string;
+  CART_CAPABILITY_SECRET?: string;
 }
 
 export type CartOperation = 'create_cart' | 'get_cart' | 'update_cart' | 'cancel_cart';
@@ -23,7 +30,7 @@ export interface ShopifyCartUcpResult {
     storedIn: 'shopify_cart_mcp';
     mutatedBy: 'shopify_cart_mcp_tools';
     commonlandsWorkerState: 'stateless_proxy_no_cart_storage';
-    resumeAcrossAgentSessions: 'caller_must_retain_cart_id_or_continue_url';
+    resumeAcrossAgentSessions: 'caller_must_retain_cart_id_and_cart_token_or_continue_url';
     expiryAuthority: 'shopify_cart_ttl_expires_at';
   };
   connector: {
@@ -33,6 +40,7 @@ export interface ShopifyCartUcpResult {
     messages: string[];
   };
   cart: unknown | null;
+  access: CartCapability | null;
   safety: {
     createsCart: boolean;
     updatesCart: boolean;
@@ -86,6 +94,13 @@ export async function callShopifyCartUcp(
   const normalized = normalizeArgs(endpoint.kind, operation, args, env.SHOPIFY_UCP_AGENT_PROFILE);
   if ('error' in normalized) return withConnector(baseResult(operation), 'invalid_request', 'not_connected', [normalized.error]);
 
+  if (operation !== 'create_cart') {
+    const capability = await verifyCartCapability(env.CART_CAPABILITY_SECRET, normalized.args.id, args.cart_token);
+    if (!capability.ok) {
+      return withConnector(baseResult(operation), 'invalid_request', 'not_connected', [capability.error]);
+    }
+  }
+
   let response: Response;
   try {
     response = await fetchWithTimeout(endpoint.url.toString(), {
@@ -114,6 +129,10 @@ export async function callShopifyCartUcp(
   }
 
   const cart = extractCart(body.data.result);
+  const access =
+    operation === 'create_cart' && isCartCapabilityConfigured(env.CART_CAPABILITY_SECRET)
+      ? await capabilityForCart(env.CART_CAPABILITY_SECRET as string, cart)
+      : null;
   return {
     ...baseResult(operation),
     configured: true,
@@ -124,7 +143,13 @@ export async function callShopifyCartUcp(
       messages: cart ? [] : ['Shopify Cart MCP response did not include structuredContent.cart.'],
     },
     cart,
+    access,
   };
+}
+
+async function capabilityForCart(secret: string, cart: unknown): Promise<CartCapability | null> {
+  if (!isRecord(cart) || typeof cart.id !== 'string') return null;
+  return issueCartCapability(secret, cart.id);
 }
 
 function upstreamOperation(kind: EndpointKind, operation: CartOperation): string {
@@ -357,11 +382,12 @@ function baseResult(operation: CartOperation): ShopifyCartUcpResult {
       storedIn: 'shopify_cart_mcp',
       mutatedBy: 'shopify_cart_mcp_tools',
       commonlandsWorkerState: 'stateless_proxy_no_cart_storage',
-      resumeAcrossAgentSessions: 'caller_must_retain_cart_id_or_continue_url',
+      resumeAcrossAgentSessions: 'caller_must_retain_cart_id_and_cart_token_or_continue_url',
       expiryAuthority: 'shopify_cart_ttl_expires_at',
     },
     connector: { status: 'not_configured', source: 'not_connected', messages: [] },
     cart: null,
+    access: null,
     safety: {
       createsCart: operation === 'create_cart',
       updatesCart: operation === 'update_cart',

@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import worker, { __resetLensCatalogCacheForTests, type Env } from '../src/index';
 import { signDynamoRequest } from '../src/aws-sigv4';
+import { issueCartCapability } from '../src/cart-capability';
 import { __resetSensorStoreCacheForTests } from '../src/sensor-store';
+
+const TEST_CART_CAPABILITY_SECRET = 'test-cart-capability-secret-at-least-32-characters';
 
 const env: Env = {
   ENVIRONMENT: 'test',
@@ -23,6 +26,7 @@ const shopifyCartEnv: Env = {
   ENABLE_COMMERCE_MUTATION_TOOLS: 'true',
   SHOPIFY_CART_MCP_ENDPOINT: 'https://commonlands.com/api/mcp',
   SHOPIFY_UCP_AGENT_PROFILE: 'https://mcp.commonlands.com/.well-known/ucp',
+  CART_CAPABILITY_SECRET: TEST_CART_CAPABILITY_SECRET,
 };
 
 const shopifyCheckoutBasicEnv: Env = {
@@ -282,7 +286,7 @@ describe('Commonlands MCP Worker', () => {
       id: 1,
       result: {
         protocolVersion: '2025-11-25',
-        serverInfo: { name: 'commonlands-mcp', version: '0.3.1' },
+        serverInfo: { name: 'commonlands-mcp', version: '0.3.2' },
         capabilities: { tools: {}, resources: {}, prompts: {} },
       },
     });
@@ -488,6 +492,12 @@ describe('Commonlands MCP Worker', () => {
       readOnlyHint: false,
       destructiveHint: true,
     });
+    const submitRfq = tools.find((tool) => tool.name === 'submit_rfq');
+    expect((submitRfq?.inputSchema.required as string[])).toContain('confirm');
+    expect((submitRfq?.inputSchema.properties as JsonObject).confirm).toMatchObject({
+      type: 'boolean',
+      const: true,
+    });
   });
 
   it('never references hidden tool names inside visible tool descriptions', async () => {
@@ -554,6 +564,23 @@ describe('Commonlands MCP Worker', () => {
     expect(checkoutNames).not.toContain('update_checkout');
     expect(checkoutNames).not.toContain('complete_checkout');
     expect(checkoutNames).not.toContain('cancel_checkout');
+  });
+
+  it('lists authless cart creation but hides existing-cart access without a capability secret', async () => {
+    const cartEnvWithoutCapability = { ...shopifyCartEnv };
+    delete cartEnvWithoutCapability.CART_CAPABILITY_SECRET;
+    const result = await rpc(
+      'tools/list',
+      undefined,
+      'cart-tools-without-capability-secret',
+      cartEnvWithoutCapability,
+    );
+    const names = (getResult(result.body).tools as ToolSummary[]).map((tool) => tool.name);
+
+    expect(names).toContain('create_cart');
+    expect(names).not.toContain('get_cart');
+    expect(names).not.toContain('update_cart');
+    expect(names).not.toContain('cancel_cart');
   });
 
   it('lists cancel_cart only for validated UCP cart endpoints', async () => {
@@ -1456,7 +1483,14 @@ describe('Commonlands MCP Worker', () => {
 
     const { body } = await rpc(
       'tools/call',
-      { name: 'submit_rfq', arguments: { message: 'Do you have a 6mm M12 lens for IMX477?', email: 'buyer@example.com' } },
+      {
+        name: 'submit_rfq',
+        arguments: {
+          message: 'Do you have a 6mm M12 lens for IMX477?',
+          email: 'buyer@example.com',
+          confirm: true,
+        },
+      },
       'rfq-not-configured',
       shopifyReadonlyEnv,
     );
@@ -1486,6 +1520,49 @@ describe('Commonlands MCP Worker', () => {
     expect(called).toBe(false);
   });
 
+  it('submit_rfq: requires explicit confirmation before sending buyer details', async () => {
+    let called = false;
+    globalThis.fetch = (async () => {
+      called = true;
+      return new Response('unexpected', { status: 500 });
+    }) as typeof fetch;
+
+    const result = getStructuredContent(
+      (
+        await rpc(
+          'tools/call',
+          {
+            name: 'submit_rfq',
+            arguments: {
+              message: 'Quote 25 CIL250 lenses.',
+              email: 'buyer@example.com',
+              name: 'Ada Buyer',
+            },
+          },
+          'rfq-confirmation-required',
+          {
+            ...shopifyReadonlyEnv,
+            SENDGRID_API_KEY: 'SG.secret_never_used',
+            RFQ_TO_EMAIL: 'sales@commonlands.com',
+            RFQ_FROM_EMAIL: 'mcp@commonlands.com',
+          },
+        )
+      ).body,
+    );
+
+    expect(called).toBe(false);
+    expect(result).toMatchObject({
+      configured: true,
+      status: 'confirmation_required',
+      proposal: {
+        message: 'Quote 25 CIL250 lenses.',
+        email: 'buyer@example.com',
+        name: 'Ada Buyer',
+      },
+      safety: { requiresExplicitConfirmation: true },
+    });
+  });
+
   it('submit_rfq: sends via SendGrid to the fixed inbox and never leaks the API key', async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -1510,6 +1587,7 @@ describe('Commonlands MCP Worker', () => {
         arguments: {
           kind: 'rfq', message: 'Quote for 50 units on an IMX477 build.', email: 'buyer@example.com',
           name: 'Ada Buyer', company: 'RoboCo', partNumbers: ['CIL250', 'CIL078'], sensor: 'IMX477', quantity: 50,
+          confirm: true,
         },
       },
       'rfq-submit',
@@ -1536,7 +1614,10 @@ describe('Commonlands MCP Worker', () => {
 
     const { body } = await rpc(
       'tools/call',
-      { name: 'submit_rfq', arguments: { message: 'Quote please', email: 'buyer@example.com' } },
+      {
+        name: 'submit_rfq',
+        arguments: { message: 'Quote please', email: 'buyer@example.com', confirm: true },
+      },
       'rfq-alias-env',
       { ...shopifyReadonlyEnv, SENDGRID_API_KEY: 'SG.secret', RFQ_TO: 'sales@commonlands.com', RFQ_FROM: 'engineering@commonlands.com' } as Env,
     );
@@ -1591,11 +1672,12 @@ describe('Commonlands MCP Worker', () => {
         storedIn: 'shopify_cart_mcp',
         mutatedBy: 'shopify_cart_mcp_tools',
         commonlandsWorkerState: 'stateless_proxy_no_cart_storage',
-        resumeAcrossAgentSessions: 'caller_must_retain_cart_id_or_continue_url',
+        resumeAcrossAgentSessions: 'caller_must_retain_cart_id_and_cart_token_or_continue_url',
         expiryAuthority: 'shopify_cart_ttl_expires_at',
       },
       connector: { status: 'not_configured', source: 'not_connected' },
       cart: null,
+      access: null,
       safety: {
         createsCart: true,
         createsCheckout: false,
@@ -1609,7 +1691,7 @@ describe('Commonlands MCP Worker', () => {
         exposesSecrets: false,
       },
     });
-    expect(JSON.stringify(getResult(body))).not.toMatch(/shpat|shpss|accessToken|Authorization|Bearer/i);
+    expect(JSON.stringify(getResult(body))).not.toMatch(/shpat|shpss|accessToken|Authorization/i);
   });
 
   it('proxies create_cart to Shopify Cart MCP and returns persistence contract without secrets', async () => {
@@ -1675,11 +1757,16 @@ describe('Commonlands MCP Worker', () => {
       operation: 'create_cart',
       connector: { status: 'ok', source: 'shopify_cart_mcp', endpointHost: 'commonlands.com', messages: [] },
       cart: { id: 'gid://shopify/Cart/cart_abc123', continue_url: 'https://commonlands.com/cart/c/cart_abc123' },
-      persistence: { resumeAcrossAgentSessions: 'caller_must_retain_cart_id_or_continue_url' },
+      access: {
+        token: expect.stringMatching(/^cc1\./),
+        credentialType: 'bearer_cart_capability',
+        requiredFor: ['get_cart', 'update_cart', 'cancel_cart'],
+      },
+      persistence: { resumeAcrossAgentSessions: 'caller_must_retain_cart_id_and_cart_token_or_continue_url' },
       safety: { createsCart: true, createsCheckout: false, createsOrder: false, mutatesInventory: false, exposesSecrets: false },
     });
     expect(calls).toHaveLength(1);
-    expect(JSON.stringify(getResult(body))).not.toMatch(/shpat|shpss|accessToken|Authorization|Bearer/i);
+    expect(JSON.stringify(getResult(body))).not.toMatch(/shpat|shpss|accessToken|Authorization/i);
   });
 
   it('proxies get_cart and standard Storefront MCP add/change/remove cart updates', async () => {
@@ -1700,11 +1787,24 @@ describe('Commonlands MCP Worker', () => {
       });
     }) as typeof fetch;
 
-    const get = await rpc('tools/call', { name: 'get_cart', arguments: { id: 'gid://shopify/Cart/cart_abc123' } }, 'get-cart', shopifyCartEnv);
+    const { token: cartToken } = await issueCartCapability(
+      TEST_CART_CAPABILITY_SECRET,
+      'gid://shopify/Cart/cart_abc123',
+    );
+    const get = await rpc(
+      'tools/call',
+      {
+        name: 'get_cart',
+        arguments: { id: 'gid://shopify/Cart/cart_abc123', cart_token: cartToken },
+      },
+      'get-cart',
+      shopifyCartEnv,
+    );
     const update = await rpc('tools/call', {
       name: 'update_cart',
       arguments: {
         id: 'gid://shopify/Cart/cart_abc123',
+        cart_token: cartToken,
         cart: {
           line_items: [{ quantity: 3, item: { id: 'gid://shopify/ProductVariant/12345678901' } }],
           update_items: [{ id: 'gid://shopify/CartLine/li_1?cart=cart_abc123', quantity: 5 }],
@@ -1726,6 +1826,74 @@ describe('Commonlands MCP Worker', () => {
     ]);
     expect(getStructuredContent(get.body)).toMatchObject({ operation: 'get_cart', safety: { createsCart: false, updatesCart: false } });
     expect(getStructuredContent(update.body)).toMatchObject({ operation: 'update_cart', safety: { updatesCart: true, createsCheckout: false } });
+  });
+
+  it('rejects cart id-only, mismatched, and expired capabilities before calling Shopify', async () => {
+    let called = false;
+    globalThis.fetch = (async () => {
+      called = true;
+      return new Response('unexpected', { status: 500 });
+    }) as typeof fetch;
+
+    const cartId = 'gid://shopify/Cart/cart_abc123';
+    const otherCartId = 'gid://shopify/Cart/cart_other456';
+    const { token } = await issueCartCapability(TEST_CART_CAPABILITY_SECRET, cartId);
+    const { token: expiredToken } = await issueCartCapability(
+      TEST_CART_CAPABILITY_SECRET,
+      cartId,
+      Date.now() - 25 * 60 * 60 * 1000,
+    );
+
+    const missing = getStructuredContent(
+      (
+        await rpc(
+          'tools/call',
+          { name: 'get_cart', arguments: { id: cartId } },
+          'get-cart-missing-capability',
+          shopifyCartEnv,
+        )
+      ).body,
+    );
+    const mismatched = getStructuredContent(
+      (
+        await rpc(
+          'tools/call',
+          { name: 'get_cart', arguments: { id: otherCartId, cart_token: token } },
+          'get-cart-mismatched-capability',
+          shopifyCartEnv,
+        )
+      ).body,
+    );
+    const expired = getStructuredContent(
+      (
+        await rpc(
+          'tools/call',
+          { name: 'get_cart', arguments: { id: cartId, cart_token: expiredToken } },
+          'get-cart-expired-capability',
+          shopifyCartEnv,
+        )
+      ).body,
+    );
+
+    expect(called).toBe(false);
+    expect(missing).toMatchObject({
+      connector: {
+        status: 'invalid_request',
+        messages: ['Invalid params: cart_token from create_cart is required to read or update this cart.'],
+      },
+    });
+    expect(mismatched).toMatchObject({
+      connector: {
+        status: 'invalid_request',
+        messages: ['Invalid params: cart_token is invalid, expired, or does not match this cart.'],
+      },
+    });
+    expect(expired).toMatchObject({
+      connector: {
+        status: 'invalid_request',
+        messages: ['Invalid params: cart_token is invalid, expired, or does not match this cart.'],
+      },
+    });
   });
 
   it('keeps Shopify Cart UCP mode separate for future validated /api/ucp/mcp endpoints', async () => {
