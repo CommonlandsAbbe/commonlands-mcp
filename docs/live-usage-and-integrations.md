@@ -8,7 +8,7 @@ The live server is:
 - **Discovery profile:** `https://mcp.commonlands.com/.well-known/ucp`
 - **Health check:** `https://mcp.commonlands.com/healthz`
 
-The current public surface (v0.2.0) exposes **20 tools** with intent-named optics tools (`calculate_field_of_view`, `match_lens_to_sensor`, `search_lens_catalog`, `get_lens_distortion_profile`). UCP discovery advertises catalog + cart discovery. Checkout tools, `cancel_cart`, and `read_shopify_metaobjects` are not exposed. The pre-v0.2.0 optics names (`compute_fov`, `compute_fov_catalog`, `match_lenses_to_sensor`, `search_lenses`, `get_lens_details`) still dispatch as hidden aliases but do not appear in `tools/list`.
+The current public surface (v0.2.0) exposes **21 tools** with intent-named optics tools (`calculate_field_of_view`, `match_lens_to_sensor`, `search_lens_catalog`, `get_lens_distortion_profile`). UCP discovery advertises catalog + cart discovery. Checkout tools, `cancel_cart`, and `read_shopify_metaobjects` are not exposed. The pre-v0.2.0 optics names (`compute_fov`, `compute_fov_catalog`, `match_lenses_to_sensor`, `search_lenses`, `get_lens_details`) still dispatch as hidden aliases but do not appear in `tools/list`.
 
 ## The short version
 
@@ -47,7 +47,7 @@ If a buyer explicitly asks for a cart, the agent can use live Shopify Variant GI
 
 ## Current production status
 
-- **Live tool count:** 22
+- **Live tool count:** 21
 - **Live Shopify product truth:** `read_shopify_products` is configured and read-only.
 - **Live FoV backend:** `calculate_field_of_view` and `match_lens_to_sensor` use the authenticated AWS Lambda/DynamoDB backend when configured. The Worker sends the backend secret server-side; agents never receive it, and returned lens records are allowlisted.
 - **Sensor specs:** `get_sensor_specs` prefers the read-only live sensor table when configured and falls back to the Worker fixture sensor catalog when unavailable.
@@ -81,23 +81,21 @@ These prompts are safer than bare SKU questions because they force the agent to 
 
 ## Live tool input/output table
 
-This table reflects a live `tools/list` check against the production MCP endpoint after the PR #26 deployment on 2026-05-03 PDT. It lists the 22 exposed tools only. Checkout tools and `cancel_cart` are intentionally absent from the live surface.
+This table reflects a live `tools/list` check against the production MCP endpoint on 2026-07-17 PDT. It lists the 21 exposed tools only. Checkout tools, `cancel_cart`, and `read_shopify_metaobjects` are intentionally absent from the live surface.
 
 | Tool | Primary use | Required inputs | Optional inputs | Output shape / what to trust | Usefulness check |
 | --- | --- | --- | --- | --- | --- |
 | `search_lens_catalog` | Legacy fixture search by SKU, title, mount, or lens type. | None; `query` is accepted but can be empty. | `query`, `limit` 1-25. | `catalog.snapshot.v1` with `results[]`, count, generated time, and `fixture_not_product_truth` warning. | Useful for broad discovery, not live SKU/price/stock truth. |
-| `search_lens_catalog` | Fixture-backed details for one Commonlands SKU. | `sku`. | None. | `catalog.snapshot.v1` with `lens` optical/commerce scaffold fields and fixture warning. | Useful for engineering context; must be followed by `read_shopify_products` before buying claims. |
 | `get_sensor_specs` | Sensor dimensions used by FoV and ranking tools. | `partNumber`. | None. | `catalog.snapshot.v1` with resolution, active area, and pixel size. | Primary path for sensor specs; production prefers the read-only live sensor table when configured, with fixture fallback when unavailable. |
 | `calculate_field_of_view` | FoV for one lens/sensor pair. | `lensSku`, `sensorPartNumber`. | `workingDistanceMm`. | `optics.fov.live.v1` when Lambda/DynamoDB has the lens; otherwise a fixture-backed FoV shape or a fail-closed error. Returned lens records include per-sensor HFOV/VFOV/DFOV, nested `fov`, `coverageClass`, `coverage.pixelCounts`, `distortionAtFieldEdge`, and provenance when the Worker can provide them. | Required path for sensor-specific FoV; failures are useful because they prevent unsupported calculations. |
 | `match_lens_to_sensor` | FoV sweep for available catalog lenses on one sensor. | `sensorPartNumber`. | `workingDistanceMm`. | Live/sanitized catalog FoV records with per-sensor HFOV/VFOV/DFOV, nested `fov`, `coverageClass`, `coverage.pixelCounts`, `distortionAtFieldEdge`, payload/lens provenance, and sanitized errors when backend is enabled; never returns raw coefficients. | First-choice tool for sensor-specific lens finding; still needs product verification before recommendation. |
-| `match_lens_to_sensor` | Fixture-backed ranking against a sensor and optional HFOV target. | `sensorPartNumber`. | `desiredHorizontalFovDeg`, `workingDistanceMm`, `mount`, `maxResults` 1-10. | `recommendations.v1` with ranked lenses, score, fit, FoV, image-circle notes, warnings. | Useful shortlist generator; not live product truth. |
+| `get_lens_distortion_profile` | Return the live distortion status and display distortion for one lens. | `lensSku`. | None. | Distortion provenance and status without exposing or inventing polynomial coefficients. | Required when an agent needs to qualify distortion claims for a selected lens. |
 | `compare_lenses` | Compare selected SKUs on the same sensor. | `lensSkus` 1-10, `sensorPartNumber`. | `workingDistanceMm`. | `recommendations.v1` comparison records with rank, fit, FoV, tradeoffs. | Useful for explaining tradeoffs after the user or another tool chose candidate SKUs. |
 | `get_product_page_details` | Fixture product-page handoff and gated datasheet policy. | `sku`. | None. | `product_page.v1` with fixture product, specs, gated datasheet note, and safety warnings. | Useful for handoff context; not authoritative for current product URL, price, stock, or Variant GID. |
 | `get_catalog_snapshot_status` | Fixture catalog provenance and validation. | None. | None. | `catalog.snapshot_status.v1` with counts, validation status, sources, refresh mode. | Useful for deciding how much to trust fixture outputs. |
 | `get_shopify_ucp_readiness` | Conservative Storefront/UCP readiness metadata. | None. | None. | `shopify.ucp_readiness.v1` with compatibility target, readiness, catalog counts, blockers/safeguards. | Useful for planning; `tools/list` is still authoritative for live exposure. |
 | `get_shopify_readonly_config_status` | Sanitized read-only Shopify connector config. | None. | None. | `shopify.readonly_config_status.v1` with redacted binding/scopes status and safety flags. | Useful for debugging connector configuration without exposing secrets or calling Shopify. |
 | `read_shopify_products` | Live Shopify product truth (public data only). | At least one of `sku`, `handle`, or `query` should be supplied for useful results. | `limit` 1-25, `includeMetafields` true/false (default false; allowlisted `custom.*` display fields only). | `shopify.live_read.v1` with live Product/Variant GIDs, SKU, price, coarse `availability`, product URL, media, allowlisted metafields when requested, read-only safety flags. ACTIVE products only; no exact inventory counts. | Essential before final purchasable claims or cart handoff. This is the main truth tool. |
-| `read_shopify_metaobjects` | Removed from the public surface in v0.2.0 (Admin metaobjects can hold non-public data). | n/a | n/a | Actionable -32601 error pointing to `read_shopify_products`. | Do not call. |
 | `create_cart` | Create Shopify-owned cart from confirmed live Variant GIDs. | `cart.line_items[]` with `quantity` and `item.id` Variant GID. | `meta`, `cart.context`, `cart.signals`. | `commonlands.cart_ucp.v1` with connector status, Shopify-owned cart payload when returned, safety flags. | Useful only after explicit buyer line-item/quantity confirmation. Mutates Shopify cart state; does not checkout or collect payment. |
 | `get_cart` | Retrieve a Shopify-owned cart by ID. | `id` Shopify Cart GID. | `meta`. | `commonlands.cart_ucp.v1` with cart payload when Shopify returns one, persistence notes, safety flags. | Useful for cart refresh/resume if the agent retained the cart ID. |
 | `update_cart` | Add variants, change quantities, or remove lines in a Shopify-owned cart. | `id`, `cart`. | `cart.line_items`, `cart.update_items`, `cart.remove_line_ids`, `context`, `signals`, `meta`. | `commonlands.cart_ucp.v1` with operation status, cart payload when returned, and safety flags. | Useful for buyer-confirmed cart edits; mutates cart only, not checkout/order/customer/inventory/catalog. |
@@ -107,6 +105,7 @@ This table reflects a live `tools/list` check against the production MCP endpoin
 | `prepare_shopify_purchase_handoff` | Non-mutating purchase handoff plan for a SKU. | `sku`. | `quantity`, `sensorPartNumber`, `selectedVariantId`. | `shopify.purchase_handoff.v1` with product scaffold, transaction safety, warnings; no cart/checkout created. | Useful as a safe planning seam; any selected variant must come from `read_shopify_products` to be cart-ready. |
 | `get_purchase_route_options` | Explain available/planned purchase routes without mutation. | `sku`. | `quantity`, `sensorPartNumber`, `buyerIntent`, `agentType`. | `commerce.purchase_routes.v1` with routes, safety flags, required checks, warnings. | Useful to explain next steps and boundaries; it does not buy anything. |
 | `recommend_lenses_for_application` | Fixture-backed application-specific shortlist. | `sensorPartNumber`. | `application`, `desiredHorizontalFovDeg`, `workingDistanceMm`, `mount`, `preferLowDistortion`, `requireInStock`, `maxResults` 1-10. | `recommendations.v1` with ranked application-fit records, tradeoffs, warnings. | Useful for natural-language application triage; may later consolidate with `match_lens_to_sensor`. |
+| `submit_rfq` | Forward a buyer quote request or engineering question to the fixed Commonlands inbox. | Buyer contact and inquiry details. | Request-specific context accepted by the tool schema. | Inquiry-routing status only; it does not create an order, payment, or Shopify write. | Useful when the configured SendGrid route is available; otherwise returns the Commonlands contact-page fallback. |
 
 ## Safety boundaries
 

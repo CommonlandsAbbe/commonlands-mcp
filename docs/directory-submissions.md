@@ -27,7 +27,7 @@ organization and **Owner / directory-management** access — individual plans
 cannot submit. Confirm the org plan before starting.
 
 **Technical readiness (already met, v0.2.0):**
-- All 20 tools include `title` + `readOnlyHint`/`destructiveHint` annotations ✅
+- All 21 tools include `title` + `readOnlyHint`/`destructiveHint` annotations ✅
 - Read and write actions are separate tools ✅
 - Public endpoint, **no authentication** → reviewers connect instantly ✅
 - Privacy policy exists ✅
@@ -47,7 +47,7 @@ cannot submit. Confirm the org plan before starting.
 - **Company:** Commonlands LLC · `https://commonlands.com` · review contact: Max Henkart
 - **Data scope:** Both (read + buyer-confirmed cart write). Reads are **public data only** (active products, coarse availability, allowlisted public product-page metafields off by default). No payment, orders, customer records, or inventory writes.
 - **User prerequisites:** None — public endpoint, no account or API key.
-- **Test credentials:** None required. Reviewers connect to `https://mcp.commonlands.com/mcp` and call `tools/list` (20 tools). Sample call: `match_lens_to_sensor` with `{ "sensorPartNumber": "IMX477", "desiredHorizontalFovDeg": 70 }`.
+- **Test credentials:** None required. Reviewers connect to `https://mcp.commonlands.com/mcp` and call `tools/list` (21 tools). Sample call: `match_lens_to_sensor` with `{ "sensorPartNumber": "IMX477", "desiredHorizontalFovDeg": 70 }`.
 
 **Description (≤2000):**
 
@@ -87,7 +87,7 @@ Review status appears in the submissions dashboard; escalate to
 ### Reviewer test-access / autonomous verification (v0.2.0)
 
 Authoritative copy of the test-access instructions submitted to Anthropic.
-Everything below is unauthenticated; the 20-tool surface is identical for every
+Everything below is unauthenticated; the 21-tool surface is identical for every
 caller. Header used: `-H "content-type: application/json" -H "accept: application/json, text/event-stream"`.
 
 ```
@@ -105,12 +105,12 @@ ENDPOINT
 - Source: https://github.com/CommonlandsAbbe/commonlands-mcp
 
 CONNECT IN CLAUDE
-Settings > Connectors > Add custom connector > URL https://mcp.commonlands.com/mcp > no authentication. 20 tools should appear.
+Settings > Connectors > Add custom connector > URL https://mcp.commonlands.com/mcp > no authentication. 21 tools should appear.
 
 VERIFICATION (all unauthenticated)
 1) Health:            curl -s https://mcp.commonlands.com/healthz  -> version 0.2.0
 2) Initialize:        POST method:initialize protocolVersion 2025-11-25
-3) List tools:        POST method:tools/list  -> expect 20
+3) List tools:        POST method:tools/list  -> expect 21
 4) Sensor spec:       tools/call get_sensor_specs {"partNumber":"IMX477"}  -> activeAreaMm 6.287 x 4.712, pitch 1.55 um
 5) Find lenses:       tools/call match_lens_to_sensor {"sensorPartNumber":"IMX477","desiredHorizontalFovDeg":70,"maxResults":3}
 6) Field of view:     tools/call calculate_field_of_view {"lensSku":"CIL250","sensorPartNumber":"IMX477"}  -> HFOV ~14 deg

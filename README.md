@@ -51,7 +51,7 @@ If fixture data conflicts with `read_shopify_products` or the live FoV/sensor ba
 
 ## Current live surface
 
-The production surface currently exposes **20 tools** across catalog/search, FoV, Shopify read-only, cart, UCP catalog, and purchase-handoff. Checkout tools, `cancel_cart`, and `read_shopify_metaobjects` are not exposed. Always trust the live `tools/list` over any doc.
+The production surface currently exposes **21 tools** across catalog/search, FoV, Shopify read-only, cart, UCP catalog, purchase-handoff, and RFQ inquiry routing. Checkout tools, `cancel_cart`, and `read_shopify_metaobjects` are not exposed. Always trust the live `tools/list` over any doc.
 
 Key tools:
 
