@@ -46,6 +46,10 @@ export interface RfqArgs {
   quantity?: unknown;
   application?: unknown;
   kind?: unknown;
+  /** Explicit user confirmation (Anthropic directory review): nothing is sent
+   *  until the tool is called with confirm:true after the buyer approved the
+   *  previewed submission. */
+  confirm?: unknown;
 }
 
 const SENDGRID_ENDPOINT = 'https://api.sendgrid.com/v3/mail/send';
@@ -132,6 +136,20 @@ export async function submitRfq(env: RfqEnv, args: RfqArgs): Promise<RfqResult> 
     ...(fields.application ? { application: fields.application } : {}),
     message: message.value,
   };
+
+  // Propose-then-approve: never send on the first call. The assistant must
+  // show the buyer this exact preview and call again with confirm:true only
+  // after the buyer approves (the endpoint is authless, so the email address
+  // is unverified until the buyer themselves confirms it).
+  if (args.confirm !== true) {
+    return {
+      ...baseResult(env),
+      status: 'pending_confirmation',
+      message:
+        'Nothing was sent. Show the buyer this preview, including the reply-to email, and ask them to approve it. Only after the buyer explicitly approves, call submit_rfq again with the same fields plus confirm: true.',
+      preview: { willSendTo: 'Commonlands engineering team', ...summary },
+    };
+  }
 
   // Not configured: return a routed handoff instead of failing.
   const toEmail = rfqToEmail(env);

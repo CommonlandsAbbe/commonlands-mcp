@@ -21,6 +21,7 @@ import { callShopifyCartUcp, type CartOperation } from './shopify-cart-ucp';
 import { callShopifyCheckoutMcp, type CheckoutOperation } from './shopify-checkout-mcp';
 import { readShopifyProducts } from './shopify-read-adapter';
 import { submitRfq } from './rfq';
+import { mintCartToken, verifyCartToken } from './cart-token';
 import {
   compareLenses,
   compareLensesLive,
@@ -80,6 +81,9 @@ export interface Env {
   RFQ_TO?: string;
   RFQ_FROM?: string;
   RFQ_FROM_NAME?: string;
+  /** HMAC secret for stateless cart owner binding. get_cart/update_cart are
+   *  disabled (fail closed) when unset on an endpoint with cart tools enabled. */
+  CART_TOKEN_SECRET?: string;
 }
 
 /** Cloudflare Workers Rate Limiting API binding (wrangler [[unsafe.bindings]] type "ratelimit"). */
@@ -124,7 +128,7 @@ interface ToolAnnotations {
 
 const SERVER_INFO = {
   name: 'commonlands-mcp',
-  version: '0.3.1',
+  version: '0.4.0',
 } as const;
 
 const PUBLIC_MCP_ENDPOINT = 'https://mcp.commonlands.com/mcp';
@@ -523,7 +527,7 @@ const TOOLS: ToolDefinition[] = [
     name: 'create_cart',
     title: 'Create Shopify cart',
     description:
-      'Create a Shopify-owned cart for selected variant line items through the configured Shopify Cart/Storefront MCP endpoint. Commonlands MCP is a stateless proxy: cart state is stored and mutated by Shopify, not in the Worker.',
+      'Create a Shopify-owned cart for selected variant line items through the configured Shopify Cart/Storefront MCP endpoint. Commonlands MCP is a stateless proxy: cart state is stored and mutated by Shopify, not in the Worker. The response includes a cart_access_token that binds the cart to this session; retain it, because get_cart and update_cart refuse to act on the cart without it.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -559,11 +563,16 @@ const TOOLS: ToolDefinition[] = [
   {
     name: 'get_cart',
     title: 'Get Shopify cart',
-    description: 'Retrieve a Shopify-owned cart by cart id. Cart persistence comes from Shopify; agents must retain cart id or continue_url across sessions.',
+    description:
+      'Retrieve a Shopify-owned cart by cart id. Owner-bound: requires the cart_access_token returned by create_cart, so only the session that created a cart can read it. Cart persistence comes from Shopify; agents must retain the cart id, cart_access_token, and continue_url across sessions.',
     inputSchema: {
       type: 'object',
-      properties: { meta: { type: 'object' }, id: { type: 'string', description: 'Shopify Cart gid.' } },
-      required: ['id'],
+      properties: {
+        meta: { type: 'object' },
+        id: { type: 'string', description: 'Shopify Cart gid.' },
+        cart_access_token: { type: 'string', description: 'Owner credential returned by create_cart for this cart id.' },
+      },
+      required: ['id', 'cart_access_token'],
       additionalProperties: false,
     },
   },
@@ -571,12 +580,13 @@ const TOOLS: ToolDefinition[] = [
     name: 'update_cart',
     title: 'Update Shopify cart',
     description:
-      'Update a Shopify-owned cart through the configured Cart/Storefront MCP endpoint. With UCP endpoints, treat updates as full-state PUT semantics; with the confirmed standard Storefront MCP endpoint, Commonlands maps line_items to Shopify add_items, update_items to quantity changes, and remove_line_ids to explicit removals. Quantity 0 in update_items removes a line.',
+      'Update a Shopify-owned cart through the configured Cart/Storefront MCP endpoint. Owner-bound: requires the cart_access_token returned by create_cart, so only the session that created a cart can change it. With UCP endpoints, treat updates as full-state PUT semantics; with the confirmed standard Storefront MCP endpoint, Commonlands maps line_items to Shopify add_items, update_items to quantity changes, and remove_line_ids to explicit removals. Quantity 0 in update_items removes a line.',
     inputSchema: {
       type: 'object',
       properties: {
         meta: { type: 'object' },
         id: { type: 'string' },
+        cart_access_token: { type: 'string', description: 'Owner credential returned by create_cart for this cart id.' },
         cart: {
           type: 'object',
           properties: {
@@ -623,7 +633,7 @@ const TOOLS: ToolDefinition[] = [
           additionalProperties: false,
         },
       },
-      required: ['id', 'cart'],
+      required: ['id', 'cart', 'cart_access_token'],
       additionalProperties: false,
     },
   },
@@ -890,7 +900,7 @@ const TOOLS: ToolDefinition[] = [
     name: 'submit_rfq',
     title: 'Submit an RFQ or question to Commonlands',
     description:
-      'Forward a buyer request-for-quote or engineering question to the Commonlands engineering team. Use after the buyer provides their question and a reply-to email. The recipient is fixed to the Commonlands inbox (the agent cannot choose it); this only sends an inquiry and never creates an order, charges a card, or writes Shopify/customer data. Include part numbers, sensor, quantity, and application when known so the team can reply with a quote. Commonlands replies by email.',
+      'Forward a buyer request-for-quote or engineering question to the Commonlands engineering team. Two-step, buyer-confirmed: the first call returns a preview and sends nothing; show the buyer the preview (including their reply-to email) and, only after they explicitly approve, call again with confirm: true to send. The recipient is fixed to the Commonlands inbox (the agent cannot choose it); this only sends an inquiry and never creates an order, charges a card, or writes Shopify/customer data. Include part numbers, sensor, quantity, and application when known so the team can reply with a quote. Commonlands replies by email.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -906,6 +916,12 @@ const TOOLS: ToolDefinition[] = [
         sensor: { type: 'string', description: 'Optional sensor part number for context.' },
         quantity: { type: 'integer', minimum: 1, description: 'Optional quantity for the quote.' },
         application: { type: 'string', description: 'Optional application note.' },
+        confirm: {
+          type: 'boolean',
+          default: false,
+          description:
+            'Explicit buyer approval. Omit or false to get a no-send preview; set true only after the buyer has seen the preview and approved sending.',
+        },
       },
       required: ['message', 'email'],
       additionalProperties: false,
@@ -2028,7 +2044,7 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
 
 
   if (isCartTool(toolName)) {
-    return toolResult(id, await callShopifyCartUcp(env, toolName, args));
+    return toolResult(id, await callCartWithOwnerBinding(env, toolName, args));
   }
 
   if (isCheckoutTool(toolName)) {
@@ -2126,6 +2142,76 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
   }
 
   return rpcError(id, { code: -32601, message: `Tool not found: ${params.name}` });
+}
+
+/**
+ * Owner binding for carts on the unauthenticated endpoint (Anthropic
+ * directory review): create_cart mints a stateless HMAC cart_access_token
+ * over the returned Shopify cart id; get_cart/update_cart/cancel_cart verify
+ * it before any upstream call. Holding a cart id alone is not enough to read
+ * or rewrite a cart. Fails closed when CART_TOKEN_SECRET is unset.
+ */
+async function callCartWithOwnerBinding(
+  env: Env,
+  operation: CartOperation,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const secret = env.CART_TOKEN_SECRET;
+
+  if (operation === 'create_cart') {
+    const result = (await callShopifyCartUcp(env, operation, args)) as unknown as Record<string, unknown>;
+    const cart = result.cart;
+    const cartId = isRecord(cart) && typeof cart.id === 'string' ? cart.id : undefined;
+    if (secret && cartId) {
+      return {
+        ...result,
+        cart_access_token: await mintCartToken(secret, cartId),
+        ownerBinding: {
+          model: 'hmac_token_issued_at_create',
+          instructions: 'Retain cart_access_token with the cart id; get_cart and update_cart require both.',
+        },
+      };
+    }
+    if (!secret) {
+      return {
+        ...result,
+        ownerBinding: {
+          model: 'not_configured',
+          instructions: 'CART_TOKEN_SECRET is unset, so get_cart/update_cart are disabled. Use the returned continue_url for review and edits in the storefront.',
+        },
+      };
+    }
+    return result;
+  }
+
+  // Reads/mutations of an existing cart require the owner credential.
+  if (!secret) {
+    return {
+      schemaVersion: 'commonlands.cart_owner_binding.v1',
+      operation,
+      connector: { status: 'not_configured', source: 'not_connected', messages: ['Cart owner binding is not configured on this server (CART_TOKEN_SECRET unset), so reading or updating existing carts is disabled. Create a new cart and use its continue_url, or edit the cart in the storefront.'] },
+      cart: null,
+    };
+  }
+
+  const cartId = typeof args.id === 'string' ? args.id : '';
+  const valid = cartId ? await verifyCartToken(secret, cartId, args.cart_access_token) : false;
+  if (!valid) {
+    return {
+      schemaVersion: 'commonlands.cart_owner_binding.v1',
+      operation,
+      connector: {
+        status: 'invalid_request',
+        source: 'not_connected',
+        messages: ['Missing or invalid cart_access_token for this cart id. Carts are owner-bound: pass the cart_access_token returned by create_cart. A cart id alone cannot read or modify a cart.'],
+      },
+      cart: null,
+    };
+  }
+
+  const upstreamArgs = { ...args };
+  delete upstreamArgs.cart_access_token;
+  return (await callShopifyCartUcp(env, operation, upstreamArgs)) as unknown as Record<string, unknown>;
 }
 
 function isCartTool(name: unknown): name is CartOperation {

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import worker, { __resetLensCatalogCacheForTests, type Env } from '../src/index';
 import { signDynamoRequest } from '../src/aws-sigv4';
 import { __resetSensorStoreCacheForTests } from '../src/sensor-store';
+import { mintCartToken } from '../src/cart-token';
 
 const env: Env = {
   ENVIRONMENT: 'test',
@@ -21,6 +22,7 @@ const shopifyReadonlyEnv: Env = {
 const shopifyCartEnv: Env = {
   ...shopifyReadonlyEnv,
   ENABLE_COMMERCE_MUTATION_TOOLS: 'true',
+  CART_TOKEN_SECRET: 'cart-token-secret-test',
   SHOPIFY_CART_MCP_ENDPOINT: 'https://commonlands.com/api/mcp',
   SHOPIFY_UCP_AGENT_PROFILE: 'https://mcp.commonlands.com/.well-known/ucp',
 };
@@ -282,7 +284,7 @@ describe('Commonlands MCP Worker', () => {
       id: 1,
       result: {
         protocolVersion: '2025-11-25',
-        serverInfo: { name: 'commonlands-mcp', version: '0.3.1' },
+        serverInfo: { name: 'commonlands-mcp', version: '0.4.0' },
         capabilities: { tools: {}, resources: {}, prompts: {} },
       },
     });
@@ -1456,7 +1458,7 @@ describe('Commonlands MCP Worker', () => {
 
     const { body } = await rpc(
       'tools/call',
-      { name: 'submit_rfq', arguments: { message: 'Do you have a 6mm M12 lens for IMX477?', email: 'buyer@example.com' } },
+      { name: 'submit_rfq', arguments: { message: 'Do you have a 6mm M12 lens for IMX477?', email: 'buyer@example.com', confirm: true } },
       'rfq-not-configured',
       shopifyReadonlyEnv,
     );
@@ -1509,7 +1511,7 @@ describe('Commonlands MCP Worker', () => {
         name: 'submit_rfq',
         arguments: {
           kind: 'rfq', message: 'Quote for 50 units on an IMX477 build.', email: 'buyer@example.com',
-          name: 'Ada Buyer', company: 'RoboCo', partNumbers: ['CIL250', 'CIL078'], sensor: 'IMX477', quantity: 50,
+          name: 'Ada Buyer', company: 'RoboCo', partNumbers: ['CIL250', 'CIL078'], sensor: 'IMX477', quantity: 50, confirm: true,
         },
       },
       'rfq-submit',
@@ -1536,7 +1538,7 @@ describe('Commonlands MCP Worker', () => {
 
     const { body } = await rpc(
       'tools/call',
-      { name: 'submit_rfq', arguments: { message: 'Quote please', email: 'buyer@example.com' } },
+      { name: 'submit_rfq', arguments: { message: 'Quote please', email: 'buyer@example.com', confirm: true } },
       'rfq-alias-env',
       { ...shopifyReadonlyEnv, SENDGRID_API_KEY: 'SG.secret', RFQ_TO: 'sales@commonlands.com', RFQ_FROM: 'engineering@commonlands.com' } as Env,
     );
@@ -1547,6 +1549,77 @@ describe('Commonlands MCP Worker', () => {
     expect(payload.from.email).toBe('engineering@commonlands.com');
     expect(payload.from.name).toBeUndefined();
     expect(getStructuredContent(body)).toMatchObject({ configured: true, status: 'submitted' });
+  });
+
+  it('submit_rfq: returns a no-send preview until confirm is true', async () => {
+    let called = false;
+    globalThis.fetch = (async () => { called = true; return new Response('unexpected', { status: 500 }); }) as typeof fetch;
+
+    const { body } = await rpc(
+      'tools/call',
+      { name: 'submit_rfq', arguments: { message: 'Quote for 10 CIL250', email: 'buyer@example.com', kind: 'rfq' } },
+      'rfq-preview',
+      { ...shopifyReadonlyEnv, SENDGRID_API_KEY: 'SG.secret', RFQ_TO: 'sales@commonlands.com', RFQ_FROM: 'engineering@commonlands.com' } as Env,
+    );
+    const structuredContent = getStructuredContent(body);
+
+    expect(called).toBe(false);
+    expect(structuredContent).toMatchObject({ status: 'pending_confirmation' });
+    expect(structuredContent.preview).toMatchObject({ email: 'buyer@example.com', kind: 'rfq' });
+    expect(String(structuredContent.message)).toContain('confirm: true');
+  });
+
+  it('rejects get_cart and update_cart without a valid cart_access_token, before any upstream call', async () => {
+    let called = false;
+    globalThis.fetch = (async () => { called = true; return new Response('unexpected', { status: 500 }); }) as typeof fetch;
+
+    const missing = await rpc('tools/call', { name: 'get_cart', arguments: { id: 'gid://shopify/Cart/cart_abc123' } }, 'get-cart-no-token', shopifyCartEnv);
+    const wrong = await rpc(
+      'tools/call',
+      { name: 'update_cart', arguments: { id: 'gid://shopify/Cart/cart_abc123', cart_access_token: 'forged-token', cart: { line_items: [{ quantity: 1, item: { id: 'gid://shopify/ProductVariant/1' } }] } } },
+      'update-cart-bad-token',
+      shopifyCartEnv,
+    );
+
+    expect(called).toBe(false);
+    for (const result of [missing, wrong]) {
+      const structuredContent = getStructuredContent(result.body);
+      expect(structuredContent.connector).toMatchObject({ status: 'invalid_request' });
+      expect(JSON.stringify(structuredContent)).toContain('owner-bound');
+    }
+  });
+
+  it('create_cart mints a cart_access_token that unlocks get_cart', async () => {
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      expect(url).toBe('https://commonlands.com/api/mcp');
+      return Response.json({
+        result: {
+          content: [{ type: 'text', text: JSON.stringify({ cart: { id: 'gid://shopify/Cart/cart_mint1', continue_url: 'https://commonlands.com/cart/c/cart_mint1' } }) }],
+        },
+      });
+    }) as typeof fetch;
+
+    const created = await rpc(
+      'tools/call',
+      { name: 'create_cart', arguments: { cart: { line_items: [{ quantity: 1, item: { id: 'gid://shopify/ProductVariant/1' } }] } } },
+      'create-cart-mints-token',
+      shopifyCartEnv,
+    );
+    const createdContent = getStructuredContent(created.body);
+    const token = createdContent.cart_access_token as string;
+
+    expect(typeof token).toBe('string');
+    expect(token).toBe(await mintCartToken('cart-token-secret-test', 'gid://shopify/Cart/cart_mint1'));
+    expect(createdContent.ownerBinding).toMatchObject({ model: 'hmac_token_issued_at_create' });
+
+    const got = await rpc(
+      'tools/call',
+      { name: 'get_cart', arguments: { id: 'gid://shopify/Cart/cart_mint1', cart_access_token: token } },
+      'get-cart-with-minted-token',
+      shopifyCartEnv,
+    );
+    expect(getStructuredContent(got.body)).toMatchObject({ operation: 'get_cart', connector: { status: 'ok' } });
   });
 
   it('rejects unsafe Shopify read adapter params without calling Shopify', async () => {
@@ -1700,11 +1773,13 @@ describe('Commonlands MCP Worker', () => {
       });
     }) as typeof fetch;
 
-    const get = await rpc('tools/call', { name: 'get_cart', arguments: { id: 'gid://shopify/Cart/cart_abc123' } }, 'get-cart', shopifyCartEnv);
+    const ownerToken = await mintCartToken('cart-token-secret-test', 'gid://shopify/Cart/cart_abc123');
+    const get = await rpc('tools/call', { name: 'get_cart', arguments: { id: 'gid://shopify/Cart/cart_abc123', cart_access_token: ownerToken } }, 'get-cart', shopifyCartEnv);
     const update = await rpc('tools/call', {
       name: 'update_cart',
       arguments: {
         id: 'gid://shopify/Cart/cart_abc123',
+        cart_access_token: ownerToken,
         cart: {
           line_items: [{ quantity: 3, item: { id: 'gid://shopify/ProductVariant/12345678901' } }],
           update_items: [{ id: 'gid://shopify/CartLine/li_1?cart=cart_abc123', quantity: 5 }],
