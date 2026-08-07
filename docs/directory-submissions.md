@@ -110,7 +110,7 @@ CONNECT IN CLAUDE
 Settings > Connectors > Add custom connector > URL https://mcp.commonlands.com/mcp > no authentication. 21 tools should appear.
 
 VERIFICATION (all unauthenticated)
-1) Health:            curl -s https://mcp.commonlands.com/healthz  -> version 0.2.0
+1) Health:            curl -s https://mcp.commonlands.com/healthz  -> version 0.3.2
 2) Initialize:        POST method:initialize protocolVersion 2025-11-25
 3) List tools:        POST method:tools/list  -> expect 21, including submit_rfq
 4) Sensor spec:       tools/call get_sensor_specs {"partNumber":"IMX477"}  -> activeAreaMm 6.287 x 4.712, pitch 1.55 um
@@ -140,7 +140,7 @@ ABUSE CONTROLS & DATA SCOPE
 
 - **Name:** Commonlands Optics MCP
 - **One-sentence description:** M12 lens and C-mount lens finder with image-sensor matching and a field-of-view calculator for machine vision and robotics.
-- **Tool count:** 22
+- **Tool count:** 21
 - **Transport:** Streamable HTTP
 - **Repository URL:** `https://github.com/CommonlandsAbbe/commonlands-mcp`
 - **Homepage URL:** `https://commonlands.com/pages/agentic-mcp-for-m12-lenses-and-optics`
