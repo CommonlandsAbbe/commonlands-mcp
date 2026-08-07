@@ -14,7 +14,7 @@ The Worker is being built in PR-sized phases:
 - Phase 7 adds fixture-backed UCP catalog aliases, `/.well-known/ucp`, and a read-only Shopify purchase handoff seam so clients can discover products in Shopify-native shapes without creating transaction state.
 - Phase 8 adds fixture-backed purchase-route options for AI agents and robotics engineers, showing the future Commonlands MCP purchase surface, Shopify-native checkout path, and engineering review path without mutating commerce state.
 - Phase 9 adds credential-gated Shopify Admin GraphQL reads. `read_shopify_products` is the live read-only product truth path for purchasable product URLs, Product/Variant GIDs, SKUs, prices, coarse availability, and allowlisted public metafields. `read_shopify_metaobjects` was removed from the public surface in v0.2.0 (Admin metaobjects can hold non-public store content); fixture-backed catalog and handoff flows stay scaffold-only.
-- Phase 10 adds an explicitly scoped Shopify cart proxy for Shopify-owned cart state. `create_cart` is authless; `get_cart` and `update_cart` require the short-lived, cart-id-bound capability issued by `create_cart` and stay hidden unless capability signing is configured. `cancel_cart` remains hidden unless a validated UCP Cart MCP endpoint supports cancel semantics.
+- Phase 10 adds an explicitly scoped Shopify cart proxy for Shopify-owned cart state. `create_cart` is authless; `get_cart` and `update_cart` require the cart-id-bound `cart_access_token` issued by `create_cart` and fail closed when owner binding is unavailable. `cancel_cart` remains hidden unless a validated UCP Cart MCP endpoint supports cancel semantics.
 - Phase 11 contains an explicitly scoped Shopify Checkout MCP proxy in code, but it is not part of the current live public surface. Checkout requires a validated Shopify Checkout MCP endpoint, Cloudflare protections, operator approval, and `ENABLE_CHECKOUT_MUTATION_TOOLS=true` before `create_checkout`/`get_checkout` may appear. Extra checkout operations (`update_checkout`, `complete_checkout`, `cancel_checkout`) require `ENABLE_EXTRA_CHECKOUT_MUTATION_TOOLS=true` plus official review. `complete_checkout` requires Shopify checkout authentication, verified buyer name/email/phone/address, card/payment authorization, and idempotency; Commonlands never accepts raw payment credentials.
 - Later phases replace fixtures with a scheduled joined catalog snapshot and connector-backed enrichment behind tests.
 
@@ -168,12 +168,12 @@ These tools do not mutate commerce state. Fixture-backed catalog, recommendation
 
 Phase 10 adds a narrow Shopify-owned cart proxy:
 
-- `create_cart` forwards validated line items to Shopify Cart MCP and returns the Shopify-owned cart payload plus a 24-hour `cart_token` capability bound to `cart.id` when signing is configured.
-- `get_cart` refreshes a Shopify-owned cart only with the matching `cart.id` + `cart_token`.
-- `update_cart` adds line items, changes quantities, or removes line IDs only with the matching `cart.id` + `cart_token`.
+- `create_cart` forwards validated line items to Shopify Cart MCP and returns the Shopify-owned cart payload plus a `cart_access_token` credential bound to `cart.id` when signing is configured.
+- `get_cart` refreshes a Shopify-owned cart only with the matching `cart.id` + `cart_access_token`.
+- `update_cart` adds line items, changes quantities, or removes line IDs only with the matching `cart.id` + `cart_access_token`.
 - `cancel_cart` is available only for validated UCP Cart MCP endpoints that support cancel semantics and require `meta["idempotency-key"]` UUID for retry safety. It is hidden for the current standard Storefront MCP endpoint.
 
-Commonlands MCP does not store cart state in a database, KV namespace, Durable Object, cookie, or session memory. Shopify Cart MCP owns cart persistence and mutation. Agents must retain `cart.id` plus `cart_token`, or use the `continue_url`; an id without its matching capability is intentionally unusable through Commonlands MCP.
+Commonlands MCP does not store cart state in a database, KV namespace, Durable Object, cookie, or session memory. Shopify Cart MCP owns cart persistence and mutation. Agents must retain `cart.id` plus `cart_access_token`, or use the `continue_url`; an id without its matching credential is intentionally unusable through Commonlands MCP.
 
 The cart proxy validates request shape and safety boundaries before forwarding. It rejects customer/buyer fields, non-ProductVariant IDs, invalid cart IDs, and unsupported cancel requests before upstream calls. Checkout completion, payment, order creation, customer records, discounts, inventory reservation/mutation, product writes, metafield writes, Acumatica writes, database writes, and inventory sync changes remain out of scope.
 

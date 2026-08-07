@@ -6,7 +6,7 @@ Commonlands MCP is a remote Streamable HTTP MCP server for precision-optics work
 - **Discovery profile:** `https://mcp.commonlands.com/.well-known/ucp`
 - **Health check:** `https://mcp.commonlands.com/healthz`
 
-Use the live `tools/list` result as the source of truth for enabled tools. The live surface exposes catalog/search tools, `read_shopify_products`, live FoV tools, authless `create_cart`, capability-bound `get_cart`/`update_cart`, and confirmation-gated `submit_rfq`. Existing-cart calls require the matching `cart_token` returned by `create_cart`; a cart id alone is rejected. `cancel_cart` and Checkout MCP tools are intentionally hidden.
+Use the live `tools/list` result as the source of truth for enabled tools. The live surface exposes catalog/search tools, `read_shopify_products`, live FoV tools, authless `create_cart`, owner-bound `get_cart`/`update_cart`, and confirmation-gated `submit_rfq`. Existing-cart calls require the matching `cart_access_token` returned by `create_cart`; a cart id alone is rejected. `cancel_cart` and Checkout MCP tools are intentionally hidden.
 
 ## Recommended agent instruction
 

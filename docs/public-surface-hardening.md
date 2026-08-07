@@ -4,11 +4,11 @@ Commonlands MCP is public/read-mostly for catalog and product truth, with a narr
 
 ## Public surface
 
-The live `tools/list` is authoritative. The public surface exposes authless `create_cart`; `get_cart` and `update_cart` appear only when `CART_CAPABILITY_SECRET` is configured and require the create-issued token bound to that cart id. `submit_rfq` requires explicit `confirm: true`. `cancel_cart` and Checkout MCP tools remain hidden. The live UCP discovery profile intentionally advertises catalog + cart discovery; it does not advertise checkout.
+The live `tools/list` is authoritative. The public surface exposes authless `create_cart`; `get_cart` and `update_cart` require the `cart_access_token` issued for that cart id and fail closed when `CART_TOKEN_SECRET` is unavailable. `submit_rfq` requires explicit `confirm: true`. `cancel_cart` and Checkout MCP tools remain hidden. The live UCP discovery profile intentionally advertises catalog + cart discovery; it does not advertise checkout.
 
 ## Commerce gates
 
-- `ENABLE_COMMERCE_MUTATION_TOOLS=true` may expose `create_cart` when `SHOPIFY_CART_MCP_ENDPOINT` is approved/configured. Existing-cart tools additionally require `CART_CAPABILITY_SECRET`; callers must present the matching capability issued by `create_cart`.
+- `ENABLE_COMMERCE_MUTATION_TOOLS=true` may expose cart tools when `SHOPIFY_CART_MCP_ENDPOINT` is approved/configured. Existing-cart calls additionally require `CART_TOKEN_SECRET`; callers must present the matching `cart_access_token` issued by `create_cart`.
 - `cancel_cart` is exposed only when the configured cart endpoint supports UCP Cart MCP cancel semantics; it must stay hidden for the current standard Storefront MCP endpoint.
 - Checkout tools are not currently live. `ENABLE_CHECKOUT_MUTATION_TOOLS=true` may expose approved basic Checkout MCP tools (`create_checkout`, `get_checkout`) only after the Shopify Checkout MCP endpoint is validated/configured and operator approval is recorded.
 - `ENABLE_EXTRA_CHECKOUT_MUTATION_TOOLS=true` may expose extra checkout operations (`update_checkout`, `complete_checkout`, `cancel_checkout`) only after official review; keep them hidden until that review is complete.

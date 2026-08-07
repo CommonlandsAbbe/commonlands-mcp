@@ -110,15 +110,15 @@ CONNECT IN CLAUDE
 Settings > Connectors > Add custom connector > URL https://mcp.commonlands.com/mcp > no authentication. 21 tools should appear.
 
 VERIFICATION (all unauthenticated)
-1) Health:            curl -s https://mcp.commonlands.com/healthz  -> version 0.3.2
+1) Health:            curl -s https://mcp.commonlands.com/healthz  -> version 0.4.0 after deployment
 2) Initialize:        POST method:initialize protocolVersion 2025-11-25
 3) List tools:        POST method:tools/list  -> expect 21, including submit_rfq
 4) Sensor spec:       tools/call get_sensor_specs {"partNumber":"IMX477"}  -> activeAreaMm 6.287 x 4.712, pitch 1.55 um
 5) Find lenses:       tools/call match_lens_to_sensor {"sensorPartNumber":"IMX477","desiredHorizontalFovDeg":70,"maxResults":3}
 6) Field of view:     tools/call calculate_field_of_view {"lensSku":"CIL250","sensorPartNumber":"IMX477"}  -> HFOV ~14 deg
 7) Live product read: tools/call read_shopify_products {"sku":"CIL250","limit":1}  -> ProductVariant GID; public data only (active products, coarse availability, metafields off by default)
-8) (Optional, safe write) tools/call create_cart {"cart":{"line_items":[{"quantity":1,"item":{"id":"gid://shopify/ProductVariant/41702699729014"}}]}}  -> transient cart id + cart_token + continue_url; no charge/order/customer. get_cart/update_cart require that exact id + cart_token.
-9) RFQ confirmation:   tools/call submit_rfq {"message":"Please quote 25 CIL250 lenses","email":"reviewer@example.com"} -> confirmation_required, sends nothing. Add "confirm":true only with an approved test inbox/message.
+8) (Optional, safe write) tools/call create_cart {"cart":{"line_items":[{"quantity":1,"item":{"id":"gid://shopify/ProductVariant/41702699729014"}}]}}  -> transient cart id + cart_access_token + continue_url; no charge/order/customer. get_cart/update_cart require that exact id + cart_access_token.
+9) RFQ confirmation:   tools/call submit_rfq {"message":"Please quote 25 CIL250 lenses","email":"reviewer@example.com"} -> pending_confirmation, sends nothing. Add "confirm":true only with an approved test inbox/message.
 
 KNOWN-GOOD TEST DATA
 - Sensors: IMX477, IMX219, AR0234 (get_sensor_specs also covers many more via the live table)
@@ -127,7 +127,7 @@ KNOWN-GOOD TEST DATA
 ABUSE CONTROLS & DATA SCOPE
 - Public data only: read_shopify_products returns active products, coarse availability (no exact counts), allowlisted custom.* metafields off by default. read_shopify_metaobjects is not exposed.
 - Per-IP rate limits: 120 requests/min endpoint-wide, 10 cart mutations/min (HTTP 429 + retry-after).
-- Existing-cart access requires the short-lived `cart_token` issued by `create_cart`; a cart id alone is rejected.
+- Existing-cart access requires the `cart_access_token` issued by `create_cart`; a cart id alone is rejected.
 - `submit_rfq` requires explicit `confirm: true`; without it, the tool returns the proposed payload and sends nothing.
 - Writes limited to transient Shopify-owned cart handoff; no payment, orders, customers, discounts, or inventory writes. Checkout/cancel not exposed.
 ```

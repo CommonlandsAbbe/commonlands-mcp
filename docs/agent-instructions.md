@@ -20,7 +20,7 @@ There is no `find_lenses` tool in the current public surface. For "find lenses f
 4. Use `search_lens_catalog` or `search_catalog` only for broad SKU/title/mount discovery, not for sensor-specific FoV.
 5. Use `match_lens_to_sensor`, `compare_lenses`, or `recommend_lenses_for_application` as shortlist/explanation helpers. Treat them as fixture-backed context unless the returned payload says otherwise.
 6. Before recommending a purchasable product, call `read_shopify_products` for live commerce truth.
-7. Only call `create_cart` or `update_cart` after the buyer explicitly confirms live Variant GIDs and quantities. Retain the `cart_token` from `create_cart`; `get_cart`/`update_cart` require it with the matching cart id.
+7. Only call `create_cart` or `update_cart` after the buyer explicitly confirms live Variant GIDs and quantities. Retain the `cart_access_token` from `create_cart`; `get_cart`/`update_cart` require it with the matching cart id.
 8. Only call `submit_rfq` with `confirm: true` after showing the exact message and reply-to email to the buyer and receiving explicit approval.
 
 ## What To Trust

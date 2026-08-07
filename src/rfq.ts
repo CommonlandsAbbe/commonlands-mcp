@@ -10,8 +10,6 @@ import { fetchWithTimeout } from './http-safety';
  *   be used to send mail to arbitrary third parties.
  * - The buyer's own reply-to email is required so Commonlands can respond; it
  *   is validated and only used as the SendGrid reply-to.
- * - Sending is fail-closed behind confirm: true, which must represent the
- *   buyer's approval of the exact message and reply-to address.
  * - Outbound is limited to the allowlisted SendGrid API host.
  * - Env-gated: with no SENDGRID_API_KEY / RFQ_TO_EMAIL / RFQ_FROM_EMAIL, the
  *   tool stays inert and returns a routed handoff to the public contact page
@@ -48,6 +46,9 @@ export interface RfqArgs {
   quantity?: unknown;
   application?: unknown;
   kind?: unknown;
+  /** Explicit user confirmation (Anthropic directory review): nothing is sent
+   *  until the tool is called with confirm:true after the buyer approved the
+   *  previewed submission. */
   confirm?: unknown;
 }
 
@@ -71,14 +72,7 @@ function baseResult(env: RfqEnv): RfqResult {
     configured,
     channel: 'commonlands_engineering_inbox',
     contactPage: CONTACT_PAGE,
-    safety: {
-      sendsEmail: true,
-      requiresExplicitConfirmation: true,
-      fixedRecipient: true,
-      writesShopify: false,
-      createsOrder: false,
-      collectsPayment: false,
-    },
+    safety: { sendsEmail: true, fixedRecipient: true, writesShopify: false, createsOrder: false, collectsPayment: false },
   };
 }
 
@@ -143,13 +137,17 @@ export async function submitRfq(env: RfqEnv, args: RfqArgs): Promise<RfqResult> 
     message: message.value,
   };
 
+  // Propose-then-approve: never send on the first call. The assistant must
+  // show the buyer this exact preview and call again with confirm:true only
+  // after the buyer approves (the endpoint is authless, so the email address
+  // is unverified until the buyer themselves confirms it).
   if (args.confirm !== true) {
     return {
       ...baseResult(env),
-      status: 'confirmation_required',
+      status: 'pending_confirmation',
       message:
-        'Nothing was sent. Ask the buyer to confirm this exact RFQ and reply-to email, then call submit_rfq again with confirm: true.',
-      proposal: summary,
+        'Nothing was sent. Show the buyer this preview, including the reply-to email, and ask them to approve it. Only after the buyer explicitly approves, call submit_rfq again with the same fields plus confirm: true.',
+      preview: { willSendTo: 'Commonlands engineering team', ...summary },
     };
   }
 
