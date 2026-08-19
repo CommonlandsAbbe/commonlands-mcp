@@ -128,7 +128,7 @@ interface ToolAnnotations {
 
 const SERVER_INFO = {
   name: 'commonlands-mcp',
-  version: '0.4.0',
+  version: '0.4.1',
 } as const;
 
 const PUBLIC_MCP_ENDPOINT = 'https://mcp.commonlands.com/mcp';
@@ -155,6 +155,27 @@ const INTENT_OPTICS_RULE =
 const FOV_RULE_POINTER =
   'FoV rule: never estimate sensor-specific FoV from catalog fields; use calculate_field_of_view or match_lens_to_sensor.';
 const SENSOR_PART_ENUM = CATALOG_SNAPSHOT.sensors.map((sensor) => sensor.partNumber);
+
+// Custom-sensor input: lets an agent describe a sensor it only knows by pixel
+// count + pixel pitch (or active-area mm) when there is no catalog part number.
+const CUSTOM_SENSOR_NOTE =
+  'No part number? Describe the sensor directly: widthPx + heightPx + pixelSizeUm (active area is derived as pixels x pitch), or sensorWidthMm + sensorHeightMm. Results are labelled CUSTOM-<w>x<h>.';
+const CUSTOM_SENSOR_PROPERTIES = {
+  widthPx: { type: 'integer', minimum: 1, description: 'Custom sensor: horizontal pixel count (e.g. 4056). Use with heightPx and pixelSizeUm.' },
+  heightPx: { type: 'integer', minimum: 1, description: 'Custom sensor: vertical pixel count (e.g. 3040).' },
+  horizontalPixels: { type: 'integer', minimum: 1, description: 'Alias for widthPx.' },
+  verticalPixels: { type: 'integer', minimum: 1, description: 'Alias for heightPx.' },
+  pixelSizeUm: { type: 'number', exclusiveMinimum: 0, description: 'Custom sensor: pixel pitch in microns (e.g. 1.55).' },
+  pixelPitchUm: { type: 'number', exclusiveMinimum: 0, description: 'Alias for pixelSizeUm.' },
+  sensorWidthMm: { type: 'number', exclusiveMinimum: 0, description: 'Custom sensor: active-area width in mm (alternative to pixels x pitch).' },
+  sensorHeightMm: { type: 'number', exclusiveMinimum: 0, description: 'Custom sensor: active-area height in mm.' },
+} as const;
+const CUSTOM_SENSOR_REQUIRED_ALTERNATIVES = [
+  { required: ['widthPx', 'heightPx', 'pixelSizeUm'] },
+  { required: ['horizontalPixels', 'verticalPixels', 'pixelSizeUm'] },
+  { required: ['widthPx', 'heightPx', 'pixelPitchUm'] },
+  { required: ['sensorWidthMm', 'sensorHeightMm'] },
+] as const;
 
 const CALCULATE_FIELD_OF_VIEW_INPUT_SCHEMA = {
   type: 'object',
@@ -194,6 +215,7 @@ const CALCULATE_FIELD_OF_VIEW_INPUT_SCHEMA = {
     },
     working_distance_mm: { type: 'number', exclusiveMinimum: 0, description: 'Optional working distance in mm. Snake-case alias for workingDistanceMm.' },
     workingDistanceMm: { type: 'number', exclusiveMinimum: 0, description: 'Optional working distance in mm. Camel-case alias for working_distance_mm.' },
+    ...CUSTOM_SENSOR_PROPERTIES,
   },
   anyOf: [
     { required: ['lens_sku'] },
@@ -255,7 +277,7 @@ const TOOLS: ToolDefinition[] = [
     name: 'calculate_field_of_view',
     title: 'Calculate Commonlands field of view',
     description:
-      `Calculate Commonlands lens field of view for a lens/sensor pair and return HFOV, VFOV, DFOV, coverage, distortion status, and an explicit rectilinear comparison. ${INTENT_OPTICS_RULE} Accepts lens_sku/lensSku or focal_length_mm/focalLengthMm, plus sensor/sensorPartNumber/sensor_part_number and working_distance_mm/workingDistanceMm. If only focal length is supplied, the response is marked as a rectilinear reference and does not claim Commonlands distortion-corrected lens truth.`,
+      `Calculate Commonlands lens field of view for a lens/sensor pair and return HFOV, VFOV, DFOV, coverage, distortion status, and an explicit rectilinear comparison. ${INTENT_OPTICS_RULE} Accepts lens_sku/lensSku or focal_length_mm/focalLengthMm, plus sensor/sensorPartNumber/sensor_part_number and working_distance_mm/workingDistanceMm. ${CUSTOM_SENSOR_NOTE} If only focal length is supplied, the response is marked as a rectilinear reference and does not claim Commonlands distortion-corrected lens truth.`,
     inputSchema: CALCULATE_FIELD_OF_VIEW_INPUT_SCHEMA,
     outputSchema: CALCULATE_FIELD_OF_VIEW_OUTPUT_SCHEMA,
   },
@@ -263,10 +285,11 @@ const TOOLS: ToolDefinition[] = [
     name: 'match_lens_to_sensor',
     title: 'Match Commonlands lenses to a sensor',
     description:
-      `Find and rank Commonlands lenses for a sensor, target field of view, working distance, mount, or "lens for" request. ${INTENT_OPTICS_RULE} Use this for AR0234, IMX290, IMX477, sensor part numbers, M12/C-mount matching, and target HFOV/VFOV/DFOV workflows; do not shortlist from focal length alone. Use read_shopify_products afterward for live stock, price, availability, Shopify variantId, product URL, and metafields.`,
+      `Find and rank Commonlands lenses for a sensor, target field of view, working distance, mount, or "lens for" request. ${INTENT_OPTICS_RULE} Use this for AR0234, IMX290, IMX477, sensor part numbers, M12/C-mount matching, and target HFOV/VFOV/DFOV workflows; do not shortlist from focal length alone. ${CUSTOM_SENSOR_NOTE} Use read_shopify_products afterward for live stock, price, availability, Shopify variantId, product URL, and metafields.`,
     inputSchema: {
       type: 'object',
       properties: {
+        ...CUSTOM_SENSOR_PROPERTIES,
         sensor: {
           anyOf: [
             { type: 'string', enum: SENSOR_PART_ENUM, description: 'Known catalog sensor part number.' },
@@ -296,7 +319,12 @@ const TOOLS: ToolDefinition[] = [
         max_results: { type: 'integer', minimum: 1, maximum: 10, default: 5 },
         maxResults: { type: 'integer', minimum: 1, maximum: 10, default: 5 },
       },
-      anyOf: [{ required: ['sensor'] }, { required: ['sensorPartNumber'] }, { required: ['sensor_part_number'] }],
+      anyOf: [
+        { required: ['sensor'] },
+        { required: ['sensorPartNumber'] },
+        { required: ['sensor_part_number'] },
+        ...CUSTOM_SENSOR_REQUIRED_ALTERNATIVES,
+      ],
       additionalProperties: false,
     },
   },
@@ -1451,14 +1479,14 @@ function normalizeAliasedToolArgs(toolName: string, args: Record<string, unknown
 interface NormalizedCalculateFovArgs {
   lensSku?: string;
   focalLengthMm?: number;
-  sensorPartNumber: string;
   workingDistanceMm?: number;
 }
 
+// Sensor is resolved separately by resolveSensorInput (catalog part number
+// OR custom pixel/mm spec), so it is intentionally not part of this shape.
 function normalizeCalculateFovArgs(args: Record<string, unknown>): NormalizedCalculateFovArgs | { error: JsonRpcError } {
   const lensSkuRaw = firstString(args.lens_sku, args.lensSku);
   const focalLengthMm = firstNumber(args.focal_length_mm, args.focalLengthMm);
-  const sensorPartNumberRaw = sensorPartNumberFromArgs(args);
   const workingDistanceMm = firstNumber(args.working_distance_mm, args.workingDistanceMm);
 
   if (!lensSkuRaw && focalLengthMm === undefined) {
@@ -1471,15 +1499,12 @@ function normalizeCalculateFovArgs(args: Record<string, unknown>): NormalizedCal
   if (focalLengthMm !== undefined && (!Number.isFinite(focalLengthMm) || focalLengthMm <= 0)) {
     return { error: { code: -32602, message: 'Invalid params: focal_length_mm must be positive when provided' } };
   }
-  const sensorError = validateSafeIdentifier(sensorPartNumberRaw, 'sensor');
-  if (sensorError) return { error: sensorError };
   const distanceError = validateOptionalPositiveNumber(workingDistanceMm, 'working_distance_mm', MAX_WORKING_DISTANCE_MM);
   if (distanceError) return { error: distanceError };
 
   return {
     ...(lensSkuRaw ? { lensSku: normalizeSafeIdentifier(lensSkuRaw) } : {}),
     ...(focalLengthMm !== undefined ? { focalLengthMm } : {}),
-    sensorPartNumber: normalizeSafeIdentifier(sensorPartNumberRaw as string),
     ...(workingDistanceMm !== undefined ? { workingDistanceMm } : {}),
   };
 }
@@ -1490,6 +1515,158 @@ function sensorPartNumberFromArgs(args: Record<string, unknown>): unknown {
   if (typeof args.sensor === 'string') return args.sensor;
   if (isRecord(args.sensor)) return firstString(args.sensor.partNumber, args.sensor.part_number);
   return undefined;
+}
+
+/**
+ * Custom (ad-hoc) sensor support. Agents often have a user's sensor as pixel
+ * dimensions plus pixel pitch (or active-area mm) with no catalog part number.
+ * Accept that directly instead of failing "Sensor not found". A custom sensor
+ * is built from:
+ *   - resolution: widthPx/heightPx (aka horizontal_pixels/vertical_pixels) AND
+ *   - pixelSizeUm (aka pixel_pitch_um / pixelPitchUm), OR
+ *   - activeAreaMm.width/height (aka sensorWidthMm/sensorHeightMm) directly.
+ * Active area is derived as pixels x pitch when only pitch is given. Accepted
+ * either at the top level of the args or nested under `sensor`. The result is
+ * labelled partNumber CUSTOM-<w>x<h> so downstream provenance stays honest.
+ */
+const CUSTOM_SENSOR_PREFIX = 'CUSTOM';
+const MAX_SENSOR_PX = 100_000;
+const MAX_SENSOR_MM = 200;
+const MAX_PIXEL_PITCH_UM = 100;
+
+interface CustomSensorSpec {
+  widthPx: number | undefined;
+  heightPx: number | undefined;
+  pixelSizeUm: number | undefined;
+  widthMm: number | undefined;
+  heightMm: number | undefined;
+}
+
+function customSensorSpecFromArgs(args: Record<string, unknown>): CustomSensorSpec {
+  const nested = isRecord(args.sensor) ? args.sensor : {};
+  const nestedRes = isRecord(nested.resolution) ? nested.resolution : {};
+  const nestedArea = isRecord(nested.activeAreaMm) ? nested.activeAreaMm : {};
+  const pick = (...values: unknown[]): number | undefined => firstNumber(...values);
+  return {
+    widthPx: pick(
+      args.widthPx, args.width_px, args.horizontalPixels, args.horizontal_pixels, args.sensorWidthPx, args.sensor_width_px,
+      nested.widthPx, nested.width_px, nested.horizontalPixels, nested.horizontal_pixels, nestedRes.widthPx, nestedRes.width_px,
+    ),
+    heightPx: pick(
+      args.heightPx, args.height_px, args.verticalPixels, args.vertical_pixels, args.sensorHeightPx, args.sensor_height_px,
+      nested.heightPx, nested.height_px, nested.verticalPixels, nested.vertical_pixels, nestedRes.heightPx, nestedRes.height_px,
+    ),
+    pixelSizeUm: pick(
+      args.pixelSizeUm, args.pixel_size_um, args.pixelPitchUm, args.pixel_pitch_um, args.pixelPitch, args.pixel_pitch,
+      nested.pixelSizeUm, nested.pixel_size_um, nested.pixelPitchUm, nested.pixel_pitch_um, nested.pixelPitch, nested.pixel_pitch,
+    ),
+    widthMm: pick(
+      args.sensorWidthMm, args.sensor_width_mm, args.activeWidthMm, args.active_width_mm,
+      nested.widthMm, nested.width_mm, nested.sensorWidthMm, nested.sensor_width_mm, nestedArea.width, nestedArea.widthMm,
+    ),
+    heightMm: pick(
+      args.sensorHeightMm, args.sensor_height_mm, args.activeHeightMm, args.active_height_mm,
+      nested.heightMm, nested.height_mm, nested.sensorHeightMm, nested.sensor_height_mm, nestedArea.height, nestedArea.heightMm,
+    ),
+  };
+}
+
+function hasAnyCustomSensorField(spec: CustomSensorSpec): boolean {
+  return Object.values(spec).some((value) => value !== undefined);
+}
+
+function buildCustomSensor(spec: CustomSensorSpec): SensorCatalogItem | { error: JsonRpcError } {
+  const bad = (message: string): { error: JsonRpcError } => ({ error: { code: -32602, message: `Invalid params: ${message}` } });
+  const positive = (value: number | undefined, max: number): boolean => value !== undefined && Number.isFinite(value) && value > 0 && value <= max;
+
+  const hasPixels = spec.widthPx !== undefined || spec.heightPx !== undefined;
+  const hasMm = spec.widthMm !== undefined || spec.heightMm !== undefined;
+
+  if (hasPixels && !(positive(spec.widthPx, MAX_SENSOR_PX) && positive(spec.heightPx, MAX_SENSOR_PX))) {
+    return bad('custom sensor needs both widthPx and heightPx as positive pixel counts');
+  }
+  if (hasMm && !(positive(spec.widthMm, MAX_SENSOR_MM) && positive(spec.heightMm, MAX_SENSOR_MM))) {
+    return bad('custom sensor needs both sensorWidthMm and sensorHeightMm as positive millimetres');
+  }
+  if (spec.pixelSizeUm !== undefined && !positive(spec.pixelSizeUm, MAX_PIXEL_PITCH_UM)) {
+    return bad('pixelSizeUm must be a positive pixel pitch in microns');
+  }
+
+  let widthMm = spec.widthMm;
+  let heightMm = spec.heightMm;
+  if (!hasMm) {
+    if (!hasPixels || spec.pixelSizeUm === undefined) {
+      return bad('custom sensor needs widthPx + heightPx + pixelSizeUm, or sensorWidthMm + sensorHeightMm (optionally with pixel counts). Or pass a catalog sensorPartNumber such as IMX477.');
+    }
+    widthMm = roundNumber((spec.widthPx as number) * spec.pixelSizeUm / 1000, 4);
+    heightMm = roundNumber((spec.heightPx as number) * spec.pixelSizeUm / 1000, 4);
+  }
+
+  // Derive pixel pitch when given mm + pixels but no pitch; fall back to a
+  // nominal 1 um so resolution-dependent fields stay finite (labelled).
+  let pixelSizeUm = spec.pixelSizeUm;
+  let widthPx = spec.widthPx;
+  let heightPx = spec.heightPx;
+  if (pixelSizeUm === undefined && hasPixels) {
+    pixelSizeUm = roundNumber(((widthMm as number) / (widthPx as number)) * 1000, 4);
+  }
+  if (!hasPixels) {
+    // No pixel counts supplied: synthesise them from mm / pitch so the FoV
+    // model has a resolution. Pitch defaults to 1 um if also absent.
+    pixelSizeUm = pixelSizeUm ?? 1;
+    widthPx = Math.max(1, Math.round(((widthMm as number) * 1000) / pixelSizeUm));
+    heightPx = Math.max(1, Math.round(((heightMm as number) * 1000) / pixelSizeUm));
+  }
+
+  return {
+    partNumber: `${CUSTOM_SENSOR_PREFIX}-${widthPx}x${heightPx}`,
+    manufacturer: 'custom',
+    name: `Custom sensor ${widthPx}x${heightPx} px, ${widthMm}x${heightMm} mm`,
+    resolution: { widthPx: widthPx as number, heightPx: heightPx as number },
+    activeAreaMm: { width: widthMm as number, height: heightMm as number },
+    pixelSizeUm: pixelSizeUm as number,
+  };
+}
+
+/**
+ * Resolve the sensor for an FoV-style tool call. Order:
+ *   1. catalog part number (live table, then fixture) when one was supplied;
+ *   2. a custom sensor built from pixel / mm fields when present;
+ *   3. if a part number was supplied but not found AND custom fields exist,
+ *      use the custom fields (the agent gave us enough to proceed);
+ *   4. otherwise report not-found / missing.
+ */
+async function resolveSensorInput(
+  env: Env,
+  args: Record<string, unknown>,
+): Promise<{ sensor: SensorCatalogItem; partNumber: string; source: 'catalog' | 'custom' } | { error: JsonRpcError }> {
+  const partRaw = sensorPartNumberFromArgs(args);
+  const spec = customSensorSpecFromArgs(args);
+  const hasCustom = hasAnyCustomSensorField(spec);
+
+  if (typeof partRaw === 'string' && partRaw.trim() !== '') {
+    const partError = validateSafeIdentifier(partRaw, 'sensor');
+    if (partError) return { error: partError };
+    const partNumber = normalizeSafeIdentifier(partRaw);
+    const sensor = await resolveSensor(env, partNumber);
+    if (sensor) return { sensor, partNumber, source: 'catalog' };
+    if (!hasCustom) return { error: await sensorNotFoundErrorAsync(env, partNumber) };
+    // Unknown part number but the agent also gave dimensions: honour them.
+  }
+
+  if (hasCustom) {
+    const built = buildCustomSensor(spec);
+    if ('error' in built) return built;
+    return { sensor: built, partNumber: built.partNumber, source: 'custom' };
+  }
+
+  return {
+    error: {
+      code: -32602,
+      message:
+        'Invalid params: sensor is required. Pass a catalog part number (sensorPartNumber, e.g. IMX477) or describe the sensor directly with widthPx + heightPx + pixelSizeUm (or sensorWidthMm + sensorHeightMm).',
+    },
+  };
 }
 
 function buildLensDistortionProfile(lens: LensCatalogItem): Record<string, unknown> {
@@ -1820,23 +1997,23 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
     const normalized = normalizeCalculateFovArgs(args);
     if ('error' in normalized) return rpcError(id, normalized.error);
 
-    const sensor = await resolveSensor(env, normalized.sensorPartNumber);
-    if (!sensor) {
-      return rpcError(id, await sensorNotFoundErrorAsync(env, normalized.sensorPartNumber));
-    }
+    // Catalog part number OR custom pixel/mm sensor spec.
+    const resolvedSensor = await resolveSensorInput(env, args);
+    if ('error' in resolvedSensor) return rpcError(id, resolvedSensor.error);
+    const { sensor, partNumber: sensorPartNumber } = resolvedSensor;
 
     if (normalized.lensSku) {
       if (isFovLiveBackendEnabled(env)) {
         const liveResult = await computeFovWithLiveBackend(env, {
           lensSku: normalized.lensSku,
-          sensorPartNumber: normalized.sensorPartNumber,
+          sensorPartNumber: sensorPartNumber,
           sensor,
           ...(normalized.workingDistanceMm !== undefined ? { workingDistanceMm: normalized.workingDistanceMm } : {}),
         });
         if ('error' in liveResult) return rpcError(id, liveResult.error);
         return toolResult(id, buildCalculateFieldOfViewResponse(liveResult.structuredContent, sensor, {
           lensSku: normalized.lensSku,
-          sensorPartNumber: normalized.sensorPartNumber,
+          sensorPartNumber: sensorPartNumber,
           ...(normalized.workingDistanceMm !== undefined ? { workingDistanceMm: normalized.workingDistanceMm } : {}),
         }));
       }
@@ -1848,7 +2025,7 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
       const fixture = buildFixtureSingleFovResponse(lens, sensor, normalized.workingDistanceMm);
       return toolResult(id, buildCalculateFieldOfViewResponse(fixture, sensor, {
         lensSku: normalized.lensSku,
-        sensorPartNumber: normalized.sensorPartNumber,
+        sensorPartNumber: sensorPartNumber,
         ...(normalized.workingDistanceMm !== undefined ? { workingDistanceMm: normalized.workingDistanceMm } : {}),
       }));
     }
@@ -1955,18 +2132,33 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
   }
 
   if (toolName === 'match_lenses_to_sensor') {
-    const validation = validateRecommendationArgs(args);
+    // Resolve the sensor first so a custom pixel/mm spec works as well as a
+    // catalog part number; then feed the resolved part number to the existing
+    // validators/builders (which expect a string sensorPartNumber).
+    const resolvedSensor = await resolveSensorInput(env, args);
+    if ('error' in resolvedSensor) return rpcError(id, resolvedSensor.error);
+    const { sensor, partNumber: resolvedPartNumber, source: sensorSource } = resolvedSensor;
+    const matchArgs = { ...args, sensorPartNumber: resolvedPartNumber };
+
+    const validation = validateRecommendationArgs(matchArgs);
     if (validation) return rpcError(id, validation);
 
-    const input = buildRecommendationInput(args);
+    const input = buildRecommendationInput(matchArgs);
     try {
       if (isFovLiveBackendEnabled(env)) {
-        const sensor = await resolveSensor(env, input.sensorPartNumber);
-        if (!sensor) return rpcError(id, await sensorNotFoundErrorAsync(env, input.sensorPartNumber));
         const live = await fetchLiveLensCatalog(env, sensor, input.workingDistanceMm);
         if ('error' in live) return rpcError(id, live.error);
         const recommendations = matchLensesToSensorLive(live.lenses, input);
         return recommendationToolResult(id, input.sensorPartNumber, recommendations, 'live');
+      }
+      if (sensorSource === 'custom') {
+        // The fixture matcher looks sensors up by catalog part number, so it
+        // cannot rank against an ad-hoc sensor. Only reachable when the live
+        // backend is disabled.
+        return rpcError(id, {
+          code: -32004,
+          message: 'Custom sensor dimensions require the live FoV backend, which is not enabled on this server. Pass a catalog sensorPartNumber instead.',
+        });
       }
       const recommendations = matchLensesToSensor(input);
       return recommendationToolResult(id, input.sensorPartNumber, recommendations);
