@@ -284,7 +284,7 @@ describe('Commonlands MCP Worker', () => {
       id: 1,
       result: {
         protocolVersion: '2025-11-25',
-        serverInfo: { name: 'commonlands-mcp', version: '0.4.0' },
+        serverInfo: { name: 'commonlands-mcp', version: '0.4.1' },
         capabilities: { tools: {}, resources: {}, prompts: {} },
       },
     });
@@ -1620,6 +1620,71 @@ describe('Commonlands MCP Worker', () => {
       shopifyCartEnv,
     );
     expect(getStructuredContent(got.body)).toMatchObject({ operation: 'get_cart', connector: { status: 'ok' } });
+  });
+
+  it('calculate_field_of_view accepts a custom sensor from pixel count + pitch (no part number)', async () => {
+    // Same geometry as the IMX477 fixture, described manually: 4056x3040 @ 1.55um.
+    const { body } = await rpc('tools/call', {
+      name: 'calculate_field_of_view',
+      arguments: { lensSku: 'CIL250', widthPx: 4056, heightPx: 3040, pixelSizeUm: 1.55 },
+    });
+    const structuredContent = getStructuredContent(body);
+
+    expect(body.error).toBeUndefined();
+    // Should match the IMX477 fixture HFOV since the active area is identical.
+    const ref = getStructuredContent((await rpc('tools/call', {
+      name: 'calculate_field_of_view',
+      arguments: { lensSku: 'CIL250', sensorPartNumber: 'IMX477' },
+    })).body);
+    expect(structuredContent.hfov_deg).toBeCloseTo(ref.hfov_deg as number, 1);
+    expect(JSON.stringify(structuredContent)).toContain('CUSTOM-4056x3040');
+  });
+
+  it('calculate_field_of_view accepts a custom sensor from active-area mm and the horizontalPixels/verticalPixels aliases', async () => {
+    const mm = getStructuredContent((await rpc('tools/call', {
+      name: 'calculate_field_of_view',
+      arguments: { lensSku: 'CIL250', sensorWidthMm: 6.287, sensorHeightMm: 4.712 },
+    })).body);
+    const alias = getStructuredContent((await rpc('tools/call', {
+      name: 'calculate_field_of_view',
+      arguments: { lensSku: 'CIL250', horizontalPixels: 4056, verticalPixels: 3040, pixelPitchUm: 1.55 },
+    })).body);
+    const ref = getStructuredContent((await rpc('tools/call', {
+      name: 'calculate_field_of_view',
+      arguments: { lensSku: 'CIL250', sensorPartNumber: 'IMX477' },
+    })).body);
+
+    expect(mm.hfov_deg).toBeCloseTo(ref.hfov_deg as number, 1);
+    expect(alias.hfov_deg).toBeCloseTo(ref.hfov_deg as number, 1);
+  });
+
+  it('calculate_field_of_view gives an actionable error when the sensor spec is incomplete', async () => {
+    const { body } = await rpc('tools/call', {
+      name: 'calculate_field_of_view',
+      arguments: { lensSku: 'CIL250', widthPx: 4056, heightPx: 3040 }, // no pitch, no mm
+    });
+    const err = body.error as JsonObject;
+    expect(err).toMatchObject({ code: -32602 });
+    expect(String(err.message)).toContain('pixelSizeUm');
+  });
+
+  it('calculate_field_of_view falls back to custom dimensions when an unknown part number is given alongside them', async () => {
+    const { body } = await rpc('tools/call', {
+      name: 'calculate_field_of_view',
+      arguments: { lensSku: 'CIL250', sensorPartNumber: 'MY-SENSOR-X', widthPx: 4056, heightPx: 3040, pixelSizeUm: 1.55 },
+    });
+    expect(body.error).toBeUndefined();
+    expect(JSON.stringify(getStructuredContent(body))).toContain('CUSTOM-4056x3040');
+  });
+
+  it('match_lens_to_sensor reports custom sensors need the live backend when it is disabled', async () => {
+    const { body } = await rpc('tools/call', {
+      name: 'match_lens_to_sensor',
+      arguments: { widthPx: 1920, heightPx: 1080, pixelSizeUm: 2.9 },
+    });
+    const err = body.error as JsonObject;
+    expect(err).toMatchObject({ code: -32004 });
+    expect(String(err.message)).toContain('live FoV backend');
   });
 
   it('rejects unsafe Shopify read adapter params without calling Shopify', async () => {
