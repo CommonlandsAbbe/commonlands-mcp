@@ -8,7 +8,7 @@ The live server is:
 - **Discovery profile:** `https://mcp.commonlands.com/.well-known/ucp`
 - **Health check:** `https://mcp.commonlands.com/healthz`
 
-The current public surface (v0.2.0) exposes **20 tools** with intent-named optics tools (`calculate_field_of_view`, `match_lens_to_sensor`, `search_lens_catalog`, `get_lens_distortion_profile`). UCP discovery advertises catalog + cart discovery. Checkout tools, `cancel_cart`, and `read_shopify_metaobjects` are not exposed. The pre-v0.2.0 optics names (`compute_fov`, `compute_fov_catalog`, `match_lenses_to_sensor`, `search_lenses`, `get_lens_details`) still dispatch as hidden aliases but do not appear in `tools/list`.
+The current public surface exposes **21 tools** with intent-named optics tools (`calculate_field_of_view`, `match_lens_to_sensor`, `search_lens_catalog`, `get_lens_distortion_profile`) plus confirmation-gated `submit_rfq`. UCP discovery advertises catalog + cart discovery. Checkout tools, `cancel_cart`, and `read_shopify_metaobjects` are not exposed.
 
 ## The short version
 
@@ -43,15 +43,15 @@ Use `read_shopify_products` for purchasable facts: live product URLs, Shopify Pr
 
 ### Cart handoff
 
-If a buyer explicitly asks for a cart, the agent can use live Shopify Variant GIDs from `read_shopify_products`, then call `create_cart`, `get_cart`, or `update_cart`. Cart state is stored by Shopify, not by the Commonlands Worker. The agent should show the returned Shopify cart or continue URL.
+If a buyer explicitly asks for a cart, the agent can use live Shopify Variant GIDs from `read_shopify_products`, then call `create_cart`. Retain both the returned cart id and `cart_access_token`; `get_cart` and `update_cart` require the matching pair and reject an id alone. Cart state is stored by Shopify, not by the Commonlands Worker.
 
 ## Current production status
 
-- **Live tool count:** 22
+- **Live tool count:** 21
 - **Live Shopify product truth:** `read_shopify_products` is configured and read-only.
 - **Live FoV backend:** `calculate_field_of_view` and `match_lens_to_sensor` use the authenticated AWS Lambda/DynamoDB backend when configured. The Worker sends the backend secret server-side; agents never receive it, and returned lens records are allowlisted.
 - **Sensor specs:** `get_sensor_specs` prefers the read-only live sensor table when configured and falls back to the Worker fixture sensor catalog when unavailable.
-- **Cart tools:** `create_cart`, `get_cart`, and `update_cart` are exposed through Shopify's standard Storefront MCP endpoint.
+- **Cart tools:** `create_cart` is authless; `get_cart` and `update_cart` require the create-issued `cart_access_token` and fail closed when owner binding is not configured.
 - **Checkout tools:** hidden. `create_checkout` returns `Tool not found`; checkout still needs a validated Shopify Checkout MCP endpoint, Cloudflare protections, and explicit approval before exposure.
 - **Cancel cart:** hidden for the current standard Storefront MCP endpoint. `cancel_cart` returns `Tool not found` unless a validated UCP Cart MCP endpoint with cancel semantics is configured later.
 
@@ -64,8 +64,9 @@ If a buyer explicitly asks for a cart, the agent can use live Shopify Variant GI
 5. Use `calculate_field_of_view` for one live FoV result or `match_lens_to_sensor` for catalog-wide FoV when the Lambda/DynamoDB backend supports the request.
 6. Use `match_lens_to_sensor`, `compare_lenses`, and `search_lens_catalog` for fixture-backed engineering context.
 7. Use `read_shopify_products` for live Shopify product/variant IDs, product URLs, price, inventory signals, and cart variant IDs.
-8. If the buyer explicitly asks for a cart, use live Shopify Variant GIDs from `read_shopify_products`, then call `create_cart`/`get_cart`/`update_cart`. Show the returned Shopify cart/continue URL to the buyer.
-9. Do not claim Checkout MCP is live. Send buyers to Shopify's returned cart/checkout handoff URL when present.
+8. If the buyer explicitly asks for a cart, use live Shopify Variant GIDs from `read_shopify_products`, then call `create_cart`. Retain its cart id + `cart_access_token` for any `get_cart`/`update_cart` call.
+9. For an RFQ, show the exact message and reply-to email first; call `submit_rfq` with `confirm: true` only after buyer approval.
+10. Do not claim Checkout MCP is live. Send buyers to Shopify's returned cart/checkout handoff URL when present.
 
 
 ## Better example prompts
@@ -81,7 +82,7 @@ These prompts are safer than bare SKU questions because they force the agent to 
 
 ## Live tool input/output table
 
-This table reflects a live `tools/list` check against the production MCP endpoint after the PR #26 deployment on 2026-05-03 PDT. It lists the 22 exposed tools only. Checkout tools and `cancel_cart` are intentionally absent from the live surface.
+This table documents the current 21-tool public contract. Live `tools/list` remains authoritative. Checkout tools and `cancel_cart` are intentionally absent.
 
 | Tool | Primary use | Required inputs | Optional inputs | Output shape / what to trust | Usefulness check |
 | --- | --- | --- | --- | --- | --- |
@@ -98,15 +99,16 @@ This table reflects a live `tools/list` check against the production MCP endpoin
 | `get_shopify_readonly_config_status` | Sanitized read-only Shopify connector config. | None. | None. | `shopify.readonly_config_status.v1` with redacted binding/scopes status and safety flags. | Useful for debugging connector configuration without exposing secrets or calling Shopify. |
 | `read_shopify_products` | Live Shopify product truth (public data only). | At least one of `sku`, `handle`, or `query` should be supplied for useful results. | `limit` 1-25, `includeMetafields` true/false (default false; allowlisted `custom.*` display fields only). | `shopify.live_read.v1` with live Product/Variant GIDs, SKU, price, coarse `availability`, product URL, media, allowlisted metafields when requested, read-only safety flags. ACTIVE products only; no exact inventory counts. | Essential before final purchasable claims or cart handoff. This is the main truth tool. |
 | `read_shopify_metaobjects` | Removed from the public surface in v0.2.0 (Admin metaobjects can hold non-public data). | n/a | n/a | Actionable -32601 error pointing to `read_shopify_products`. | Do not call. |
-| `create_cart` | Create Shopify-owned cart from confirmed live Variant GIDs. | `cart.line_items[]` with `quantity` and `item.id` Variant GID. | `meta`, `cart.context`, `cart.signals`. | `commonlands.cart_ucp.v1` with connector status, Shopify-owned cart payload when returned, safety flags. | Useful only after explicit buyer line-item/quantity confirmation. Mutates Shopify cart state; does not checkout or collect payment. |
-| `get_cart` | Retrieve a Shopify-owned cart by ID. | `id` Shopify Cart GID. | `meta`. | `commonlands.cart_ucp.v1` with cart payload when Shopify returns one, persistence notes, safety flags. | Useful for cart refresh/resume if the agent retained the cart ID. |
-| `update_cart` | Add variants, change quantities, or remove lines in a Shopify-owned cart. | `id`, `cart`. | `cart.line_items`, `cart.update_items`, `cart.remove_line_ids`, `context`, `signals`, `meta`. | `commonlands.cart_ucp.v1` with operation status, cart payload when returned, and safety flags. | Useful for buyer-confirmed cart edits; mutates cart only, not checkout/order/customer/inventory/catalog. |
+| `create_cart` | Create Shopify-owned cart from confirmed live Variant GIDs. | `cart.line_items[]` with `quantity` and `item.id` Variant GID. | `meta`, `cart.context`, `cart.signals`. | `commonlands.cart_ucp.v1` with Shopify cart plus a cart-bound `cart_access_token` when configured. | Authless creation is allowed; retain both cart id and token for resume/edit. |
+| `get_cart` | Retrieve a Shopify-owned cart. | Matching Shopify Cart `id` + `cart_access_token` issued by `create_cart`. | `meta`. | Cart payload or fail-closed invalid-credential response. | An id alone is rejected before Shopify is called. |
+| `update_cart` | Add variants, change quantities, or remove lines. | Matching `id` + `cart_access_token` + `cart`. | `cart.line_items`, `cart.update_items`, `cart.remove_line_ids`, `context`, `signals`, `meta`. | Updated cart or fail-closed invalid-credential response. | Requires buyer-confirmed edits and the create-issued credential. |
 | `search_catalog` | UCP-style fixture catalog search for shopping agents. | None; useful calls include `catalog.query`. | `meta`, `catalog.query`, `catalog.limit` 1-25. | `ucp.catalog.v1` with fixture `catalog.products[]`, UCP metadata, messages, fixture warning. | Useful for UCP compatibility and discovery, not live commerce truth. |
 | `lookup_catalog` | UCP-style fixture lookup by IDs/SKUs/handles/URLs. | `catalog.ids[]` 1-10. | `meta`. | `ucp.catalog.v1` product records or not-found messages, plus fixture warning. | Useful for resolving scaffold catalog records; not live Shopify IDs. |
 | `get_product` | UCP-style fixture product detail. | `catalog.id`. | `meta`. | `ucp.catalog.v1` product detail record with fixture metadata and warning. | Useful for UCP product-card context; verify live facts separately. |
 | `prepare_shopify_purchase_handoff` | Non-mutating purchase handoff plan for a SKU. | `sku`. | `quantity`, `sensorPartNumber`, `selectedVariantId`. | `shopify.purchase_handoff.v1` with product scaffold, transaction safety, warnings; no cart/checkout created. | Useful as a safe planning seam; any selected variant must come from `read_shopify_products` to be cart-ready. |
 | `get_purchase_route_options` | Explain available/planned purchase routes without mutation. | `sku`. | `quantity`, `sensorPartNumber`, `buyerIntent`, `agentType`. | `commerce.purchase_routes.v1` with routes, safety flags, required checks, warnings. | Useful to explain next steps and boundaries; it does not buy anything. |
 | `recommend_lenses_for_application` | Fixture-backed application-specific shortlist. | `sensorPartNumber`. | `application`, `desiredHorizontalFovDeg`, `workingDistanceMm`, `mount`, `preferLowDistortion`, `requireInStock`, `maxResults` 1-10. | `recommendations.v1` with ranked application-fit records, tradeoffs, warnings. | Useful for natural-language application triage; may later consolidate with `match_lens_to_sensor`. |
+| `submit_rfq` | Send a buyer RFQ/question to the fixed Commonlands inbox. | `message`, `email`, and explicit `confirm: true`. | `name`, `company`, `kind`, `partNumbers`, `sensor`, `quantity`, `application`. | `commonlands.rfq.v1`; without confirmation returns `pending_confirmation` and sends nothing. | Show the exact proposal first; never infer confirmation. |
 
 ## Safety boundaries
 
@@ -493,7 +495,7 @@ Live catalog mode depends on the Lambda supporting a bounded catalog scan when n
 }
 ```
 
-Note: the readiness text is conservative/static. The live `tools/list` is authoritative for what is currently exposed. Current approved cart exposure is limited to `create_cart`, `get_cart`, and `update_cart` when configured; UCP discovery advertises catalog + cart discovery; `cancel_cart`, checkout, customer, order, inventory, and catalog-write tools remain hidden/gated.
+Note: the readiness text is conservative/static. The live `tools/list` is authoritative. `create_cart` may be exposed authlessly; existing-cart calls require `CART_TOKEN_SECRET` and the matching create-issued credential. `cancel_cart`, checkout, customer, order, inventory, and catalog-write tools remain hidden/gated.
 
 ### `get_shopify_readonly_config_status`
 
@@ -610,7 +612,7 @@ Note: the readiness text is conservative/static. The live `tools/list` is author
 **Tool call:**
 
 ```json
-{"name":"get_cart","arguments":{"id":"gid://shopify/Cart/example"}}
+{"name":"get_cart","arguments":{"id":"gid://shopify/Cart/example","cart_access_token":"<token returned by create_cart>"}}
 ```
 
 **Actual safe output with a placeholder cart ID:**
@@ -624,7 +626,7 @@ Note: the readiness text is conservative/static. The live `tools/list` is author
   "persistence": {
     "storedIn": "shopify_cart_mcp",
     "commonlandsWorkerState": "stateless_proxy_no_cart_storage",
-    "resumeAcrossAgentSessions": "caller_must_retain_cart_id_or_continue_url"
+    "resumeAcrossAgentSessions": "caller_must_retain_cart_id_and_cart_access_token_or_continue_url"
   },
   "connector": {
     "status": "ok",

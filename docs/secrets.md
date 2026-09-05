@@ -69,12 +69,13 @@ Rules:
 - `ENABLE_COMMERCE_MUTATION_TOOLS` non-secret explicit gate; cart tools are exposed only when this is `true` and the target environment is approved/configured. Live `tools/list` is authoritative.
 - `SHOPIFY_CART_MCP_ENDPOINT` non-secret HTTPS merchant Cart MCP endpoint. Current confirmed Commonlands Storefront MCP endpoint is `https://commonlands-camera-components.myshopify.com/api/mcp`; the Worker also permits exact Commonlands merchant hosts only, not arbitrary tool-supplied endpoints.
 - `SHOPIFY_UCP_AGENT_PROFILE` optional non-secret profile URL; defaults to the live Commonlands UCP discovery URL.
+- `CART_TOKEN_SECRET` long random HMAC key stored only as a Cloudflare Worker secret. `create_cart` signs a `cart_access_token` bound to the returned Shopify cart id. `get_cart`, `update_cart`, and future `cancel_cart` reject a cart id without its matching credential and fail closed when the secret is unavailable.
 
 Rules:
 
-- Cart MCP tools are exposed only when explicitly approved, gated, and endpoint-bound. The current live approved standard Storefront MCP surface exposes `create_cart`, `get_cart`, and `update_cart`; `cancel_cart` remains hidden unless a validated UCP Cart MCP endpoint supports cancel semantics.
+- Authless `create_cart` may be exposed when explicitly approved, gated, and endpoint-bound. Existing-cart calls additionally require `CART_TOKEN_SECRET` plus the create-issued credential; a caller-supplied cart id alone can never read or mutate an existing cart.
 - Cart state is stored and mutated by Shopify Cart MCP; Commonlands Worker remains stateless and stores no cart database/session/customer record.
-- Do not log returned credentials, signed URLs, or authorization material if Shopify Cart MCP ever adds authenticated transport.
+- Never log or persist the returned `cart_access_token`, cart id, signed URLs, or authorization material.
 
 ### Shopify Checkout MCP
 

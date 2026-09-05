@@ -26,13 +26,14 @@ Status:
 organization and **Owner / directory-management** access — individual plans
 cannot submit. Confirm the org plan before starting.
 
-**Technical readiness (already met, v0.2.0):**
-- All 20 tools include `title` + `readOnlyHint`/`destructiveHint` annotations ✅
+**Technical readiness:**
+- All 21 declared tools include `title` + `readOnlyHint`/`destructiveHint` annotations ✅
 - Read and write actions are separate tools ✅
 - Public endpoint, **no authentication** → reviewers connect instantly ✅
 - Privacy policy exists ✅
 - Public-data-only Shopify reads (Anthropic review): active products, coarse availability, allowlisted `custom.*` metafields off by default; `read_shopify_metaobjects` removed ✅
-- Cart abuse controls: per-IP rate limits (120 req/min, 10 cart mutations/min) ✅
+- Cart controls: per-IP limits plus create-issued, cart-id-bound bearer capabilities for every existing-cart read/mutation ✅
+- RFQ submission: required `confirm: true` before the buyer's name/email/message are sent ✅
 
 ### Field-by-field package (copy/paste)
 
@@ -47,7 +48,8 @@ cannot submit. Confirm the org plan before starting.
 - **Company:** Commonlands LLC · `https://commonlands.com` · review contact: Max Henkart
 - **Data scope:** Both (read + buyer-confirmed cart write). Reads are **public data only** (active products, coarse availability, allowlisted public product-page metafields off by default). No payment, orders, customer records, or inventory writes.
 - **User prerequisites:** None — public endpoint, no account or API key.
-- **Test credentials:** None required. Reviewers connect to `https://mcp.commonlands.com/mcp` and call `tools/list` (20 tools). Sample call: `match_lens_to_sensor` with `{ "sensorPartNumber": "IMX477", "desiredHorizontalFovDeg": 70 }`.
+- **Test credentials:** None required. Reviewers connect to `https://mcp.commonlands.com/mcp` and call `tools/list` (21 tools). Sample call: `match_lens_to_sensor` with `{ "sensorPartNumber": "IMX477", "desiredHorizontalFovDeg": 70 }`.
+- **Declared tools (21, must match the portal listing):** `calculate_field_of_view`, `match_lens_to_sensor`, `search_lens_catalog`, `get_lens_distortion_profile`, `get_sensor_specs`, `compare_lenses`, `get_product_page_details`, `get_catalog_snapshot_status`, `get_shopify_ucp_readiness`, `get_shopify_readonly_config_status`, `read_shopify_products`, `create_cart`, `get_cart`, `update_cart`, `search_catalog`, `lookup_catalog`, `get_product`, `prepare_shopify_purchase_handoff`, `get_purchase_route_options`, `recommend_lenses_for_application`, `submit_rfq`.
 
 **Description (≤2000):**
 
@@ -84,10 +86,10 @@ endpoints and rejects client-supplied downstream tokens.
 Review status appears in the submissions dashboard; escalate to
 `mcp-review@anthropic.com`. Timeline varies (≈2 weeks–months).
 
-### Reviewer test-access / autonomous verification (v0.2.0)
+### Reviewer test-access / autonomous verification
 
 Authoritative copy of the test-access instructions submitted to Anthropic.
-Everything below is unauthenticated; the 20-tool surface is identical for every
+Everything below is unauthenticated; the 21-tool surface is identical for every
 caller. Header used: `-H "content-type: application/json" -H "accept: application/json, text/event-stream"`.
 
 ```
@@ -105,17 +107,18 @@ ENDPOINT
 - Source: https://github.com/CommonlandsAbbe/commonlands-mcp
 
 CONNECT IN CLAUDE
-Settings > Connectors > Add custom connector > URL https://mcp.commonlands.com/mcp > no authentication. 20 tools should appear.
+Settings > Connectors > Add custom connector > URL https://mcp.commonlands.com/mcp > no authentication. 21 tools should appear.
 
 VERIFICATION (all unauthenticated)
-1) Health:            curl -s https://mcp.commonlands.com/healthz  -> version 0.2.0
+1) Health:            curl -s https://mcp.commonlands.com/healthz  -> version 0.4.0 after deployment
 2) Initialize:        POST method:initialize protocolVersion 2025-11-25
-3) List tools:        POST method:tools/list  -> expect 20
+3) List tools:        POST method:tools/list  -> expect 21, including submit_rfq
 4) Sensor spec:       tools/call get_sensor_specs {"partNumber":"IMX477"}  -> activeAreaMm 6.287 x 4.712, pitch 1.55 um
 5) Find lenses:       tools/call match_lens_to_sensor {"sensorPartNumber":"IMX477","desiredHorizontalFovDeg":70,"maxResults":3}
 6) Field of view:     tools/call calculate_field_of_view {"lensSku":"CIL250","sensorPartNumber":"IMX477"}  -> HFOV ~14 deg
 7) Live product read: tools/call read_shopify_products {"sku":"CIL250","limit":1}  -> ProductVariant GID; public data only (active products, coarse availability, metafields off by default)
-8) (Optional, safe write) tools/call create_cart {"cart":{"line_items":[{"quantity":1,"item":{"id":"gid://shopify/ProductVariant/41702699729014"}}]}}  -> transient cart id + continue_url; no charge/order/customer.
+8) (Optional, safe write) tools/call create_cart {"cart":{"line_items":[{"quantity":1,"item":{"id":"gid://shopify/ProductVariant/41702699729014"}}]}}  -> transient cart id + cart_access_token + continue_url; no charge/order/customer. get_cart/update_cart require that exact id + cart_access_token.
+9) RFQ confirmation:   tools/call submit_rfq {"message":"Please quote 25 CIL250 lenses","email":"reviewer@example.com"} -> pending_confirmation, sends nothing. Add "confirm":true only with an approved test inbox/message.
 
 KNOWN-GOOD TEST DATA
 - Sensors: IMX477, IMX219, AR0234 (get_sensor_specs also covers many more via the live table)
@@ -124,6 +127,8 @@ KNOWN-GOOD TEST DATA
 ABUSE CONTROLS & DATA SCOPE
 - Public data only: read_shopify_products returns active products, coarse availability (no exact counts), allowlisted custom.* metafields off by default. read_shopify_metaobjects is not exposed.
 - Per-IP rate limits: 120 requests/min endpoint-wide, 10 cart mutations/min (HTTP 429 + retry-after).
+- Existing-cart access requires the `cart_access_token` issued by `create_cart`; a cart id alone is rejected.
+- `submit_rfq` requires explicit `confirm: true`; without it, the tool returns the proposed payload and sends nothing.
 - Writes limited to transient Shopify-owned cart handoff; no payment, orders, customers, discounts, or inventory writes. Checkout/cancel not exposed.
 ```
 
@@ -135,7 +140,7 @@ ABUSE CONTROLS & DATA SCOPE
 
 - **Name:** Commonlands Optics MCP
 - **One-sentence description:** M12 lens and C-mount lens finder with image-sensor matching and a field-of-view calculator for machine vision and robotics.
-- **Tool count:** 22
+- **Tool count:** 21
 - **Transport:** Streamable HTTP
 - **Repository URL:** `https://github.com/CommonlandsAbbe/commonlands-mcp`
 - **Homepage URL:** `https://commonlands.com/pages/agentic-mcp-for-m12-lenses-and-optics`
