@@ -103,7 +103,14 @@ export async function callShopifyCheckoutMcp(
     return withConnector(baseResult(operation), 'shopify_error', 'not_connected', [redactSensitiveText(body.data.error.message ?? 'Shopify Checkout MCP returned a JSON-RPC error.')], endpoint.url.hostname);
   }
 
+  if (body.data.result?.isError === true) {
+    return withConnector(baseResult(operation), 'shopify_error', 'not_connected', ['Shopify Checkout MCP reported a tool execution error.'], endpoint.url.hostname);
+  }
+
   const checkout = body.data.result?.structuredContent?.checkout ? redactUnknown(body.data.result.structuredContent.checkout) : null;
+  if (!checkout) {
+    return withConnector(baseResult(operation), 'shopify_error', 'not_connected', ['Shopify Checkout MCP did not return a checkout.'], endpoint.url.hostname);
+  }
   return {
     ...baseResult(operation),
     configured: true,
@@ -398,6 +405,7 @@ function isSafeHttpsUrl(value: string): boolean {
 
 interface ShopifyCheckoutMcpResponse {
   result?: {
+    isError?: boolean;
     structuredContent?: {
       checkout?: unknown;
     };

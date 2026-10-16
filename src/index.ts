@@ -42,7 +42,7 @@ import {
   searchCatalog,
 } from './ucp-catalog';
 import { getCatalogSnapshotStatus } from './snapshot-status';
-import { fetchWithTimeout, readJsonWithLimit } from './http-safety';
+import { BodyTooLargeError, fetchWithTimeout, readJsonWithLimit, readTextWithLimit } from './http-safety';
 
 export interface Env {
   ENVIRONMENT?: string;
@@ -128,7 +128,7 @@ interface ToolAnnotations {
 
 const SERVER_INFO = {
   name: 'commonlands-mcp',
-  version: '0.4.1',
+  version: '0.4.2',
 } as const;
 
 const PUBLIC_MCP_ENDPOINT = 'https://mcp.commonlands.com/mcp';
@@ -1080,6 +1080,11 @@ async function jsonRpcStatusForTelemetry(response: Response): Promise<string> {
       const code = typeof body.error.code === 'number' ? body.error.code : 'unknown';
       return `jsonrpc_error_${code}`;
     }
+    if (isRecord(body) && isRecord(body.result)) {
+      const failure = toolFailureStatus(body.result.structuredContent);
+      if (failure) return `tool_error_${failure}`;
+      if (body.result.isError === true) return 'tool_error';
+    }
   } catch {
     return responseStatusForTelemetry(response);
   }
@@ -1101,7 +1106,7 @@ async function writeMcpTelemetry(env: Env, request: Request, payload: JsonRpcReq
         await jsonRpcStatusForTelemetry(response),
         clientNameForTelemetry(request),
         env.ENVIRONMENT ?? UNKNOWN_ANALYTICS_VALUE,
-        env.VERSION ?? UNKNOWN_ANALYTICS_VALUE,
+        env.VERSION ?? SERVER_INFO.version,
       ],
       doubles: [response.status, Date.now() - startedAt],
       indexes: [method],
@@ -2425,6 +2430,7 @@ function isCheckoutTool(name: unknown): name is CheckoutOperation {
 
 function toolResult(id: unknown, structuredContent: unknown): Response {
   return rpcResult(id, {
+    ...(toolFailureStatus(structuredContent) ? { isError: true } : {}),
     structuredContent,
     content: [
       {
@@ -2433,6 +2439,14 @@ function toolResult(id: unknown, structuredContent: unknown): Response {
       },
     ],
   });
+}
+
+function toolFailureStatus(content: unknown): string | undefined {
+  if (!isRecord(content)) return undefined;
+  const status = isRecord(content.connector) ? content.connector.status : content.status;
+  // Only fixed outcome labels enter telemetry; never copy messages or payloads.
+  return typeof status === 'string' && ['not_configured', 'invalid_request', 'shopify_error', 'delivery_failed'].includes(status)
+    ? status : undefined;
 }
 
 
@@ -2701,7 +2715,7 @@ async function computeFovWithLiveBackend(
         'x-api-key': env.FOV_API_KEY,
       },
       body: JSON.stringify(requestBody),
-    }, FOV_BACKEND_TIMEOUT_MS);
+    }, FOV_BACKEND_TIMEOUT_MS, FOV_BACKEND_MAX_RESPONSE_BYTES);
   } catch {
     return { error: { code: -32603, message: 'Live FoV backend request failed' } };
   }
@@ -3293,9 +3307,9 @@ function summarizeLens(lens: LensCatalogItem): Omit<LensCatalogItem, 'source' | 
  * (availability over strictness); absent bindings (local dev, tests) skip the
  * check — production bindings are declared in wrangler.toml.
  */
-async function enforceRateLimits(request: Request, env: Env, parsed: JsonRpcRequest): Promise<Response | null> {
+async function enforceRateLimits(request: Request, env: Env, parsed?: JsonRpcRequest): Promise<Response | null> {
   const clientIp = request.headers.get('cf-connecting-ip') ?? request.headers.get('x-forwarded-for') ?? 'unknown';
-  const id = parsed.id ?? null;
+  const id = parsed?.id ?? null;
 
   const exceeded = (scope: 'requests' | 'cart_mutations'): Response =>
     json(
@@ -3311,12 +3325,12 @@ async function enforceRateLimits(request: Request, env: Env, parsed: JsonRpcRequ
     );
 
   try {
-    if (env.MCP_RATE_LIMITER) {
+    if (!parsed && env.MCP_RATE_LIMITER) {
       const globalDecision = await env.MCP_RATE_LIMITER.limit({ key: clientIp });
       if (!globalDecision.success) return exceeded('requests');
     }
 
-    if (env.CART_RATE_LIMITER && parsed.method === 'tools/call' && isRecord(parsed.params)) {
+    if (env.CART_RATE_LIMITER && parsed?.method === 'tools/call' && isRecord(parsed.params)) {
       const rawName = parsed.params.name;
       const toolName = typeof rawName === 'string' ? canonicalToolName(rawName) : '';
       if (toolName === 'create_cart' || toolName === 'update_cart' || toolName === 'submit_rfq') {
@@ -3346,19 +3360,22 @@ async function handleMcp(request: Request, env: Env, ctx?: ExecutionContext): Pr
     return finalResponse;
   };
 
+  // Charge every POST before inspecting or reading its untrusted body.
+  const globalRateDecision = await enforceRateLimits(request, env);
+  if (globalRateDecision) return recordTelemetry(globalRateDecision);
+
   const contentType = request.headers.get('content-type') ?? '';
   if (!contentType.toLowerCase().includes('application/json')) {
     return recordTelemetry(json({ error: 'unsupported_media_type' }, { status: 415 }));
   }
 
-  const contentLength = request.headers.get('content-length');
-  if (contentLength && Number(contentLength) > MAX_MCP_BODY_BYTES) {
-    return recordTelemetry(json({ error: 'payload_too_large' }, { status: 413 }));
-  }
-
-  const bodyText = await request.text();
-  if (new TextEncoder().encode(bodyText).byteLength > MAX_MCP_BODY_BYTES) {
-    return recordTelemetry(json({ error: 'payload_too_large' }, { status: 413 }));
+  let bodyText: string;
+  try {
+    bodyText = await readTextWithLimit(request, MAX_MCP_BODY_BYTES);
+  } catch (error) {
+    return recordTelemetry(error instanceof BodyTooLargeError
+      ? json({ error: 'payload_too_large' }, { status: 413 })
+      : json({ error: 'body_read_failed' }, { status: 400 }));
   }
 
   let payload: unknown;
@@ -3377,11 +3394,8 @@ async function handleMcp(request: Request, env: Env, ctx?: ExecutionContext): Pr
 
   parsedForTelemetry = parsed;
 
-  // Abuse controls: per-IP rate limits on the public endpoint. The global
-  // limiter covers every request; cart mutations get a stricter budget since
-  // any caller can create or modify Shopify-owned carts. Limits live in
-  // wrangler.toml ([[unsafe.bindings]] type "ratelimit"); when a binding is
-  // absent (local dev, tests) the check is skipped.
+  // The global budget was charged before parsing; side-effect tools also
+  // consume the stricter mutation budget after the tool name is known.
   const rateDecision = await enforceRateLimits(request, env, parsed);
   if (rateDecision) {
     return recordTelemetry(rateDecision);

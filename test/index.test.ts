@@ -217,7 +217,7 @@ function shopifyProductVariantNode(input: {
       productType: 'Lens',
       vendor: 'Commonlands',
       tags: [],
-      onlineStoreUrl: null,
+      onlineStoreUrl: `https://commonlands.com/products/${input.handle}`,
       metafields: { nodes: input.metafields },
       media: { nodes: [] },
     },
@@ -284,7 +284,7 @@ describe('Commonlands MCP Worker', () => {
       id: 1,
       result: {
         protocolVersion: '2025-11-25',
-        serverInfo: { name: 'commonlands-mcp', version: '0.4.1' },
+      serverInfo: { name: 'commonlands-mcp', version: '0.4.2' },
         capabilities: { tools: {}, resources: {}, prompts: {} },
       },
     });

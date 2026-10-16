@@ -51,7 +51,7 @@ If fixture data conflicts with `read_shopify_products` or the live FoV/sensor ba
 
 ## Current live surface
 
-The production surface currently exposes **20 tools** across catalog/search, FoV, Shopify read-only, cart, UCP catalog, and purchase-handoff. Checkout tools, `cancel_cart`, and `read_shopify_metaobjects` are not exposed. Always trust the live `tools/list` over any doc.
+With the three standard cart tools enabled, this version exposes **21 tools** across catalog/search, FoV, Shopify read-only, cart, UCP catalog, RFQ, and purchase-handoff. Checkout tools, `cancel_cart`, and `read_shopify_metaobjects` remain excluded from that configuration. Always trust the live `tools/list` over any doc.
 
 Key tools:
 
@@ -70,8 +70,9 @@ The endpoint is public and unauthenticated, so `read_shopify_products` returns
 **only data that is already public on commonlands.com** (enforced server-side
 in `src/shopify-read-adapter.ts`, see `PUBLIC_DATA_POLICY`):
 
-- **Active products only.** DRAFT and ARCHIVED products are filtered out and
-  the internal `status` field is never returned.
+- **Published active products only.** Products must be ACTIVE and have a
+  Shopify-provided Online Store URL on commonlands.com. An ACTIVE product
+  with no publication is filtered out; the adapter never invents its URL.
 - **No exact inventory.** Variants carry a coarse `availability` signal
   (`in_stock` / `low_stock` / `out_of_stock` / `untracked`); raw counts and
   inventory item IDs are never returned.
@@ -166,6 +167,17 @@ curl "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/analy
 ```
 
 Use `blob4` to see which MCP tools agents actually call. High-call/high-success tools are candidates for deeper investment; low-call or repeated-error tools are candidates for better descriptions, consolidation, or deprecation. Keep Cloudflare invocation logs enabled for request/response metadata, but use Analytics Engine for tool-level decisions because it captures the JSON-RPC method and tool name without storing request arguments.
+
+Starting with **0.4.2**, failed connector operations also set MCP `isError: true`
+and record `tool_error_not_configured`, `tool_error_invalid_request`,
+`tool_error_shopify_error`, or `tool_error_delivery_failed` in `blob5`.
+Successful RFQ previews still count as successful calls; they do not mean an
+email was delivered. Client labels describe software, not unique people.
+
+Earlier versions recorded these application failures as `ok`, so historical
+success rates can be overstated. Their true outcomes cannot be reconstructed
+from this dataset, because it deliberately excludes request/response payloads.
+Filter by `blob8` (deployed version) when comparing corrected success rates.
 
 ## Quick client setup
 

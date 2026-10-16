@@ -11,8 +11,8 @@ export interface ShopifyReadAdapterEnv extends ShopifyReadonlyEnv {
  * This adapter serves an unauthenticated public MCP endpoint, so it must only
  * ever return data that is already public on commonlands.com:
  *
- * - Products: ACTIVE products only. DRAFT and ARCHIVED products are filtered
- *   out server-side and the internal `status` field is never returned.
+ * - Products: ACTIVE products published to the Online Store only, with a
+ *   Shopify-provided Commonlands product URL. Internal status is not returned.
  * - Inventory: exact quantities are admin-only. Variants expose a coarse
  *   `availability` signal (in_stock / low_stock / out_of_stock / untracked)
  *   derived from tracked inventory; raw counts and inventory item IDs are
@@ -640,8 +640,7 @@ function errorMessage(error: unknown): string {
 
 function normalizeProductByHandle(product: ProductNode | null | undefined, includeMetafields: boolean): ShopifyReadonlyProduct[] {
   if (!product) return [];
-  // Public-data policy: only ACTIVE products exist on the public surface.
-  if (!isActiveProduct(product)) return [];
+  if (!isPublicProduct(product)) return [];
   const productId = stringOrUndefined(product.id) ?? 'unknown-product';
   const normalized = buildProduct(productId, product, includeMetafields);
   normalized.variants = normalizeVariants(product.variants?.nodes ?? [], includeMetafields);
@@ -675,8 +674,7 @@ function normalizeProducts(nodes: ProductVariantNode[], includeMetafields: boole
 
   for (const variant of nodes) {
     const product = variant.product;
-    // Public-data policy: only ACTIVE products exist on the public surface.
-    if (!isActiveProduct(product)) continue;
+    if (!isPublicProduct(product)) continue;
     const productId = stringOrUndefined(product?.id) ?? 'unknown-product';
     const existing = byProductId.get(productId) ?? buildProduct(productId, product, includeMetafields);
 
@@ -688,8 +686,18 @@ function normalizeProducts(nodes: ProductVariantNode[], includeMetafields: boole
   return [...byProductId.values()];
 }
 
-function isActiveProduct(product: ProductNode | null | undefined): boolean {
-  return stringOrUndefined(product?.status)?.toUpperCase() === 'ACTIVE';
+function publicProductUrl(product: ProductNode | null | undefined): string | undefined {
+  const value = safePublicUrl(product?.onlineStoreUrl);
+  if (!value) return undefined;
+  const url = new URL(value);
+  return url.hostname === 'commonlands.com' && url.pathname.startsWith('/products/')
+    ? value : undefined;
+}
+
+function isPublicProduct(product: ProductNode | null | undefined): boolean {
+  // ACTIVE alone does not mean published. Shopify returns a null onlineStoreUrl
+  // for products that are not published to the Online Store.
+  return stringOrUndefined(product?.status)?.toUpperCase() === 'ACTIVE' && publicProductUrl(product) !== undefined;
 }
 
 function buildProduct(productId: string, product: ProductNode | null | undefined, includeMetafields: boolean): ShopifyReadonlyProduct {
@@ -709,7 +717,7 @@ function buildProduct(productId: string, product: ProductNode | null | undefined
   // public filter, so the field would only ever leak internal states.
   assignIfPresent(normalized, 'productType', stringOrUndefined(product?.productType));
   assignIfPresent(normalized, 'vendor', stringOrUndefined(product?.vendor));
-  assignIfPresent(normalized, 'productUrl', safePublicUrl(product?.onlineStoreUrl) ?? (handle ? `https://commonlands.com/products/${handle}` : undefined));
+  assignIfPresent(normalized, 'productUrl', publicProductUrl(product));
   return normalized;
 }
 

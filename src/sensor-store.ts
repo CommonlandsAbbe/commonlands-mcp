@@ -12,6 +12,7 @@
 
 import { signDynamoRequest, type AwsCredentials } from './aws-sigv4';
 import type { SensorCatalogItem } from './catalog';
+import { fetchWithTimeout, readJsonWithLimit } from './http-safety';
 
 export interface SensorStoreEnv {
   SENSOR_DDB_TABLE?: string;
@@ -28,6 +29,8 @@ type DdbItem = Record<string, DdbValue>;
 const MICRONS_PER_MM = 1000;
 const SCAN_PAGE_LIMIT = 1000;
 const CACHE_TTL_MS = 5 * 60 * 1000;
+const SCAN_TIMEOUT_MS = 4_000;
+const SCAN_MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 
 interface SensorCache {
   sensors: SensorCatalogItem[];
@@ -114,6 +117,7 @@ async function scanSensorTable(env: SensorStoreEnv): Promise<SensorCatalogItem[]
   const sensors: SensorCatalogItem[] = [];
   let exclusiveStartKey: DdbItem | undefined;
   let pages = 0;
+  const deadline = Date.now() + SCAN_TIMEOUT_MS;
 
   do {
     const signed = await signDynamoRequest({
@@ -127,18 +131,21 @@ async function scanSensorTable(env: SensorStoreEnv): Promise<SensorCatalogItem[]
       },
     });
 
-    const response = await fetch(signed.url, {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) throw new Error('DynamoDB sensor scan timed out');
+    const response = await fetchWithTimeout(signed.url, {
       method: 'POST',
       headers: signed.headers,
       body: signed.body,
-    });
+    }, remainingMs, SCAN_MAX_RESPONSE_BYTES);
 
     if (!response.ok) {
-      const detail = await response.text().catch(() => '');
-      throw new Error(`DynamoDB sensor scan failed (HTTP ${response.status}): ${detail.slice(0, 200)}`);
+      throw new Error(`DynamoDB sensor scan failed (HTTP ${response.status})`);
     }
 
-    const parsed = (await response.json()) as { Items?: DdbItem[]; LastEvaluatedKey?: DdbItem };
+    const result = await readJsonWithLimit<{ Items?: DdbItem[]; LastEvaluatedKey?: DdbItem }>(response, 'DynamoDB sensor scan', { maxBytes: SCAN_MAX_RESPONSE_BYTES });
+    if ('error' in result) throw new Error(result.error);
+    const parsed = result.data;
     for (const item of parsed.Items ?? []) {
       const mapped = mapSensorItem(item);
       if (mapped) sensors.push(mapped);

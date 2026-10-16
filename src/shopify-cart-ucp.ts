@@ -113,7 +113,14 @@ export async function callShopifyCartUcp(
     return withConnector(baseResult(operation), 'shopify_error', 'not_connected', [redactSensitiveText(body.data.error.message ?? 'Shopify Cart MCP returned a JSON-RPC error.')], endpoint.url.hostname);
   }
 
+  if (body.data.result?.isError === true) {
+    return withConnector(baseResult(operation), 'shopify_error', 'not_connected', ['Shopify Cart MCP reported a tool execution error.'], endpoint.url.hostname);
+  }
+
   const cart = extractCart(body.data.result);
+  if (!cart) {
+    return withConnector(baseResult(operation), 'shopify_error', 'not_connected', ['Shopify Cart MCP did not return a cart.'], endpoint.url.hostname);
+  }
   return {
     ...baseResult(operation),
     configured: true,
@@ -413,6 +420,7 @@ function isSafeHttpsUrl(value: string): boolean {
 
 interface ShopifyCartMcpResponse {
   result?: {
+    isError?: boolean;
     structuredContent?: {
       cart?: unknown;
     };
