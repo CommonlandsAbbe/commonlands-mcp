@@ -9,6 +9,7 @@ const specs = { weight: 12.5, pixelpitchres: '1.85', flange_dist: 0, mbfl: '3.25
 it.each([
   ['search_lens_catalog', { query: 'CIL250' }, 'results'],
   ['calculate_field_of_view', { lensSku: 'CIL250', sensorPartNumber: 'IMX477' }, 'lenses'],
+  ['compute_fov', { lensSku: 'CIL250', sensorPartNumber: 'IMX477' }, 'lenses'],
   ['compute_fov_catalog', { sensorPartNumber: 'IMX477' }, 'lenses'],
   ['match_lens_to_sensor', { sensorPartNumber: 'IMX477' }, 'recommendations'],
   ['recommend_lenses_for_application', { sensorPartNumber: 'IMX477' }, 'recommendations'],
@@ -16,9 +17,12 @@ it.each([
   ['get_lens_distortion_profile', { lens_sku: 'CIL250' }, 'profile'],
 ] as const)('preserves DynamoDB specifications through %s', async (name, args, collection) => {
   vi.stubGlobal('fetch', vi.fn(async () => Response.json({
-    sensor: { partNumber: 'IMX477' }, count: 2, errors: [],
+    sensor: { partNumber: 'IMX477', alpha: 918273.125, beta: 918273.625 }, count: 2,
+    errors: [{ partNum: 'CIL250', message: 'alpha=918273.125 beta=918273.625' }],
     lenses: ['CIL250', 'CIL078'].map(partNum => ({ partNum, hfov: 60, vfov: 40, dfov: 72,
-      image_circle: 12, efl: 5, f_num: 2, mount: 'M12', ...specs, privateField: 'must not leak' })),
+      image_circle: 12, efl: 5, f_num: 2, mount: 'M12', ...specs, privateField: 'must not leak',
+      alpha: 918273.125, beta: 918273.625, Alpha: 918273.125, Beta: 918273.625,
+      coefficients: { alpha: 918273.125, beta: 918273.625 } })),
   })));
   const response = await worker.fetch(new Request('https://example.test/mcp', {
     method: 'POST', headers: { 'content-type': 'application/json' },
@@ -32,6 +36,8 @@ it.each([
   expect(record).toMatchObject(specs);
   expect(JSON.parse(payload.result.content[0]!.text)).toEqual(sc);
   expect(JSON.stringify(sc)).not.toContain('must not leak');
+  // Check the entire wire response, including text content and backend errors.
+  expect(JSON.stringify(payload)).not.toMatch(/"(?:alpha|beta)"|918273\.(?:125|625)/i);
 });
 
 it('omits absent or invalid specifications and preserves numeric zero', () => {

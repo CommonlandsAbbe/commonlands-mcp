@@ -11,6 +11,7 @@ it.each(['commonlands://lenses/CIL250', 'commonlands://catalog/lenses'])('withho
   const payload = await response.json() as { result: { contents: Array<{ text: string }> } };
   const text = payload.result.contents[0]!.text;
   expect(text).toContain('CIL250');
+  expect(text).not.toMatch(/"(?:alpha|beta)"/i);
   expect(text).not.toMatch(/"(?:price|priceUsd|price_range|availability)"|https:\/\/commonlands.com\/products\/cil250/);
 });
 
@@ -31,6 +32,7 @@ it.each([
   expect(payload.result.structuredContent.commerceLookup).toMatchObject({ tool: 'read_shopify_products' });
   const text = payload.result.content[0]!.text;
   expect(JSON.parse(text)).toEqual(payload.result.structuredContent);
+  expect(text).not.toMatch(/"(?:alpha|beta)"/i);
   expect(text).not.toMatch(/"(?:price|priceUsd|price_range|availability)"|https:\/\/commonlands.com\/products\/cil250/);
 });
 

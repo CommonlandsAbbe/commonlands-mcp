@@ -1975,7 +1975,7 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
     return toolResult(id, {
       schemaVersion: CATALOG_SNAPSHOT.schemaVersion,
       generatedAt: CATALOG_SNAPSHOT.generatedAt,
-      lens,
+      lens: { ...summarizeLens(lens), source: lens.source },
       sourceWarning: FIXTURE_NOT_PRODUCT_TRUTH_WARNING,
     });
   }
