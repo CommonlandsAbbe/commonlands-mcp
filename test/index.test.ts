@@ -590,7 +590,6 @@ describe('Commonlands MCP Worker', () => {
     expect(results).toHaveLength(1);
     expect(results[0]).toMatchObject({
       sku: 'CIL078',
-      productUrl: 'https://commonlands.com/products/cil078',
       mount: 'M12',
       eflMm: 2.8,
       projectionModel: 'projection_polynomial_theta_even_powers',
@@ -3030,8 +3029,6 @@ describe('Commonlands MCP Worker', () => {
       product: {
         sku: 'CIL250',
         handle: 'cil250',
-        productUrl: 'https://commonlands.com/products/cil250',
-        availability: 'in_stock',
       },
       technicalSpecifications: {
         eflMm: 25,
@@ -3364,7 +3361,7 @@ describe('Commonlands MCP Worker', () => {
     expect(searchContent.catalog.products[0]).toMatchObject({
       id: 'gid://commonlands/Product/CIL250',
       handle: 'cil250',
-      variants: [{ id: 'gid://commonlands/ProductVariant/CIL250', sku: 'CIL250', price: { amount: 3400, currency: 'USD' } }],
+      variants: [{ id: 'gid://commonlands/ProductVariant/CIL250', sku: 'CIL250' }],
     });
     expect(JSON.stringify(searchContent)).not.toMatch(/docsend|secret|shpat|signedUrl/i);
 
@@ -3404,7 +3401,6 @@ describe('Commonlands MCP Worker', () => {
       correctionStatus: 'fixture_dual_channel_transaction_plan_no_mutation',
       product: {
         sku: 'CIL250',
-        productUrl: 'https://commonlands.com/products/cil250',
         variantId: 'gid://commonlands/ProductVariant/CIL250',
       },
       context: {
@@ -3479,7 +3475,6 @@ describe('Commonlands MCP Worker', () => {
       quantity: 3,
       product: {
         sku: 'CIL250',
-        productUrl: 'https://commonlands.com/products/cil250',
         variantId: 'gid://commonlands/ProductVariant/CIL250',
       },
       transaction: {

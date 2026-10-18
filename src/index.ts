@@ -1326,7 +1326,7 @@ async function resourceReadResponse(id: unknown, params: unknown, env: Env): Pro
           text: JSON.stringify({
             schemaVersion: CATALOG_SNAPSHOT.schemaVersion,
             generatedAt: CATALOG_SNAPSHOT.generatedAt,
-            lenses: CATALOG_SNAPSHOT.lenses.map(summarizeLens),
+            lenses: CATALOG_SNAPSHOT.lenses.map(lens => omitFixtureCommerce(summarizeLens(lens))),
           }),
         },
       ],
@@ -1381,8 +1381,8 @@ async function resourceReadResponse(id: unknown, params: unknown, env: Env): Pro
           mimeType: 'application/json',
           text: JSON.stringify({
             schemaVersion: 'commonlands.lens_resource.v1',
-            lens: summarizeLens(lens),
-            distortionProfile: buildLensDistortionProfile(lens),
+            lens: omitFixtureCommerce(summarizeLens(lens)),
+            distortionProfile: omitFixtureCommerce(buildLensDistortionProfile(lens)),
             sourceWarning: FIXTURE_NOT_PRODUCT_TRUTH_WARNING,
           }),
         },
@@ -2429,6 +2429,12 @@ function isCheckoutTool(name: unknown): name is CheckoutOperation {
 }
 
 function toolResult(id: unknown, structuredContent: unknown): Response {
+  if (isRecord(structuredContent) && structuredContent.sourceWarning === FIXTURE_NOT_PRODUCT_TRUTH_WARNING) {
+    structuredContent = {
+      ...omitFixtureCommerce(structuredContent) as Record<string, unknown>,
+      commerceLookup: { tool: 'read_shopify_products', reason: 'Fixture prices, availability and product URLs are withheld; resolve live Shopify product truth.' },
+    };
+  }
   return rpcResult(id, {
     ...(toolFailureStatus(structuredContent) ? { isError: true } : {}),
     structuredContent,
@@ -2439,6 +2445,18 @@ function toolResult(id: unknown, structuredContent: unknown): Response {
       },
     ],
   });
+}
+
+// Apply at the public boundary, including nested UCP variants and purchase routes.
+// Never replace a stale fixture price with another hard-coded price.
+function omitFixtureCommerce(value: unknown): unknown {
+  if (typeof value === 'string' && CATALOG_SNAPSHOT.lenses.some(lens => lens.productUrl === value)) return undefined;
+  if (Array.isArray(value)) return value.map(omitFixtureCommerce);
+  if (!isRecord(value)) return value;
+  const withheld = new Set(['price', 'priceUsd', 'price_range', 'productUrl', 'url', 'availability']);
+  return Object.fromEntries(Object.entries(value)
+    .filter(([key]) => !withheld.has(key))
+    .map(([key, item]) => [key, omitFixtureCommerce(item)]));
 }
 
 function toolFailureStatus(content: unknown): string | undefined {

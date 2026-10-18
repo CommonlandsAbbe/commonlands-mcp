@@ -127,6 +127,14 @@ model as Shopify's own public Storefront cart — but they are bounded:
 
 ## Observability
 
+Version 0.4.2 also withholds fixture prices, availability, and product URLs from
+legacy tool responses (including nested UCP variants and purchase routes) and
+catalog resources. Use `read_shopify_products` for current commerce values;
+fixture responses provide a `commerceLookup` instruction instead of a stale quote.
+When a horizontal FoV target is supplied, ranking prioritizes full sensor coverage,
+then absolute target error, then heuristic score and SKU. Capped scores no longer
+cause an exact target match to lose to an alphabetically earlier lens.
+
 The Worker can write privacy-safe request/tool telemetry when a Cloudflare Analytics Engine binding named `MCP_ANALYTICS` is configured. Telemetry records only method, path, MCP method, tool name, status, client label, environment/version, HTTP status, and duration. It does **not** record request arguments, Shopify payloads, customer data, product IDs, cart IDs, secrets, or response bodies.
 
 Example binding:
