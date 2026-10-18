@@ -267,13 +267,33 @@ curl -X POST http://localhost:8787/mcp \
 
 ## Deploy
 
-Run verification first, then deploy through CI so `/healthz` receives production build metadata (`ENVIRONMENT=production`, package `VERSION`, and `GIT_SHA=$GITHUB_SHA`). The source `wrangler.toml` intentionally does not define deployable local metadata placeholders.
+Production deployment is manual from a trusted computer using Wrangler's browser
+OAuth login. GitHub runs checks only; no Cloudflare deployment token is required
+in GitHub Actions. Merge the reviewed release branch and pull it before deploying.
+The source `wrangler.toml` intentionally does not define local build metadata.
 
-```bash
+```powershell
+npm ci
 npm run verify
-npm run deploy:ci
+# Clear token overrides in this terminal so Wrangler uses browser OAuth.
+Remove-Item Env:CLOUDFLARE_API_TOKEN, Env:CF_API_TOKEN, Env:CLOUDFLARE_API_KEY, Env:CF_API_KEY -ErrorAction SilentlyContinue
+npx wrangler login
+npx wrangler whoami
+npm run deploy
+Invoke-RestMethod https://mcp.commonlands.com/healthz
 ```
 
-For an approved manual deploy, `npm run deploy` runs `scripts/deploy.mjs`,
+Stop if any command fails. Confirm `whoami` has access to the account in
+`wrangler.toml`. After deployment, confirm `/healthz` reports the expected version
+and Git commit, then run the client smoke tests in
+[`docs/client-connections.md`](docs/client-connections.md).
+
+`npm run deploy` runs `scripts/deploy.mjs`,
 which deploys with `--keep-vars` and injects the same production build
 metadata. `npm run deploy:raw` is the unwrapped Wrangler deploy command.
+
+Wrangler stores OAuth credentials locally outside the repository. Never commit
+credentials. The retired GitHub `CLOUDFLARE_API_TOKEN` secret can be removed in
+repository Settings > Secrets and variables > Actions; deleting the workflow
+does not delete stored secrets. The separate analytics token is not a deployment
+credential. See [Wrangler authentication](https://developers.cloudflare.com/workers/wrangler/commands/general/).

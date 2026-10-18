@@ -10,6 +10,36 @@ Use the live `tools/list` result as the source of truth for enabled tools. At th
 
 ## Recommended agent instruction
 
+A public URL or registry listing enables discovery, not automatic installation.
+Each user or workspace must connect the MCP server or install a published
+integration before its tools can be called in their chats.
+
+### ChatGPT connection and acceptance test
+
+1. Open ChatGPT Plugins, select the plus button, then Add custom MCP server
+   (subject to account and workspace policy).
+2. Name it Commonlands Optics and enter `https://mcp.commonlands.com/mcp`.
+   Choose no authentication for this public endpoint; never enter backend secrets.
+3. Create it as a plugin, inspect the discovered tools, and install it.
+4. Start a new conversation and select Commonlands using `@`.
+5. Ask for live CIL250 price and product URL, then AR0234 lenses near 60 degrees
+   horizontal FoV. Inspect actual tool calls: `read_shopify_products` and
+   `match_lens_to_sensor` should run. A prose answer alone does not prove connection.
+6. Confirm the live product link works and the exact 60-degree candidate ranks
+   first among lenses with full sensor coverage. Compare with direct smoke tests
+   below; record errors instead of substituting fixture prices.
+
+After tool metadata changes, refresh the connection and retest in a new chat.
+For public distribution, package the MCP connection, complete publisher
+verification, submit to OpenAI's plugin directory for review, then publish after
+approval. Users still install the plugin. An MCP Registry release is separate
+from OpenAI directory approval.
+
+Sources: [Connect and test](https://developers.openai.com/plugins/deploy/connect-chatgpt)
+and [Submit and publish](https://developers.openai.com/plugins/deploy/submission).
+
+### Instructions for a connected agent
+
 Add this instruction near the MCP connection config or in the client’s project instructions:
 
 ```text
