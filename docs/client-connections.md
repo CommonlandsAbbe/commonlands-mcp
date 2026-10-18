@@ -249,6 +249,27 @@ curl -X POST https://mcp.commonlands.com/mcp \
 
 ## Troubleshooting
 
+### Live DynamoDB lens specifications
+
+Live FoV results (`lenses[]`, or `details.lenses[]` in `calculate_field_of_view`), live catalog search (`results[]`), ranking and
+comparison results (`recommendations[].lens`), and live distortion profiles
+(`profile`) preserve these optional source fields:
+
+| Field | Source meaning |
+|---|---|
+| `weight` | Lens weight |
+| `pixelpitchres` | Lens pixel-pitch resolution rating; distinct from sensor pixel pitch |
+| `flange_dist` | Source flange distance; confirm reference surfaces before treating it as flange height |
+| `mbfl` | Source mechanical back focal length |
+| `max_diameter` | Maximum diameter |
+
+Values retain the backend's number or string representation. No unit conversion
+or missing-value defaults are applied. Fields absent from the Lambda response
+remain absent, and fixture-only tools do not invent them. The FoV Lambda must
+include these attributes in its DynamoDB projection and returned lens objects;
+adding attributes to the database alone is insufficient. This repository contains
+the MCP adapter, not that Lambda's implementation.
+
 - If the client connects but shows no tools, run a direct `tools/list` smoke test and refresh/restart the client.
 - If a client rejects `serverUrl`, try `url`; if it rejects remote HTTP entirely, use `mcp-remote` through `npx`.
 - If product facts conflict, trust `read_shopify_products` over fixture catalog tools.

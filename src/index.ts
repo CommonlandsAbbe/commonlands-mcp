@@ -1,3 +1,4 @@
+import { lensSpecifications, type LensSpecifications } from './lens-specifications';
 import {
   assertSafePublicCatalogUrls,
   CATALOG_SNAPSHOT,
@@ -1924,6 +1925,7 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
                 f_number: liveLens.fNumber ?? null,
                 mount: liveLens.mount ?? null,
                 lens_type: liveLens.lensType ?? null,
+                ...lensSpecifications(liveLens),
                 source: 'aws-lambda-dynamodb-readonly',
                 warning:
                   'Do not invent polynomial coefficients or claim measured distortion correction unless distortion_status is calculated.',
@@ -2497,7 +2499,7 @@ interface LiveFovResponse {
   errors?: unknown;
 }
 
-interface SanitizedFovLens {
+interface SanitizedFovLens extends LensSpecifications {
   partNum?: string;
   hfov?: number;
   vfov?: number;
@@ -2666,6 +2668,7 @@ function toLiveLensInput(raw: SanitizedFovLens, sensor: SensorCatalogItem): Live
     maxFovDeg: diagonalDeg,
     productUrl: raw.url ?? '',
     resolution: raw.resolution ?? 'unknown',
+    ...lensSpecifications(raw),
     fov: {
       horizontalDeg,
       verticalDeg,
@@ -2840,6 +2843,7 @@ function sanitizeFovLens(value: unknown): SanitizedFovLens | null {
   const dfov = firstNumber(lens.dfov, lens.diagonalFovDeg);
   const sanitized: SanitizedFovLens = {
     ...(partNum ? { partNum } : {}),
+    ...lensSpecifications(lens),
     ...numberField('hfov', hfov),
     ...numberField('vfov', vfov),
     ...numberField('dfov', dfov),
@@ -3289,6 +3293,7 @@ function searchLiveLenses(
     imageCircleMm: lens.imageCircleMm,
     resolution: lens.resolution,
     productUrl: lens.productUrl,
+    ...lensSpecifications(lens),
   }));
 }
 

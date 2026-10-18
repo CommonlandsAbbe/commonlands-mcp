@@ -1,8 +1,9 @@
 import { CATALOG_SNAPSHOT, type LensCatalogItem, type SensorCatalogItem } from './catalog';
 import { computeFov, type FovResult } from './optics';
+import { lensSpecifications, type LensSpecifications } from './lens-specifications';
 
 export interface LensRecommendation {
-  lens: {
+  lens: LensSpecifications & {
     sku: string;
     title: string;
     handle: string;
@@ -48,7 +49,7 @@ export interface CompareLensesInput {
 // Normalized lens record sourced from the LIVE FoV backend (AWS Lambda + DynamoDB
 // lens catalog). Carries the real specs and the backend's already-computed FoV, so
 // the ranking tools score against product truth instead of the scrambled fixture.
-export interface LiveLensInput {
+export interface LiveLensInput extends LensSpecifications {
   sku: string;
   mount: string;
   lensType: string;
@@ -193,6 +194,7 @@ function scoreLiveLens(lens: LiveLensInput, input: MatchLensesInput): LensRecomm
       imageCircleMm: lens.imageCircleMm,
       maxFovDeg: lens.maxFovDeg,
       availability: 'unknown',
+      ...lensSpecifications(lens),
     },
     score: round(Math.max(0, Math.min(100, score)), 1),
     rank: 0,
