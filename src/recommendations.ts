@@ -1,8 +1,9 @@
 import { CATALOG_SNAPSHOT, type LensCatalogItem, type SensorCatalogItem } from './catalog';
 import { computeFov, type FovResult } from './optics';
+import { lensSpecifications, type LensSpecifications } from './lens-specifications';
 
 export interface LensRecommendation {
-  lens: {
+  lens: LensSpecifications & {
     sku: string;
     title: string;
     handle: string;
@@ -48,7 +49,7 @@ export interface CompareLensesInput {
 // Normalized lens record sourced from the LIVE FoV backend (AWS Lambda + DynamoDB
 // lens catalog). Carries the real specs and the backend's already-computed FoV, so
 // the ranking tools score against product truth instead of the scrambled fixture.
-export interface LiveLensInput {
+export interface LiveLensInput extends LensSpecifications {
   sku: string;
   mount: string;
   lensType: string;
@@ -70,7 +71,7 @@ export function matchLensesToSensor(input: MatchLensesInput): LensRecommendation
   return CATALOG_SNAPSHOT.lenses
     .filter((lens) => matchesMount(lens, input.mount))
     .map((lens) => scoreLens(lens, sensor, input))
-    .sort(sortRecommendations)
+    .sort((a, b) => sortRecommendations(a, b, input))
     .slice(0, maxResults)
     .map((recommendation, index) => ({ ...recommendation, rank: index + 1 }));
 }
@@ -79,7 +80,7 @@ export function recommendLensesForApplication(input: RecommendApplicationInput):
   const base = matchLensesToSensor({ ...input, maxResults: CATALOG_SNAPSHOT.lenses.length });
   return base
     .map((recommendation) => applyApplicationPreferences(recommendation, input))
-    .sort(sortRecommendations)
+    .sort((a, b) => sortRecommendations(a, b, input))
     .slice(0, clampMaxResults(input.maxResults))
     .map((recommendation, index) => ({ ...recommendation, rank: index + 1 }));
 }
@@ -96,7 +97,7 @@ export function compareLenses(input: CompareLensesInput): LensRecommendation[] {
         ...(input.workingDistanceMm !== undefined ? { workingDistanceMm: input.workingDistanceMm } : {}),
       });
     })
-    .sort(sortRecommendations)
+    .sort((a, b) => sortRecommendations(a, b, input))
     .map((recommendation, index) => ({ ...recommendation, rank: index + 1 }));
 }
 
@@ -115,7 +116,7 @@ export function matchLensesToSensorLive(
   return lenses
     .filter((lens) => (input.mount ? lens.mount.toLowerCase() === input.mount.trim().toLowerCase() : true))
     .map((lens) => scoreLiveLens(lens, input))
-    .sort(sortRecommendations)
+    .sort((a, b) => sortRecommendations(a, b, input))
     .slice(0, maxResults)
     .map((recommendation, index) => ({ ...recommendation, rank: index + 1 }));
 }
@@ -127,7 +128,7 @@ export function recommendLensesForApplicationLive(
   const base = matchLensesToSensorLive(lenses, { ...input, maxResults: lenses.length || 1 });
   return base
     .map((recommendation) => applyApplicationPreferences(recommendation, input))
-    .sort(sortRecommendations)
+    .sort((a, b) => sortRecommendations(a, b, input))
     .slice(0, clampMaxResults(input.maxResults))
     .map((recommendation, index) => ({ ...recommendation, rank: index + 1 }));
 }
@@ -147,7 +148,7 @@ export function compareLensesLive(
         ...(input.workingDistanceMm !== undefined ? { workingDistanceMm: input.workingDistanceMm } : {}),
       });
     })
-    .sort(sortRecommendations)
+    .sort((a, b) => sortRecommendations(a, b, input))
     .map((recommendation, index) => ({ ...recommendation, rank: index + 1 }));
 }
 
@@ -193,6 +194,7 @@ function scoreLiveLens(lens: LiveLensInput, input: MatchLensesInput): LensRecomm
       imageCircleMm: lens.imageCircleMm,
       maxFovDeg: lens.maxFovDeg,
       availability: 'unknown',
+      ...lensSpecifications(lens),
     },
     score: round(Math.max(0, Math.min(100, score)), 1),
     rank: 0,
@@ -336,7 +338,15 @@ function summarizeLensForRecommendation(lens: LensCatalogItem): LensRecommendati
   };
 }
 
-function sortRecommendations(a: LensRecommendation, b: LensRecommendation): number {
+function sortRecommendations(a: LensRecommendation, b: LensRecommendation, input: MatchLensesInput | CompareLensesInput): number {
+  // Target matching is lexicographic: full coverage, smallest FoV error, then
+  // heuristic score and SKU. Score saturation must not hide an exact match.
+  if ('desiredHorizontalFovDeg' in input && input.desiredHorizontalFovDeg !== undefined) {
+    const coverage = Number(a.imageCircle.clipped) - Number(b.imageCircle.clipped);
+    if (coverage) return coverage;
+    const delta = Math.abs(a.fov.horizontalDeg - input.desiredHorizontalFovDeg) - Math.abs(b.fov.horizontalDeg - input.desiredHorizontalFovDeg);
+    if (delta) return delta;
+  }
   if (b.score !== a.score) return b.score - a.score;
   return a.lens.sku.localeCompare(b.lens.sku);
 }
