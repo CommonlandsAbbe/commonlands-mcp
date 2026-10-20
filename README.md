@@ -297,3 +297,17 @@ credentials. The retired GitHub `CLOUDFLARE_API_TOKEN` secret can be removed in
 repository Settings > Secrets and variables > Actions; deleting the workflow
 does not delete stored secrets. The separate analytics token is not a deployment
 credential. See [Wrangler authentication](https://developers.cloudflare.com/workers/wrangler/commands/general/).
+
+## License and private backend
+
+Apache-2.0 covers the Commonlands-owned source code distributed in this repository.
+The separately hosted Commonlands Lambda implementation and private optical
+datasets are not distributed or licensed under this repository's license.
+Applicable third-party licenses and notices remain in effect.
+
+The public MCP endpoint provides access to the hosted service without requiring
+its backend source code. Users connect to `https://mcp.commonlands.com/mcp`;
+the service calls the private Lambda backend using server-side credentials.
+Independently hosting this adapter requires an authorized compatible backend;
+the source-code license does not grant backend credentials or access to private
+code or datasets.
