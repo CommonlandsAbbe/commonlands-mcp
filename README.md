@@ -51,7 +51,7 @@ If fixture data conflicts with `read_shopify_products` or the live FoV/sensor ba
 
 ## Current live surface
 
-With the three standard cart tools enabled, this version exposes **21 tools** across catalog/search, FoV, Shopify read-only, cart, UCP catalog, RFQ, and purchase-handoff. Checkout tools, `cancel_cart`, and `read_shopify_metaobjects` remain excluded from that configuration. Always trust the live `tools/list` over any doc.
+The production configuration exposes **24 tools**, including `create_cart`, `get_cart`, `update_cart`, `cancel_cart`, `create_checkout`, and `get_checkout`. Commerce uses Shopify UCP at `https://commonlands.com/api/ucp/mcp`. `complete_checkout` is disabled; customers review and pay on Shopify. Always trust live `tools/list`. See [cart and checkout integration](docs/commerce.md).
 
 Key tools:
 
@@ -60,7 +60,7 @@ Key tools:
 - Legacy hidden aliases (still dispatch for old clients, not listed in `tools/list`): `compute_fov`, `compute_fov_catalog`, `match_lenses_to_sensor`, `search_lenses`, `get_lens_details`.
 - Resources/prompts: `commonlands://sensors/{part}`, `commonlands://lenses/{sku}`, `commonlands://catalog/sensors`, `commonlands://catalog/lenses`, and prompt `select_lens_for_sensor_fov_working_distance`.
 - Live Shopify read-only truth: `read_shopify_products`, `get_shopify_readonly_config_status`.
-- Buyer-confirmed Shopify cart handoff: `create_cart`, `get_cart`, `update_cart` when visible in `tools/list`.
+- Buyer-confirmed Shopify cart handoff: `create_cart`, `get_cart`, `update_cart`, `cancel_cart`, followed by `create_checkout` and `get_checkout` when visible in `tools/list`.
 - RFQ / question handoff: `submit_rfq` forwards a buyer quote request or question to the fixed Commonlands engineering inbox (SendGrid). The agent cannot choose the recipient; it sends an inquiry only (no order, payment, or Shopify write) and stays inert (routes to the contact page) until `SENDGRID_API_KEY` + `RFQ_TO_EMAIL` + `RFQ_FROM_EMAIL` are configured.
 - Diagnostics/readiness: `get_catalog_snapshot_status`, `get_shopify_ucp_readiness`, `prepare_shopify_purchase_handoff`, `get_purchase_route_options`.
 
@@ -94,7 +94,7 @@ model as Shopify's own public Storefront cart — but they are bounded:
 
 - **Per-IP rate limits** (Workers Rate Limiting API, `wrangler.toml`):
   120 requests/min per IP across `/mcp`, and 10 cart mutations/min per IP for
-  `create_cart`/`update_cart`. Exceeding either returns HTTP 429 with
+  cart mutations, checkout creation, and RFQ submissions. Exceeding either returns HTTP 429 with
   `retry-after: 60`.
 - **Strict payloads:** 1–25 line items per cart, quantity 1–999 per line, and
   item IDs must be live Shopify ProductVariant GIDs — fixture IDs, SKUs, and
@@ -103,15 +103,13 @@ model as Shopify's own public Storefront cart — but they are bounded:
   cart state, TTL, and expiry (`expiryAuthority: shopify_cart_ttl_expires_at`)
   belong to Shopify, which prunes abandoned carts automatically. No cart,
   session, customer, or payment state is ever stored in the Worker.
-- **No checkout surface:** checkout/cancel tools are hidden; the server cannot
-  take payment, create orders or customers, apply discounts, or write
-  inventory, so an abusive caller cannot mutate anything durable.
+- **Checkout handoff:** the agent prepares a checkout and returns Shopify’s `continue_url`. Cart conversion requires the cart owner token; checkout reads require a separate checkout owner token. The server cannot complete payment or place an order.
 
 ## Safety boundaries
 
 - Do not use fixture prices, availability, product URLs, SKU variants, or IDs as final commerce truth.
 - Do not create or update carts unless the buyer has confirmed live Variant GIDs and quantities.
-- Do not use Checkout MCP yet; checkout endpoints will be enabled later after validation and approval.
+- Call `create_checkout` after buyer confirmation, preserve `checkout_access_token`, and return `checkout.continue_url`. The buyer reviews and pays on Shopify.
 - Do not ask for or transmit card numbers, CVV/CVC, payment tokens, passwords, or customer account credentials.
 - Do not perform Shopify product, variant, collection, tag, metafield, inventory, order, customer, discount, RFQ, Acumatica, or database writes.
 - Do not expose gated datasheet URLs or backend secrets.

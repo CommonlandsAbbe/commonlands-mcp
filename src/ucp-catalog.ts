@@ -2,6 +2,7 @@ import { CATALOG_SNAPSHOT, getLensBySku, searchLenses, type LensCatalogItem } fr
 import { buildProductPageDetails } from './product-page';
 
 export const UCP_VERSION = '2026-04-08' as const;
+export const COMMERCE_UCP_VERSION = '2026-08-25' as const;
 const PUBLIC_MCP_ORIGIN = 'https://mcp.commonlands.com';
 const PUBLIC_MCP_ENDPOINT = `${PUBLIC_MCP_ORIGIN}/mcp`;
 
@@ -113,38 +114,23 @@ export interface ShopifyPurchaseHandoff {
   };
 }
 
-export interface UcpDiscoveryProfile {
-  version: typeof UCP_VERSION;
-  transport: 'mcp';
-  endpoint: string;
-  capabilities: [
-    'dev.ucp.shopping.catalog.search',
-    'dev.ucp.shopping.catalog.lookup',
-    'dev.ucp.shopping.cart',
+export function buildUcpDiscoveryProfile(_origin: string, commerce: { cartEnabled?: boolean; checkoutEnabled?: boolean } = {}) {
+  const capabilities = [
+    'dev.ucp.shopping.catalog.search', 'dev.ucp.shopping.catalog.lookup',
+    ...(commerce.cartEnabled ? ['dev.ucp.shopping.cart'] : []),
+    ...(commerce.checkoutEnabled ? ['dev.ucp.shopping.checkout'] : []),
   ];
-  schema: {
-    name: 'Commonlands catalog profile';
-    url: string;
-  };
-  metadata: {
-    service: 'commonlands-mcp';
-    mode: 'catalog_fixture_with_live_shopify_read_and_cart_proxy_when_configured';
-    liveConnectors: 'shopify_read_only_and_storefront_cart_configured_separately';
-    cartPersistence: 'shopify_owned_when_cart_tools_exposed';
-    cartBoundary: 'tools_list_is_authoritative_create_get_update_cart_only_when_enabled_cancel_checkout_hidden_currently';
-  };
-}
-
-export function buildUcpDiscoveryProfile(_origin: string): UcpDiscoveryProfile {
   return {
+    // UCP negotiation requires the nested version and capability descriptors.
+    // Keep legacy fields for existing Commonlands discovery clients.
+    ucp: {
+      version: COMMERCE_UCP_VERSION,
+      capabilities: Object.fromEntries(capabilities.map(name => [name, [{ version: COMMERCE_UCP_VERSION }]])),
+    },
     version: UCP_VERSION,
     transport: 'mcp',
     endpoint: PUBLIC_MCP_ENDPOINT,
-    capabilities: [
-      'dev.ucp.shopping.catalog.search',
-      'dev.ucp.shopping.catalog.lookup',
-      'dev.ucp.shopping.cart',
-    ],
+    capabilities,
     schema: {
       name: 'Commonlands catalog profile',
       url: `${PUBLIC_MCP_ORIGIN}/schemas/ucp-catalog.json`,
@@ -154,7 +140,7 @@ export function buildUcpDiscoveryProfile(_origin: string): UcpDiscoveryProfile {
       mode: 'catalog_fixture_with_live_shopify_read_and_cart_proxy_when_configured',
       liveConnectors: 'shopify_read_only_and_storefront_cart_configured_separately',
       cartPersistence: 'shopify_owned_when_cart_tools_exposed',
-      cartBoundary: 'tools_list_is_authoritative_create_get_update_cart_only_when_enabled_cancel_checkout_hidden_currently',
+      cartBoundary: 'tools_list_is_authoritative_owner_bound_cart_and_checkout_handoff_payment_on_shopify',
     },
   };
 }

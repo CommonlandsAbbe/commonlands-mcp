@@ -13,7 +13,7 @@ export interface ShopifyUcpReadiness {
   readiness: {
     status: 'catalog_fixture_ready_live_shopify_read_and_cart_proxy_configured_separately';
     liveConnectors: 'shopify_read_only_configured_separately';
-    cartCheckout: 'cart_proxy_create_get_update_when_enabled_checkout_hidden';
+    cartCheckout: 'owner_bound_cart_and_checkout_handoff_when_enabled';
     customerAccounts: 'not_implemented_requires_oauth_and_protected_customer_data';
     policyFaqs: 'not_implemented_needs_approved_public_policy_source';
   };
@@ -46,7 +46,7 @@ export function getShopifyUcpReadiness(snapshot: CatalogSnapshot = CATALOG_SNAPS
       ucpCatalogVersion: UCP_VERSION,
       referenceTools: ['search_catalog', 'lookup_catalog', 'get_product'],
       nonGoals: [
-        'Cart tools create_cart, get_cart, and update_cart may be exposed when explicitly approved/configured; cancel_cart and checkout tools remain hidden until endpoint support and approval are verified.',
+        'Cart create/read/update/cancel and checkout create/read are available when enabled. Payment completion remains on Shopify.',
         'Customer-account/order tools require OAuth and protected customer-data approval before any implementation.',
         'Live catalog connectors remain separate from the Cart/Checkout MCP proxies and require audited read-only enrichment before replacing fixture defaults.',
       ],
@@ -54,7 +54,7 @@ export function getShopifyUcpReadiness(snapshot: CatalogSnapshot = CATALOG_SNAPS
     readiness: {
       status: 'catalog_fixture_ready_live_shopify_read_and_cart_proxy_configured_separately',
       liveConnectors: 'shopify_read_only_configured_separately',
-      cartCheckout: 'cart_proxy_create_get_update_when_enabled_checkout_hidden',
+      cartCheckout: 'owner_bound_cart_and_checkout_handoff_when_enabled',
       customerAccounts: 'not_implemented_requires_oauth_and_protected_customer_data',
       policyFaqs: 'not_implemented_needs_approved_public_policy_source',
     },
@@ -85,12 +85,12 @@ export function getShopifyUcpReadiness(snapshot: CatalogSnapshot = CATALOG_SNAPS
     ],
     launchBlockers: [
       'Confirm Shopify read-only API path, product IDs, variant IDs, handle mapping, and mechanical drawing metafield/file-reference source.',
-      'Confirm tools/list in the target environment before promising cart support; create_cart/get_cart/update_cart require approval/configuration, while cancel_cart and checkout tools stay hidden until endpoint support and approval are verified.',
+      'Confirm tools/list in the target environment before promising commerce support. Cart and checkout handoff require the configured UCP endpoint, negotiable agent profile, and owner-token secret.',
       'Confirm Cloudflare route, /.well-known/ucp profile, and whether any legacy /sse compatibility endpoint is required.',
       'Confirm public policy/FAQ source if search_shop_policies_and_faqs parity is desired.',
     ],
     safeguards: [
-      'Approved cart tools create/update Shopify-owned cart state only; checkout, customer-account access, order lookup, inventory mutation, product writes, raw payment credentials, and protected customer data remain blocked.',
+      'Cart and checkout handoff operate on Shopify-owned state with owner credentials. Payment completion, customer-account access, order lookup, inventory mutation, product writes, and raw payment credentials remain blocked.',
       'No direct gated-document URLs are emitted.',
       'No credentials, tokens, or signed URLs are stored in fixtures or responses.',
     ],

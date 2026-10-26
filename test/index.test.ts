@@ -284,7 +284,7 @@ describe('Commonlands MCP Worker', () => {
       id: 1,
       result: {
         protocolVersion: '2025-11-25',
-      serverInfo: { name: 'commonlands-mcp', version: '0.4.2' },
+      serverInfo: { name: 'commonlands-mcp', version: '0.4.3' },
         capabilities: { tools: {}, resources: {}, prompts: {} },
       },
     });
@@ -743,7 +743,7 @@ describe('Commonlands MCP Worker', () => {
       readiness: {
         status: 'catalog_fixture_ready_live_shopify_read_and_cart_proxy_configured_separately',
         liveConnectors: 'shopify_read_only_configured_separately',
-        cartCheckout: 'cart_proxy_create_get_update_when_enabled_checkout_hidden',
+        cartCheckout: 'owner_bound_cart_and_checkout_handoff_when_enabled',
         customerAccounts: 'not_implemented_requires_oauth_and_protected_customer_data',
       },
       ucpCatalog: {
@@ -2016,6 +2016,7 @@ describe('Commonlands MCP Worker', () => {
       });
       expect(payload.params.arguments.checkout).toEqual({
         cart_id: 'gid://shopify/Cart/cart_abc123',
+        line_items: [],
         context: { address_country: 'US', address_region: 'CA', postal_code: '92101' },
       });
       return Response.json({
@@ -2039,6 +2040,7 @@ describe('Commonlands MCP Worker', () => {
     const { body } = await rpc('tools/call', {
       name: 'create_checkout',
       arguments: {
+        cart_access_token: await mintCartToken(shopifyCheckoutEnv.CART_TOKEN_SECRET!, 'gid://shopify/Cart/cart_abc123'),
         checkout: {
           cart_id: 'gid://shopify/Cart/cart_abc123',
           context: { address_country: 'US', address_region: 'CA', postal_code: '92101' },
@@ -2086,10 +2088,11 @@ describe('Commonlands MCP Worker', () => {
       });
     }) as typeof fetch;
 
-    const get = await rpc('tools/call', { name: 'get_checkout', arguments: { id: 'gid://shopify/Checkout/chk_abc123' } }, 'get-checkout', shopifyCheckoutEnv);
+    const get = await rpc('tools/call', { name: 'get_checkout', arguments: { id: 'gid://shopify/Checkout/chk_abc123', checkout_access_token: await mintCartToken(shopifyCheckoutEnv.CART_TOKEN_SECRET!, 'checkout:gid://shopify/Checkout/chk_abc123') } }, 'get-checkout', shopifyCheckoutEnv);
     const update = await rpc('tools/call', {
       name: 'update_checkout',
       arguments: {
+        checkout_access_token: await mintCartToken(shopifyCheckoutEnv.CART_TOKEN_SECRET!, 'checkout:gid://shopify/Checkout/chk_abc123'),
         id: 'gid://shopify/Checkout/chk_abc123',
         checkout: { line_items: [{ quantity: 2, item: { id: 'gid://shopify/ProductVariant/12345678901' } }] },
       },
@@ -2097,6 +2100,7 @@ describe('Commonlands MCP Worker', () => {
     const cancel = await rpc('tools/call', {
       name: 'cancel_checkout',
       arguments: {
+        checkout_access_token: await mintCartToken(shopifyCheckoutEnv.CART_TOKEN_SECRET!, 'checkout:gid://shopify/Checkout/chk_abc123'),
         id: 'gid://shopify/Checkout/chk_abc123',
         meta: { 'idempotency-key': '660e8400-e29b-41d4-a716-446655440002' },
       },
@@ -2109,79 +2113,18 @@ describe('Commonlands MCP Worker', () => {
   });
 
 
-  it('proxies complete_checkout only after Shopify checkout authentication verifies buyer and payment details', async () => {
-    const calls: Array<{ body: string }> = [];
-    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
-      const body = String(init?.body ?? '');
-      calls.push({ body });
-      const payload = JSON.parse(body) as { params: { name: string; arguments: Record<string, unknown> } };
-      expect(payload.params.name).toBe('complete_checkout');
-      expect(payload.params.arguments).toMatchObject({
-        id: 'gid://shopify/Checkout/chk_abc123',
-        meta: { 'idempotency-key': '660e8400-e29b-41d4-a716-446655440003' },
-        authentication: {
-          method: 'shopify_checkout_authenticated',
-          buyerVerified: true,
-          paymentAuthorized: true,
-          nameVerified: true,
-          emailVerified: true,
-          phoneVerified: true,
-          addressVerified: true,
-          cardAuthorized: true,
-          authenticatedAt: '2026-05-02T20:15:00.000Z',
-        },
-      });
-      expect(body).not.toMatch(/card_number|4111|cvv|cvc|customer/i);
-      return Response.json({
-        result: {
-          structuredContent: {
-            checkout: {
-              id: 'gid://shopify/Checkout/chk_abc123',
-              status: 'completed',
-              order: { id: 'gid://shopify/Order/ord_123' },
-              authorization: 'Bearer should_not_leak',
-            },
-          },
-        },
-      });
-    }) as typeof fetch;
-
-    const { body } = await rpc('tools/call', {
-      name: 'complete_checkout',
-      arguments: {
-        id: 'gid://shopify/Checkout/chk_abc123',
-        meta: { 'idempotency-key': '660e8400-e29b-41d4-a716-446655440003' },
-        authentication: {
-          method: 'shopify_checkout_authenticated',
-          buyerVerified: true,
-          paymentAuthorized: true,
-          nameVerified: true,
-          emailVerified: true,
-          phoneVerified: true,
-          addressVerified: true,
-          cardAuthorized: true,
-          authenticatedAt: '2026-05-02T20:15:00.000Z',
-        },
+  it('never accepts self-attested payment authorization on the public endpoint', async () => {
+    let called = false;
+    globalThis.fetch = (async () => { called = true; throw new Error('must not call Shopify'); }) as typeof fetch;
+    const { body } = await rpc('tools/call', { name: 'complete_checkout', arguments: {
+      id: 'gid://shopify/Checkout/chk_abc123', authentication: {
+        method: 'shopify_checkout_authenticated', buyerVerified: true, paymentAuthorized: true,
+        nameVerified: true, emailVerified: true, phoneVerified: true, addressVerified: true,
+        cardAuthorized: true, authenticatedAt: new Date().toISOString(),
       },
-    }, 'complete-checkout', shopifyCheckoutEnv);
-
-    expect(getStructuredContent(body)).toMatchObject({
-      operation: 'complete_checkout',
-      connector: { status: 'ok', source: 'shopify_checkout_mcp' },
-      checkout: { id: 'gid://shopify/Checkout/chk_abc123', status: 'completed', order: { id: 'gid://shopify/Order/ord_123' } },
-      safety: {
-        completesCheckout: true,
-        createsOrder: true,
-        capturesPayment: true,
-        readsCustomers: false,
-        createsCustomer: false,
-        mutatesInventory: false,
-        writesCatalog: false,
-        exposesSecrets: false,
-      },
-    });
-    expect(calls).toHaveLength(1);
-    expect(JSON.stringify(getResult(body))).not.toMatch(/shpat|shpss|accessToken|Authorization|Bearer/i);
+    } }, 'complete-disabled', shopifyCheckoutEnv);
+    expect(body.error).toMatchObject({ code: -32601, message: 'Tool not found: complete_checkout' });
+    expect(called).toBe(false);
   });
 
   it('rejects unsafe Checkout MCP requests before calling Shopify', async () => {
@@ -2221,10 +2164,7 @@ describe('Commonlands MCP Worker', () => {
         meta: { 'idempotency-key': '660e8400-e29b-41d4-a716-446655440004' },
       },
     }, 'unsafe-checkout-complete-missing-auth', shopifyCheckoutEnv);
-    expect(getStructuredContent(badCompleteMissingAuth.body)).toMatchObject({
-      connector: { status: 'invalid_request', messages: ['Invalid params: complete_checkout.authentication is required'] },
-      safety: { completesCheckout: true, capturesPayment: true, readsCustomers: false },
-    });
+    expect(badCompleteMissingAuth.body.error).toMatchObject({ code: -32601 });
 
     const badCompleteRawCard = await rpc('tools/call', {
       name: 'complete_checkout',
@@ -2245,9 +2185,7 @@ describe('Commonlands MCP Worker', () => {
         },
       },
     }, 'unsafe-checkout-complete-raw-card', shopifyCheckoutEnv);
-    expect(getStructuredContent(badCompleteRawCard.body)).toMatchObject({
-      connector: { status: 'invalid_request', messages: ['Invalid params: complete_checkout.authentication only accepts Shopify verification flags, not payment or buyer data'] },
-    });
+    expect(badCompleteRawCard.body.error).toMatchObject({ code: -32601 });
 
     const badCancel = await rpc('tools/call', {
       name: 'cancel_checkout',
@@ -2277,7 +2215,7 @@ describe('Commonlands MCP Worker', () => {
     });
     expect(parsed.ucpCatalog.compatibleTools).toEqual(['search_catalog', 'lookup_catalog', 'get_product']);
     expect(parsed.readiness.liveConnectors).toBe('shopify_read_only_configured_separately');
-    expect(parsed.readiness.cartCheckout).toBe('cart_proxy_create_get_update_when_enabled_checkout_hidden');
+    expect(parsed.readiness.cartCheckout).toBe('owner_bound_cart_and_checkout_handoff_when_enabled');
   });
 
   it('reports joined catalog snapshot status and validation without live connectors', async () => {
@@ -3320,7 +3258,7 @@ describe('Commonlands MCP Worker', () => {
     expect(body).toEqual({ error: 'not_found' });
   });
 
-  it('serves a UCP discovery profile that advertises catalog and cart discovery only', async () => {
+  it('serves a UCP discovery profile without disabled commerce capabilities', async () => {
     const response = await fetchWorker('/.well-known/ucp');
     const profile = await response.json() as Record<string, unknown>;
 
@@ -3332,13 +3270,12 @@ describe('Commonlands MCP Worker', () => {
       capabilities: [
         'dev.ucp.shopping.catalog.search',
         'dev.ucp.shopping.catalog.lookup',
-        'dev.ucp.shopping.cart',
       ],
     });
     expect(profile).toMatchObject({
       metadata: {
         cartPersistence: 'shopify_owned_when_cart_tools_exposed',
-        cartBoundary: 'tools_list_is_authoritative_create_get_update_cart_only_when_enabled_cancel_checkout_hidden_currently',
+        cartBoundary: 'tools_list_is_authoritative_owner_bound_cart_and_checkout_handoff_payment_on_shopify',
       },
     });
     expect(JSON.stringify(profile)).not.toMatch(/order|customer/i);

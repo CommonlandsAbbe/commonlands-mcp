@@ -1,9 +1,11 @@
 import { fetchWithTimeout, readJsonWithLimit } from './http-safety';
-import { UCP_VERSION } from './ucp-catalog';
+import { COMMERCE_UCP_VERSION as UCP_VERSION } from './ucp-catalog';
+import { mintCartToken, verifyCartToken } from './cart-token';
 
 export interface ShopifyCheckoutMcpEnv {
   SHOPIFY_CHECKOUT_MCP_ENDPOINT?: string;
   SHOPIFY_UCP_AGENT_PROFILE?: string;
+  CART_TOKEN_SECRET?: string;
 }
 
 export type CheckoutOperation = 'create_checkout' | 'get_checkout' | 'update_checkout' | 'complete_checkout' | 'cancel_checkout';
@@ -33,6 +35,7 @@ export interface ShopifyCheckoutMcpResult {
     messages: string[];
   };
   checkout: unknown | null;
+  checkout_access_token?: string;
   safety: {
     createsCheckout: boolean;
     updatesCheckout: boolean;
@@ -76,6 +79,23 @@ export async function callShopifyCheckoutMcp(
   const normalized = normalizeArgs(operation, args, env.SHOPIFY_UCP_AGENT_PROFILE);
   if ('error' in normalized) return withConnector(baseResult(operation), 'invalid_request', 'not_connected', [normalized.error]);
 
+  // Caller assertions are not proof of payment authorization. Order completion
+  // needs a separate authenticated integration; this public proxy is a handoff.
+  if (operation === 'complete_checkout') {
+    return withConnector(baseResult(operation), 'invalid_request', 'not_connected', ['Complete payment on the Shopify continue_url. Agent order completion is not enabled.']);
+  }
+  const secret = env.CART_TOKEN_SECRET;
+  if (!secret) return withConnector(baseResult(operation), 'not_configured', 'not_connected', ['Checkout owner binding requires CART_TOKEN_SECRET.']);
+  const cartId = isRecord(normalized.args.checkout) ? normalized.args.checkout.cart_id : undefined;
+  if (operation === 'create_checkout' && typeof cartId === 'string'
+      && !await verifyCartToken(secret, cartId, args.cart_access_token)) {
+    return withConnector(baseResult(operation), 'invalid_request', 'not_connected', ['Converting a cart requires its matching cart_access_token from create_cart.']);
+  }
+  if (operation !== 'create_checkout'
+      && !await verifyCartToken(secret, `checkout:${normalized.args.id}`, args.checkout_access_token)) {
+    return withConnector(baseResult(operation), 'invalid_request', 'not_connected', ['Reading or changing a checkout requires its matching checkout_access_token from create_checkout.']);
+  }
+
   let response: Response;
   try {
     response = await fetchWithTimeout(endpoint.url.toString(), {
@@ -107,8 +127,8 @@ export async function callShopifyCheckoutMcp(
     return withConnector(baseResult(operation), 'shopify_error', 'not_connected', ['Shopify Checkout MCP reported a tool execution error.'], endpoint.url.hostname);
   }
 
-  const checkout = body.data.result?.structuredContent?.checkout ? redactUnknown(body.data.result.structuredContent.checkout) : null;
-  if (!checkout) {
+  const checkout = extractCheckout(body.data.result);
+  if (!isRecord(checkout) || typeof checkout.id !== 'string' || 'error' in requiredCheckoutId(checkout.id)) {
     return withConnector(baseResult(operation), 'shopify_error', 'not_connected', ['Shopify Checkout MCP did not return a checkout.'], endpoint.url.hostname);
   }
   return {
@@ -121,6 +141,7 @@ export async function callShopifyCheckoutMcp(
       messages: checkout ? [] : ['Shopify Checkout MCP response did not include structuredContent.checkout.'],
     },
     checkout,
+    ...(operation === 'create_checkout' ? { checkout_access_token: await mintCartToken(secret, `checkout:${checkout.id}`) } : {}),
   };
 }
 
@@ -237,7 +258,11 @@ function normalizeCheckout(value: unknown): { value: NormalizedCheckout } | { er
     checkout.cart_id = normalizedCartId.value;
   }
 
-  if (value.line_items !== undefined) {
+  if (checkout.cart_id) {
+    // Shopify requires this field even though cart conversion uses the cart's
+    // items and ignores overlapping payload fields.
+    checkout.line_items = [];
+  } else if (value.line_items !== undefined) {
     const lineItems = normalizeLineItems(value.line_items);
     if ('error' in lineItems) return lineItems;
     checkout.line_items = lineItems.value;
@@ -269,7 +294,7 @@ function normalizeLineItems(value: unknown): { value: NormalizedLineItem[] } | {
 function normalizeLineItem(value: unknown, index: number): { value: NormalizedLineItem } | { error: string } {
   if (!isRecord(value)) return { error: `Invalid params: checkout.line_items[${index}] must be an object` };
   const quantity = value.quantity;
-  if (typeof quantity !== 'number' || !Number.isFinite(quantity) || quantity < 1 || quantity > 999) {
+  if (typeof quantity !== 'number' || !Number.isInteger(quantity) || quantity < 1 || quantity > 999) {
     return { error: `Invalid params: checkout.line_items[${index}].quantity must be between 1 and 999` };
   }
   const item = value.item;
@@ -327,6 +352,7 @@ function parseEndpoint(value: string | undefined): { url: URL } | { error: strin
   try {
     const url = new URL(value.trim());
     if (url.protocol !== 'https:') return { error: 'SHOPIFY_CHECKOUT_MCP_ENDPOINT must be an HTTPS URL.' };
+    if (url.username || url.password || url.port || url.search || url.hash) return { error: 'SHOPIFY_CHECKOUT_MCP_ENDPOINT must not contain credentials, ports, query parameters, or fragments.' };
     if (!url.pathname.endsWith('/api/checkout/mcp') && !url.pathname.endsWith('/api/ucp/mcp')) {
       return { error: 'SHOPIFY_CHECKOUT_MCP_ENDPOINT must point to /api/checkout/mcp or /api/ucp/mcp.' };
     }
@@ -406,14 +432,29 @@ function isSafeHttpsUrl(value: string): boolean {
 interface ShopifyCheckoutMcpResponse {
   result?: {
     isError?: boolean;
-    structuredContent?: {
-      checkout?: unknown;
-    };
+    structuredContent?: Record<string, unknown>;
+    content?: Array<{ type?: string; text?: string }>;
   };
   error?: {
     code?: number;
     message?: string;
   };
+}
+
+function extractCheckout(result: ShopifyCheckoutMcpResponse['result']): unknown {
+  let data: unknown = result?.structuredContent;
+  if (!data) {
+    const text = result?.content?.find(item => item.type === 'text')?.text;
+    try { data = text ? JSON.parse(text) : null; } catch { return null; }
+  }
+  if (!isRecord(data)) return null;
+  const checkout = isRecord(data.checkout) ? data.checkout : data;
+  // Shopify can attach buyer/payment/address data after the human continues.
+  // Return only the handoff summary, never those private fields.
+  return redactUnknown(Object.fromEntries(
+    ['id', 'status', 'continue_url', 'checkout_url', 'currency', 'line_items', 'totals', 'messages', 'expires_at']
+      .filter(key => key in checkout).map(key => [key, checkout[key]]),
+  ));
 }
 
 async function readJson<T>(response: Response, context: string): Promise<{ data: T } | { error: string }> {

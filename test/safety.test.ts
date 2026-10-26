@@ -165,6 +165,7 @@ describe('application outcome telemetry', () => {
     const items = { line_items: [{ quantity: 1, item: { id: 'gid://shopify/ProductVariant/1' } }] };
     const result = await callTool(name, name === 'create_cart' ? { cart: items } : { checkout: items }, {
       ENABLE_COMMERCE_MUTATION_TOOLS: 'true', ENABLE_CHECKOUT_MUTATION_TOOLS: 'true',
+      CART_TOKEN_SECRET: 'safety-test-only',
       SHOPIFY_CART_MCP_ENDPOINT: 'https://commonlands.com/api/mcp', SHOPIFY_CHECKOUT_MCP_ENDPOINT: 'https://commonlands.com/api/ucp/mcp',
     });
     expect(result.result.isError).toBe(true);

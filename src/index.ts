@@ -129,7 +129,7 @@ interface ToolAnnotations {
 
 const SERVER_INFO = {
   name: 'commonlands-mcp',
-  version: '0.4.2',
+  version: '0.4.3',
 } as const;
 
 const PUBLIC_MCP_ENDPOINT = 'https://mcp.commonlands.com/mcp';
@@ -270,7 +270,7 @@ const SERVER_INSTRUCTIONS = [
   'Do not run DIY optics math, interpolate catalog FoV, infer coverage, or assemble sensor-specific optical numbers outside Commonlands MCP computed responses.',
   'Source-labeling policy: label every optical or commerce claim with its source; preserve returned provenance.method, provenance.rev, coverage class, distortion-at-field-edge status, and Shopify live-read versus fixture/source-warning distinctions.',
   'For sensor-specific lens finding, prefer match_lens_to_sensor when the user gives a sensor or target FoV, then call calculate_field_of_view for each final lens/sensor FoV claim. Use search_lens_catalog only for broad SKU/title/mount discovery.',
-  'Safety boundaries: fixture-backed tools are scaffold/context only; Shopify product/cart truth is read-only unless approved cart tools are explicitly listed in tools/list; cancel, checkout, payment, customer, order, inventory, and product writes remain hidden/gated unless separately approved. Do not pass arbitrary URLs or client-supplied downstream tokens; Commonlands uses fixed allowlisted endpoints and server-side secrets only, and does not accept client-supplied downstream tokens.',
+  'Safety boundaries: fixture-backed tools are scaffold/context only; use live Shopify product truth and only commerce tools listed in tools/list. Retain owner tokens for cart and checkout access; checkout preparation returns a Shopify URL for buyer review and payment. Payment completion, customer, order, inventory, and product writes are disabled. Do not pass arbitrary URLs or client-supplied downstream tokens; Commonlands uses fixed allowlisted endpoints and server-side secrets only, and does not accept client-supplied downstream tokens.',
 ].join(' ');
 
 const TOOLS: ToolDefinition[] = [
@@ -669,11 +669,11 @@ const TOOLS: ToolDefinition[] = [
   {
     name: 'cancel_cart',
     title: 'Cancel Shopify cart',
-    description: 'Cancel a Shopify-owned UCP cart by id. Requires a validated UCP Cart MCP endpoint and meta["idempotency-key"] UUID for retry safety; the confirmed standard Storefront MCP endpoint does not expose cancel_cart.',
+    description: 'Cancel a Shopify-owned cart using its id and cart_access_token. Requires meta["idempotency-key"] UUID for retry safety. This does not cancel an order or refund payment.',
     inputSchema: {
       type: 'object',
-      properties: { meta: { type: 'object' }, id: { type: 'string' } },
-      required: ['id', 'meta'],
+      properties: { meta: { type: 'object' }, id: { type: 'string' }, cart_access_token: { type: 'string', description: 'Owner token returned by create_cart.' } },
+      required: ['id', 'meta', 'cart_access_token'],
       additionalProperties: false,
     },
   },
@@ -681,18 +681,19 @@ const TOOLS: ToolDefinition[] = [
     name: 'create_checkout',
     title: 'Create Shopify Checkout MCP checkout',
     description:
-      'Create a Shopify-owned checkout from a selected cart or explicit variant line items. Commonlands MCP is a stateless proxy: checkout state is stored and mutated by Shopify Checkout MCP, not in the Worker. Authentication and payment authorization are deferred until complete_checkout.',
+      'Prepare a Shopify checkout after the buyer confirms exact live variants and quantities. Pass checkout.cart_id and its cart_access_token to convert a cart, or checkout.line_items. Retain checkout_access_token from the response. Send the buyer to continue_url for review and payment; this does not place an order.',
     inputSchema: {
       type: 'object',
       properties: {
         meta: { type: 'object', description: 'Optional UCP metadata. ucp-agent.profile is filled from server config when omitted.' },
+        cart_access_token: { type: 'string', description: 'Required when checkout.cart_id is supplied; use the owner token from create_cart.' },
         checkout: {
           type: 'object',
           properties: {
             cart_id: { type: 'string', description: 'Optional Shopify Cart gid to convert/hand off into checkout.' },
             line_items: {
               type: 'array',
-              minItems: 1,
+              minItems: 0,
               maxItems: 25,
               items: {
                 type: 'object',
@@ -716,11 +717,11 @@ const TOOLS: ToolDefinition[] = [
   {
     name: 'get_checkout',
     title: 'Get Shopify Checkout MCP checkout',
-    description: 'Retrieve a Shopify-owned checkout by checkout id. Checkout persistence comes from Shopify; agents must retain checkout id or checkout_url across sessions.',
+    description: 'Read a Shopify checkout handoff summary using its id and checkout_access_token from create_checkout. Buyer and payment details are withheld. Send the buyer to continue_url to review and pay.',
     inputSchema: {
       type: 'object',
-      properties: { meta: { type: 'object' }, id: { type: 'string', description: 'Shopify Checkout gid.' } },
-      required: ['id'],
+      properties: { meta: { type: 'object' }, id: { type: 'string', description: 'Shopify Checkout gid.' }, checkout_access_token: { type: 'string', description: 'Owner token returned by create_checkout.' } },
+      required: ['id', 'checkout_access_token'],
       additionalProperties: false,
     },
   },
@@ -1242,14 +1243,39 @@ function toolListResponse(id: unknown, env: Env): Response {
 }
 
 function visibleTools(env: Env): ToolDefinition[] {
-  return TOOLS.filter((tool) => !tool.hiddenFromList && isToolEnabled(tool.name, env)).map(withToolAnnotations);
+  return TOOLS.filter((tool) => !tool.hiddenFromList && isToolEnabled(tool.name, env)).map(tool => {
+    if (tool.name === 'update_checkout' || tool.name === 'cancel_checkout') {
+      const updated = structuredClone(tool);
+      const properties = updated.inputSchema.properties as Record<string, unknown>;
+      properties.checkout_access_token = { type: 'string', description: 'Owner token returned by create_checkout.' };
+      updated.inputSchema.required = [...updated.inputSchema.required as string[], 'checkout_access_token'];
+      return withToolAnnotations(updated);
+    }
+    if (tool.name !== 'update_cart' || !cartEndpointSupportsCancel(env)) return withToolAnnotations(tool);
+    const updated = structuredClone(tool);
+    updated.description = 'Replace the complete Shopify cart after buyer confirmation. Requires id and cart_access_token. Read the cart first, then send cart.line_items containing every item to retain with item.id (ProductVariant GID), quantity, and optional existing line id. Omitted lines are removed; [] empties the cart. This does not place an order.';
+    const properties = updated.inputSchema.properties as Record<string, Record<string, unknown>>;
+    properties.cart = {
+      type: 'object', required: ['line_items'], additionalProperties: false,
+      properties: {
+        line_items: { type: 'array', minItems: 0, maxItems: 25, items: {
+          type: 'object', required: ['item', 'quantity'], additionalProperties: false,
+          properties: { id: { type: 'string' }, quantity: { type: 'integer', minimum: 1, maximum: 999 },
+            item: { type: 'object', required: ['id'], additionalProperties: false, properties: { id: { type: 'string' } } } },
+        } }, context: { type: 'object' },
+      },
+    };
+    return withToolAnnotations(updated);
+  });
 }
 
 function isToolEnabled(name: string, env: Env): boolean {
+  // Self-reported verification booleans are not payment authorization.
+  if (name === 'complete_checkout') return false;
   if (name === 'cancel_cart' && !cartEndpointSupportsCancel(env)) return false;
   if (isCartTool(name)) return env.ENABLE_COMMERCE_MUTATION_TOOLS === 'true';
   if (name === 'create_checkout' || name === 'get_checkout') return env.ENABLE_CHECKOUT_MUTATION_TOOLS === 'true';
-  if (name === 'update_checkout' || name === 'complete_checkout' || name === 'cancel_checkout') return env.ENABLE_EXTRA_CHECKOUT_MUTATION_TOOLS === 'true';
+  if (name === 'update_checkout' || name === 'cancel_checkout') return env.ENABLE_CHECKOUT_MUTATION_TOOLS === 'true' && env.ENABLE_EXTRA_CHECKOUT_MUTATION_TOOLS === 'true';
   return true;
 }
 
@@ -3356,7 +3382,7 @@ async function enforceRateLimits(request: Request, env: Env, parsed?: JsonRpcReq
     if (env.CART_RATE_LIMITER && parsed?.method === 'tools/call' && isRecord(parsed.params)) {
       const rawName = parsed.params.name;
       const toolName = typeof rawName === 'string' ? canonicalToolName(rawName) : '';
-      if (toolName === 'create_cart' || toolName === 'update_cart' || toolName === 'submit_rfq') {
+      if (MUTATING_TOOL_NAMES.has(toolName)) {
         const cartDecision = await env.CART_RATE_LIMITER.limit({ key: clientIp });
         if (!cartDecision.success) return exceeded('cart_mutations');
       }
@@ -3462,7 +3488,10 @@ export default {
 
     if (url.pathname === '/.well-known/ucp') {
       if (request.method !== 'GET') return methodNotAllowed();
-      return json(buildUcpDiscoveryProfile(url.origin));
+      return json(buildUcpDiscoveryProfile(url.origin, {
+        cartEnabled: env.ENABLE_COMMERCE_MUTATION_TOOLS === 'true',
+        checkoutEnabled: env.ENABLE_CHECKOUT_MUTATION_TOOLS === 'true',
+      }));
     }
 
     if (url.pathname === '/mcp') {

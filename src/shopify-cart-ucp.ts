@@ -1,5 +1,5 @@
 import { fetchWithTimeout, readJsonWithLimit } from './http-safety';
-import { UCP_VERSION } from './ucp-catalog';
+import { COMMERCE_UCP_VERSION as UCP_VERSION } from './ucp-catalog';
 
 export interface ShopifyCartUcpEnv {
   SHOPIFY_CART_MCP_ENDPOINT?: string;
@@ -52,6 +52,7 @@ export interface ShopifyCartUcpResult {
 type CartArgs = Record<string, unknown>;
 
 type NormalizedLineItem = {
+  id?: string;
   quantity: number;
   item: { id: string };
 };
@@ -175,6 +176,7 @@ function normalizeArgs(kind: EndpointKind, operation: CartOperation, args: CartA
   if (operation === 'create_cart') {
     const cart = normalizeCart(args.cart);
     if ('error' in cart) return cart;
+    if (kind === 'shopify_ucp_mcp' && (!cart.value.line_items || cart.value.update_items || cart.value.remove_line_ids)) return { error: 'Invalid params: UCP create_cart requires cart.line_items.' };
     return { args: { meta: meta.value, cart: cart.value } };
   }
 
@@ -184,8 +186,11 @@ function normalizeArgs(kind: EndpointKind, operation: CartOperation, args: CartA
   if (operation === 'get_cart') return { args: { meta: meta.value, id: id.value } };
 
   if (operation === 'update_cart') {
-    const cart = normalizeCart(args.cart);
+    const cart = normalizeCart(args.cart, kind === 'shopify_ucp_mcp');
     if ('error' in cart) return cart;
+    if (kind === 'shopify_ucp_mcp' && (!cart.value.line_items || cart.value.update_items || cart.value.remove_line_ids)) {
+      return { error: 'Invalid params: UCP update_cart replaces the entire cart. Send cart.line_items with every item to retain (or [] to empty it); update_items and remove_line_ids are legacy-only.' };
+    }
     return { args: { meta: meta.value, id: id.value, cart: cart.value } };
   }
 
@@ -206,14 +211,14 @@ function normalizeMeta(value: unknown, agentProfile: string | undefined): { valu
   return { value: meta };
 }
 
-function normalizeCart(value: unknown): { value: NormalizedCart } | { error: string } {
+function normalizeCart(value: unknown, allowEmpty = false): { value: NormalizedCart } | { error: string } {
   if (!isRecord(value)) return { error: 'Invalid params: cart is required' };
   if ('buyer' in value || 'buyer_identity' in value) return { error: 'Invalid params: buyer/customer fields are not enabled for Commonlands Cart MCP' };
 
   const cart: NormalizedCart = {};
   const lineItems = value.line_items;
   if (lineItems !== undefined) {
-    if (!Array.isArray(lineItems) || lineItems.length < 1 || lineItems.length > 25) {
+    if (!Array.isArray(lineItems) || (!allowEmpty && lineItems.length < 1) || lineItems.length > 25) {
       return { error: 'Invalid params: cart.line_items must include 1-25 items when provided' };
     }
     const normalizedItems: NormalizedLineItem[] = [];
@@ -247,14 +252,16 @@ function normalizeCart(value: unknown): { value: NormalizedCart } | { error: str
 function normalizeLineItem(value: unknown, index: number): { value: NormalizedLineItem } | { error: string } {
   if (!isRecord(value)) return { error: `Invalid params: cart.line_items[${index}] must be an object` };
   const quantity = value.quantity;
-  if (typeof quantity !== 'number' || !Number.isFinite(quantity) || quantity < 1 || quantity > 999) {
+  if (typeof quantity !== 'number' || !Number.isInteger(quantity) || quantity < 1 || quantity > 999) {
     return { error: `Invalid params: cart.line_items[${index}].quantity must be between 1 and 999` };
   }
   const item = value.item;
   if (!isRecord(item) || typeof item.id !== 'string' || !/^gid:\/\/shopify\/ProductVariant\/[0-9]+$/.test(item.id)) {
     return { error: `Invalid params: cart.line_items[${index}].item.id must be a Shopify ProductVariant GID from read_shopify_products. Call read_shopify_products and use variantId; numeric IDs, storefront cart paths, and gid://commonlands/... fixture IDs are not accepted.` };
   }
-  return { value: { quantity: Math.trunc(quantity), item: { id: item.id } } };
+  const id = value.id === undefined ? undefined : normalizeCartLineId(value.id, `cart.line_items[${index}].id`);
+  if (id && 'error' in id) return id;
+  return { value: { ...(id ? { id: id.value } : {}), quantity, item: { id: item.id } } };
 }
 
 function normalizeCartLineUpdates(value: unknown): { value?: NormalizedCartLineUpdate[] } | { error: string } {
@@ -340,6 +347,7 @@ function parseEndpoint(value: string | undefined): { url: URL; kind: EndpointKin
   try {
     const url = new URL(value.trim());
     if (url.protocol !== 'https:') return { error: 'SHOPIFY_CART_MCP_ENDPOINT must be an HTTPS URL.' };
+    if (url.username || url.password || url.port || url.search || url.hash) return { error: 'SHOPIFY_CART_MCP_ENDPOINT must not contain credentials, ports, query parameters, or fragments.' };
     if (url.pathname !== SHOPIFY_STOREFRONT_MCP_PATH && url.pathname !== SHOPIFY_UCP_MCP_PATH) {
       return { error: 'SHOPIFY_CART_MCP_ENDPOINT must point to /api/mcp or /api/ucp/mcp.' };
     }
@@ -421,9 +429,7 @@ function isSafeHttpsUrl(value: string): boolean {
 interface ShopifyCartMcpResponse {
   result?: {
     isError?: boolean;
-    structuredContent?: {
-      cart?: unknown;
-    };
+    structuredContent?: Record<string, unknown>;
     content?: Array<{ type?: string; text?: string }>;
   };
   error?: {
@@ -434,6 +440,7 @@ interface ShopifyCartMcpResponse {
 
 function extractCart(result: ShopifyCartMcpResponse['result']): unknown | null {
   if (result?.structuredContent && 'cart' in result.structuredContent) return result.structuredContent.cart ?? null;
+  if (typeof result?.structuredContent?.id === 'string') return result.structuredContent;
   const text = result?.content?.find((item) => item.type === 'text' && typeof item.text === 'string')?.text;
   if (!text) return null;
   try {
