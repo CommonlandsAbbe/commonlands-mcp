@@ -61,7 +61,7 @@ Rules:
 Rules:
 
 - Admin API access remains read-only.
-- No product, variant, inventory, metafield, collection, direct payment capture, raw card handling, customer-account, or catalog writes. Checkout completion is only proxied to Shopify Checkout MCP after Shopify authentication/authorization.
+- No product, variant, inventory, metafield, collection, direct payment capture, raw card handling, customer-account, or catalog writes. Commonlands does not proxy checkout completion. Authorized purchases use the buyer's separate Shop MCP connection.
 - Client secret/token material must be scoped narrowly and stored only in secret storage.
 
 ### Shopify Cart MCP
@@ -99,3 +99,7 @@ Cloudflare account ID, zone ID, routes, and deploy tokens should be stored in Gi
 - Rotate any credential accidentally exposed during setup.
 - Keep a short access log in the PR or deployment notes: credential name, owner, scope, environment, and date added.
 - Do not include secret values in PR descriptions, screenshots, fixtures, tests, logs, or docs.
+
+## Shop MCP purchase route
+
+Cart responses in v0.4.4 include an external `agent_checkout` route. No new Worker secret is needed. The buyer's MCP client connects directly to `https://mcp.shop.com/` and holds its Shop OAuth credentials; never put those credentials into Commonlands tool arguments or Worker configuration. Shop performs its own merchant authorization. Commonlands Admin API credentials cannot unlock native order completion. See [commerce integration](commerce.md).

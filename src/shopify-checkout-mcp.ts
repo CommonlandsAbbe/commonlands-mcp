@@ -73,17 +73,15 @@ export async function callShopifyCheckoutMcp(
   operation: CheckoutOperation,
   args: CheckoutArgs,
 ): Promise<ShopifyCheckoutMcpResult> {
+  if (operation === 'complete_checkout') {
+    return withConnector(baseResult(operation), 'invalid_request', 'not_connected', ['Direct Commonlands completion is unavailable. Use the cart agent_checkout route in the buyer\'s Shop MCP connection, or pay on the Shopify continue_url.']);
+  }
   const endpoint = parseEndpoint(env.SHOPIFY_CHECKOUT_MCP_ENDPOINT);
   if ('error' in endpoint) return withConnector(baseResult(operation), 'not_configured', 'not_connected', [endpoint.error]);
 
   const normalized = normalizeArgs(operation, args, env.SHOPIFY_UCP_AGENT_PROFILE);
   if ('error' in normalized) return withConnector(baseResult(operation), 'invalid_request', 'not_connected', [normalized.error]);
 
-  // Caller assertions are not proof of payment authorization. Order completion
-  // needs a separate authenticated integration; this public proxy is a handoff.
-  if (operation === 'complete_checkout') {
-    return withConnector(baseResult(operation), 'invalid_request', 'not_connected', ['Complete payment on the Shopify continue_url. Agent order completion is not enabled.']);
-  }
   const secret = env.CART_TOKEN_SECRET;
   if (!secret) return withConnector(baseResult(operation), 'not_configured', 'not_connected', ['Checkout owner binding requires CART_TOKEN_SECRET.']);
   const cartId = isRecord(normalized.args.checkout) ? normalized.args.checkout.cart_id : undefined;
@@ -167,16 +165,6 @@ function normalizeArgs(operation: CheckoutOperation, args: CheckoutArgs, agentPr
     return { args: { meta: meta.value, id: id.value, checkout: checkout.value } };
   }
 
-  if (operation === 'complete_checkout') {
-    const idempotencyKey = readIdempotencyKey(meta.value);
-    if (!idempotencyKey) {
-      return { error: 'Invalid params: complete_checkout requires meta["idempotency-key"] for retry safety' };
-    }
-    const authentication = normalizeCompletionAuthentication(args.authentication);
-    if ('error' in authentication) return authentication;
-    return { args: { meta: meta.value, id: id.value, authentication: authentication.value } };
-  }
-
   const idempotencyKey = readIdempotencyKey(meta.value);
   if (!idempotencyKey) {
     return { error: 'Invalid params: cancel_checkout requires meta["idempotency-key"] for retry safety' };
@@ -195,51 +183,6 @@ function normalizeMeta(value: unknown, agentProfile: string | undefined): { valu
   return { value: meta };
 }
 
-
-type CompletionAuthentication = {
-  method: 'shopify_checkout_authenticated';
-  buyerVerified: true;
-  paymentAuthorized: true;
-  nameVerified: true;
-  emailVerified: true;
-  phoneVerified: true;
-  addressVerified: true;
-  cardAuthorized: true;
-  authenticatedAt: string;
-};
-
-function normalizeCompletionAuthentication(value: unknown): { value: CompletionAuthentication } | { error: string } {
-  if (!isRecord(value)) return { error: 'Invalid params: complete_checkout.authentication is required' };
-  const method = value.method;
-  if (method !== 'shopify_checkout_authenticated') {
-    return { error: 'Invalid params: complete_checkout.authentication.method must be shopify_checkout_authenticated' };
-  }
-  const requiredBooleans = ['buyerVerified', 'paymentAuthorized', 'nameVerified', 'emailVerified', 'phoneVerified', 'addressVerified', 'cardAuthorized'] as const;
-  for (const key of requiredBooleans) {
-    if (value[key] !== true) return { error: `Invalid params: complete_checkout.authentication.${key} must be true` };
-  }
-  const authenticatedAt = value.authenticatedAt;
-  if (typeof authenticatedAt !== 'string' || Number.isNaN(Date.parse(authenticatedAt))) {
-    return { error: 'Invalid params: complete_checkout.authentication.authenticatedAt must be an ISO timestamp' };
-  }
-  const allowedKeys = new Set<string>(['method', ...requiredBooleans, 'authenticatedAt']);
-  for (const key of Object.keys(value)) {
-    if (!allowedKeys.has(key)) return { error: 'Invalid params: complete_checkout.authentication only accepts Shopify verification flags, not payment or buyer data' };
-  }
-  return {
-    value: {
-      method,
-      buyerVerified: true,
-      paymentAuthorized: true,
-      nameVerified: true,
-      emailVerified: true,
-      phoneVerified: true,
-      addressVerified: true,
-      cardAuthorized: true,
-      authenticatedAt,
-    },
-  };
-}
 
 function normalizeCheckout(value: unknown): { value: NormalizedCheckout } | { error: string } {
   if (!isRecord(value)) return { error: 'Invalid params: checkout is required' };
@@ -384,9 +327,9 @@ function baseResult(operation: CheckoutOperation): ShopifyCheckoutMcpResult {
       createsCheckout: operation === 'create_checkout',
       updatesCheckout: operation === 'update_checkout',
       cancelsCheckout: operation === 'cancel_checkout',
-      completesCheckout: operation === 'complete_checkout',
-      createsOrder: operation === 'complete_checkout',
-      capturesPayment: operation === 'complete_checkout',
+      completesCheckout: false,
+      createsOrder: false,
+      capturesPayment: false,
       readsCustomers: false,
       createsCustomer: false,
       mutatesInventory: false,

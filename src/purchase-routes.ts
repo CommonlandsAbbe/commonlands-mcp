@@ -181,7 +181,7 @@ export function getPurchaseRouteOptions(args: Record<string, unknown>): Purchase
     warnings: [
       'This response plans purchase routes only; it does not create a cart, checkout, order, RFQ, customer record, or inventory reservation.',
       'Use read_shopify_products to resolve live ProductVariant IDs before cart/checkout handoff; fixture variant IDs are not valid Shopify purchase IDs.',
-      'Use the enabled cart and checkout handoff tools from tools/list; retain owner tokens and send the buyer to Shopify for review and payment.',
+      'Use enabled cart tools from tools/list and retain owner tokens. For agent-authorized purchases, follow the cart response agent_checkout route to the separate Shop MCP connection. Otherwise create a Commonlands checkout and return its Shopify payment URL.',
       'Live price, availability, variant IDs, and inventory must be revalidated before any future transaction.',
     ],
     provenance: {

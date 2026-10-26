@@ -284,7 +284,7 @@ describe('Commonlands MCP Worker', () => {
       id: 1,
       result: {
         protocolVersion: '2025-11-25',
-      serverInfo: { name: 'commonlands-mcp', version: '0.4.3' },
+      serverInfo: { name: 'commonlands-mcp', version: '0.4.4' },
         capabilities: { tools: {}, resources: {}, prompts: {} },
       },
     });
