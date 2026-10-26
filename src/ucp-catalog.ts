@@ -125,7 +125,16 @@ export function buildUcpDiscoveryProfile(_origin: string, commerce: { cartEnable
     // Keep legacy fields for existing Commonlands discovery clients.
     ucp: {
       version: COMMERCE_UCP_VERSION,
+      services: {
+        'dev.ucp.shopping': [{
+          version: COMMERCE_UCP_VERSION,
+          spec: `https://ucp.dev/${COMMERCE_UCP_VERSION}/specification/overview`,
+          transport: 'mcp',
+          schema: `https://ucp.dev/${COMMERCE_UCP_VERSION}/services/shopping/mcp.openrpc.json`,
+        }],
+      },
       capabilities: Object.fromEntries(capabilities.map(name => [name, [{ version: COMMERCE_UCP_VERSION }]])),
+      payment_handlers: {},
     },
     version: UCP_VERSION,
     transport: 'mcp',

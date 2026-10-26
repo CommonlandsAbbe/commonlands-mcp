@@ -26,6 +26,7 @@ describe('current Shopify UCP cart and checkout handoff', () => {
     expect(response.headers.get('cache-control')).toBe('public, max-age=60');
     const profile = await response.json() as { ucp: { version: string; capabilities: Record<string, unknown> } };
     expect(profile.ucp.version).toBe('2026-08-25');
+    expect(profile.ucp).toMatchObject({ services: { 'dev.ucp.shopping': [{ version: '2026-08-25', transport: 'mcp' }] }, payment_handlers: {} });
     expect(profile.ucp.capabilities['dev.ucp.shopping.cart']).toEqual([{ version: '2026-08-25' }]);
     expect(profile.ucp.capabilities['dev.ucp.shopping.checkout']).toEqual([{ version: '2026-08-25' }]);
     const disabled = await worker.fetch(new Request('https://mcp.commonlands.com/.well-known/ucp'), {});
