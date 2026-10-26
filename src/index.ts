@@ -3491,7 +3491,7 @@ export default {
       return json(buildUcpDiscoveryProfile(url.origin, {
         cartEnabled: env.ENABLE_COMMERCE_MUTATION_TOOLS === 'true',
         checkoutEnabled: env.ENABLE_CHECKOUT_MUTATION_TOOLS === 'true',
-      }));
+      }), { headers: { 'cache-control': 'public, max-age=60' } });
     }
 
     if (url.pathname === '/mcp') {
