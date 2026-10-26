@@ -51,7 +51,9 @@ try {
       console.log('Disposable checkout canceled.');
     } catch (error) { console.log(`Checkout cleanup: ${error.message}`); }
   }
-  if (cart?.cart?.id) {
+  // Conversion consumes the cart; clean up its checkout instead. A separate
+  // unconverted-cart test is needed to exercise cancel_cart after conversion.
+  if (cart?.cart?.id && !checkout?.checkout?.id) {
     try {
       await call('cancel_cart', { id: cart.cart.id, cart_access_token: cart.cart_access_token, meta: { 'idempotency-key': randomUUID() } });
       console.log('Disposable cart canceled.');

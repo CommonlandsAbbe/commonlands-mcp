@@ -26,6 +26,8 @@ The discovery profile includes nested `ucp.version` and capability descriptors f
 
 Run `npm run verify`. Regression coverage includes full-state updates, empty carts, fractional quantity rejection, cart conversion, flat checkout responses, missing or incorrect owner credentials, private-field filtering, disabled payment completion, discovery flags, and checkout rate limits.
 
+Production verification on October 26, 2026 passed cart create/read/update and checkout create/read using a live in-stock CIL250 variant. Shopify returned an `incomplete` checkout with a human payment URL; no payment was attempted, and the checkout was canceled. Cancellation of a separate unconverted cart also passed. Lint, TypeScript, version parity, and all 151 tests passed. The profile must include its shopping service descriptor and `Cache-Control: public, max-age=60` for Shopify to accept it.
+
 After deployment, verify `tools/list`, create one disposable cart from a live in-stock variant, read it, replace its quantity, convert it into a checkout, and read the checkout using its owner token. Do not call payment completion. Cancel the disposable cart and checkout after the smoke test where Shopify permits it.
 
 To disable checkout handoff, deploy with `ENABLE_CHECKOUT_MUTATION_TOOLS:false`. Keep the UCP cart endpoint and corrected profile: reverting to the retired Storefront MCP endpoint would break carts again.
