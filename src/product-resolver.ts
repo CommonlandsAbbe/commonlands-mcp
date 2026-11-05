@@ -17,9 +17,10 @@ export async function resolveLiveProduct(env: ShopifyReadAdapterEnv, identifier:
     schemaVersion: 'commonlands.product_resolution.v1',
     requestedIdentifier: requested,
     selectionStatus: live.connector.status !== 'ok' ? 'unavailable'
+      : live.pageInfo.hasNextPage !== false ? 'incomplete'
       : exact.length === 1 ? 'exact_variant'
       : products.length ? 'requires_variant_selection' : 'not_found',
-    selectedVariant: exact.length === 1 ? exact[0]! : null,
+    selectedVariant: live.connector.status === 'ok' && live.pageInfo.hasNextPage === false && exact.length === 1 ? exact[0]! : null,
     products,
     provenance: {
       commerce: 'live_shopify_admin_graphql',

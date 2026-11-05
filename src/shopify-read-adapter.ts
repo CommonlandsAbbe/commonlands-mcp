@@ -1,3 +1,4 @@
+import { parsePublicValue, pairPublicFields, type PublicFieldValue } from './public-specifications';
 import { fetchWithTimeout, readJsonWithLimit } from './http-safety';
 import { getShopifyReadonlyStatus, normalizeShopDomain, parseScopes, type ShopifyReadonlyEnv } from './shopify-readonly-status';
 
@@ -13,10 +14,9 @@ export interface ShopifyReadAdapterEnv extends ShopifyReadonlyEnv {
  *
  * - Products: ACTIVE products published to the Online Store only, with a
  *   Shopify-provided Commonlands product URL. Internal status is not returned.
- * - Inventory: exact quantities are admin-only. Variants expose a coarse
- *   `availability` signal (in_stock / low_stock / out_of_stock / untracked)
- *   derived from tracked inventory; raw counts and inventory item IDs are
- *   never returned.
+ * - Inventory: published variants expose tracked stock counts, as authorized
+ *   for website parity, and a separate online sellable quantity. Location-level
+ *   inventory and inventory item IDs remain private. Counts reserve no stock.
  * - Metafields: off by default. When requested, only the allowlisted
  *   `custom.*` display fields that are rendered on public product pages are
  *   returned. All other namespaces (app-private, SEO apps, channels) and all
@@ -59,6 +59,8 @@ export interface ShopifyProductReadArgs {
   query?: unknown;
   limit?: unknown;
   includeMetafields?: unknown;
+  after?: unknown;
+  catalog?: boolean;
 }
 
 export interface ShopifyMetaobjectReadArgs {
@@ -71,6 +73,8 @@ export interface ShopifyLiveReadResult {
   schemaVersion: 'shopify.live_read.v1';
   mode: 'shopify_admin_graphql_read_only';
   generatedAt: string;
+  currencyCode: string | null;
+  pageInfo: { hasNextPage: boolean | null; endCursor: string | null };
   configured: boolean;
   query: {
     kind: 'product_variants' | 'metaobjects';
@@ -126,6 +130,8 @@ export interface ShopifyReadonlyProduct {
   tags: string[];
   productUrl?: string;
   variants: ShopifyReadonlyVariant[];
+  specifications?: { faqs: ReturnType<typeof pairPublicFields>; compatibility: ReturnType<typeof pairPublicFields> };
+  metafieldsComplete?: boolean | null;
   metafields: ShopifyReadonlyMetafield[];
   media: ShopifyReadonlyMedia[];
 }
@@ -148,22 +154,28 @@ export interface ShopifyReadonlyVariant {
   sku: string;
   title: string;
   price?: string;
-  /**
-   * Coarse public availability signal derived from tracked inventory.
-   * Exact inventory counts are intentionally never returned on the public
-   * surface (see PUBLIC_DATA_POLICY).
-   */
+  selectedOptions: Array<{ name: string; value: string }>;
+  metafieldsComplete?: boolean | null;
+  /** Stock signal; availableForSale separately captures Shopify purchase eligibility. */
   availability?: 'in_stock' | 'low_stock' | 'out_of_stock' | 'untracked';
+  inventoryTracked: boolean | null;
+  /** Nonnegative stock count corresponding to the theme's variant.inventory_quantity. */
+  websiteStockQuantity: number | null;
+  /** Online-channel stock; not a reservation or a customer-location guarantee. */
+  availableQuantity: number | null;
+  availableForSale: boolean | null;
+  continueSellingWhenOutOfStock: boolean | null;
   storefrontCartPath?: string;
   recommendedCreateCartPayload?: ShopifyCartCreatePayloadRecommendation;
   metafields: ShopifyReadonlyMetafield[];
 }
 
-export interface ShopifyReadonlyMetafield {
+export interface ShopifyReadonlyMetafield extends PublicFieldValue {
   namespace: string;
   key: string;
   type: string;
   valuePreview?: string;
+  valuePreviewTruncated?: boolean;
   reference?: {
     kind: 'file' | 'image' | 'metaobject' | 'other';
     url?: string;
@@ -203,12 +215,15 @@ interface GraphQlResponse<T> {
 }
 
 interface ProductVariantsGraphQlData {
+  shop?: { currencyCode?: unknown };
   productVariants?: {
     nodes?: ProductVariantNode[];
+    pageInfo?: PageInfo;
   };
 }
 
 interface ProductByHandleGraphQlData {
+  shop?: { currencyCode?: unknown };
   productByHandle?: ProductNode | null;
 }
 
@@ -218,14 +233,20 @@ interface MetaobjectsGraphQlData {
   };
 }
 
+interface PageInfo { hasNextPage?: boolean; endCursor?: string | null }
+
 interface ProductVariantNode {
   id?: unknown;
   sku?: unknown;
   title?: unknown;
   price?: unknown;
+  selectedOptions?: Array<{ name?: unknown; value?: unknown }>;
   inventoryQuantity?: unknown;
+  sellableOnlineQuantity?: unknown;
+  availableForSale?: unknown;
+  inventoryPolicy?: unknown;
   inventoryItem?: { id?: unknown; tracked?: unknown } | null;
-  metafields?: { nodes?: MetafieldNode[] };
+  metafields?: { nodes?: MetafieldNode[]; pageInfo?: PageInfo };
   product?: ProductNode | null;
 }
 
@@ -238,9 +259,9 @@ interface ProductNode {
   vendor?: unknown;
   tags?: unknown;
   onlineStoreUrl?: unknown;
-  metafields?: { nodes?: MetafieldNode[] };
+  metafields?: { nodes?: MetafieldNode[]; pageInfo?: PageInfo };
   media?: { nodes?: MediaNode[] };
-  variants?: { nodes?: ProductVariantNode[] };
+  variants?: { nodes?: ProductVariantNode[]; pageInfo?: PageInfo };
 }
 
 interface MetafieldNode {
@@ -301,6 +322,9 @@ export async function readShopifyProducts(env: ShopifyReadAdapterEnv, args: Shop
     source: { ...base.source, includesMetafields: parsed.includeMetafields },
     connector: { status: 'ok', source: 'live_shopify_admin_graphql', messages: productsResponse.messages ?? [] },
     shopify: { ...base.shopify, token: 'exchanged_and_redacted' },
+    generatedAt: new Date().toISOString(),
+    currencyCode: productsResponse.currencyCode ?? null,
+    pageInfo: productsResponse.pageInfo ?? { hasNextPage: null, endCursor: null },
     products,
   };
 }
@@ -338,7 +362,7 @@ export async function readShopifyMetaobjects(env: ShopifyReadAdapterEnv, args: S
 }
 
 function parseProductArgs(args: ShopifyProductReadArgs):
-  | { sku?: string; handle?: string; query?: string; limit: number; includeMetafields: boolean }
+  | { sku?: string; handle?: string; query?: string; after?: string; limit: number; includeMetafields: boolean }
   | { error: string } {
   const sku = optionalSearchValue(args.sku, 'sku');
   if ('error' in sku) return sku;
@@ -348,12 +372,14 @@ function parseProductArgs(args: ShopifyProductReadArgs):
   if ('error' in query) return query;
   const limit = parseLimit(args.limit, 10, 1, 25);
   if ('error' in limit) return limit;
-  if (!sku.value && !handle.value && !query.value) return { error: 'Invalid params: sku, handle, or query is required' };
+  if (args.after !== undefined && (typeof args.after !== 'string' || !/^[A-Za-z0-9+/=_-]{1,1024}$/.test(args.after))) return { error: 'Invalid params: after must be a Shopify pagination cursor' };
+  if (!sku.value && !handle.value && !query.value && !args.catalog) return { error: 'Invalid params: sku, handle, or query is required' };
   return {
     ...(sku.value ? { sku: sku.value.toUpperCase() } : {}),
     ...(handle.value ? { handle: handle.value.toLowerCase() } : {}),
     ...(query.value ? { query: query.value } : {}),
     limit: limit.value,
+    ...(typeof args.after === 'string' ? { after: args.after } : {}),
     // Public-data default: metafields are opt-in, and even then only the
     // allowlisted public display fields are returned (PUBLIC_DATA_POLICY).
     includeMetafields: args.includeMetafields === true,
@@ -425,6 +451,8 @@ function baseResult(env: ShopifyReadAdapterEnv, query: ShopifyLiveReadResult['qu
     schemaVersion: 'shopify.live_read.v1',
     mode: 'shopify_admin_graphql_read_only',
     generatedAt: new Date().toISOString(),
+    currencyCode: null,
+    pageInfo: { hasNextPage: null, endCursor: null },
     configured: status.configured,
     query,
     source: {
@@ -467,6 +495,8 @@ function invalidRequestResult(kind: 'product_variants' | 'metaobjects', message:
     schemaVersion: 'shopify.live_read.v1',
     mode: 'shopify_admin_graphql_read_only',
     generatedAt: new Date().toISOString(),
+    currencyCode: null,
+    pageInfo: { hasNextPage: null, endCursor: null },
     configured: false,
     query: { kind, limit: query.limit },
     source: {
@@ -539,8 +569,8 @@ async function getAccessToken(input: { shopDomain: string; clientId: string; cli
         client_secret: input.clientSecret,
       }),
     });
-  } catch (error) {
-    return { error: `Shopify token exchange network error: ${errorMessage(error)}` };
+  } catch {
+    return { error: 'Shopify token exchange network error.' };
   }
 
   if (!response.ok) {
@@ -566,25 +596,27 @@ async function getAccessToken(input: { shopDomain: string; clientId: string; cli
 
 async function readProductNodes(
   client: { shopDomain: string; apiVersion: string; accessToken: string },
-  parsed: { sku?: string; handle?: string; query?: string; limit: number; includeMetafields: boolean },
-): Promise<{ products: ShopifyReadonlyProduct[]; messages?: string[] } | { error: string }> {
+  parsed: { sku?: string; handle?: string; query?: string; after?: string; limit: number; includeMetafields: boolean },
+): Promise<{ products: ShopifyReadonlyProduct[]; messages?: string[]; currencyCode?: string; pageInfo?: ShopifyLiveReadResult['pageInfo'] } | { error: string }> {
   if (parsed.handle && !parsed.sku && !parsed.query) {
     const response = await shopifyGraphQl<ProductByHandleGraphQlData>(client, productByHandleQuery(parsed.includeMetafields), {
       handle: parsed.handle,
       first: parsed.limit,
+      after: parsed.after ?? null,
     });
     if ('error' in response) return response;
-    return { products: normalizeProductByHandle(response.data.productByHandle, parsed.includeMetafields) };
+    return { products: normalizeProductByHandle(response.data.productByHandle, parsed.includeMetafields), ...readMetadata(response.data.shop, response.data.productByHandle?.variants?.pageInfo) };
   }
 
   const response = await shopifyGraphQl<ProductVariantsGraphQlData>(client, productVariantsQuery(parsed.includeMetafields), {
     query: buildProductVariantSearch(parsed),
     first: parsed.limit,
+    after: parsed.after ?? null,
   });
   if ('error' in response) return response;
 
   const products = normalizeProducts(response.data.productVariants?.nodes ?? [], parsed.includeMetafields);
-  if (products.length > 0 || !parsed.sku || parsed.query) return { products };
+  if (products.length > 0 || !parsed.sku || parsed.query || parsed.after) return { products, ...readMetadata(response.data.shop, response.data.productVariants?.pageInfo) };
 
   const fallbackResponse = await shopifyGraphQl<ProductVariantsGraphQlData>(client, productVariantsQuery(parsed.includeMetafields), {
     query: escapeShopifySearchValue(parsed.sku),
@@ -593,6 +625,7 @@ async function readProductNodes(
   if ('error' in fallbackResponse) return fallbackResponse;
   return {
     products: normalizeProducts(fallbackResponse.data.productVariants?.nodes ?? [], parsed.includeMetafields),
+    ...readMetadata(fallbackResponse.data.shop, fallbackResponse.data.productVariants?.pageInfo),
     messages: ['Exact Shopify SKU search returned no results; retried as safe text search for short part number/MPN metafields.'],
   };
 }
@@ -609,8 +642,8 @@ async function shopifyGraphQl<T>(client: { shopDomain: string; apiVersion: strin
       },
       body: JSON.stringify({ query, variables }),
     });
-  } catch (error) {
-    return { error: `Shopify GraphQL read network error: ${errorMessage(error)}` };
+  } catch {
+    return { error: 'Shopify GraphQL read network error.' };
   }
 
   if (!response.ok) {
@@ -620,7 +653,7 @@ async function shopifyGraphQl<T>(client: { shopDomain: string; apiVersion: strin
   const body = await readJson<GraphQlResponse<T>>(response, 'Shopify GraphQL read');
   if ('error' in body) return body;
   if (body.data.errors && body.data.errors.length > 0) {
-    return { error: `Shopify GraphQL read returned ${body.data.errors.length} error(s): ${body.data.errors.map((error) => error.message ?? 'unknown').join('; ')}` };
+    return { error: `Shopify GraphQL read returned ${body.data.errors.length} error(s).` };
   }
   if (!body.data.data) return { error: 'Shopify GraphQL read returned no data.' };
   return { data: body.data.data };
@@ -656,12 +689,18 @@ function normalizeVariants(nodes: ProductVariantNode[], includeMetafields: boole
       variantId,
       sku: stringOrUndefined(variant.sku) ?? '',
       title: stringOrUndefined(variant.title) ?? '',
+      selectedOptions: (variant.selectedOptions ?? []).filter(option => typeof option.name === 'string' && typeof option.value === 'string').map(option => ({ name: String(option.name), value: String(option.value) })),
+      metafieldsComplete: includeMetafields ? completePage(variant.metafields?.pageInfo) : null,
+      inventoryTracked: typeof variant.inventoryItem?.tracked === 'boolean' ? variant.inventoryItem.tracked : null,
+      websiteStockQuantity: publicStockQuantity(variant.inventoryQuantity, variant.inventoryItem?.tracked),
+      availableQuantity: publicStockQuantity(variant.sellableOnlineQuantity, variant.inventoryItem?.tracked),
+      availableForSale: typeof variant.availableForSale === 'boolean' ? variant.availableForSale : null,
+      continueSellingWhenOutOfStock: variant.inventoryPolicy === 'CONTINUE' ? true : variant.inventoryPolicy === 'DENY' ? false : null,
       metafields: includeMetafields ? normalizeMetafields(variant.metafields?.nodes ?? []) : [],
     };
     assignIfPresent(normalizedVariant, 'numericId', numericId);
     assignIfPresent(normalizedVariant, 'price', stringOrUndefined(variant.price));
-    // Public-data policy: coarse availability only; never raw inventory
-    // counts or admin inventory item IDs.
+    // Preserve variant identity and distinguish physical stock from backorder eligibility.
     assignIfPresent(normalizedVariant, 'availability', deriveAvailability(variant));
     assignIfPresent(normalizedVariant, 'storefrontCartPath', numericId ? `/cart/${numericId}:1` : undefined);
     assignIfPresent(normalizedVariant, 'recommendedCreateCartPayload', createCartPayloadForVariant(variantId));
@@ -711,6 +750,11 @@ function buildProduct(productId: string, product: ProductNode | null | undefined
     metafields: includeMetafields ? normalizeMetafields(product?.metafields?.nodes ?? []) : [],
     media: normalizeMedia(product?.media?.nodes ?? []),
     variants: [],
+    metafieldsComplete: includeMetafields ? completePage(product?.metafields?.pageInfo) : null,
+  };
+  normalized.specifications = {
+    faqs: pairPublicFields(normalized.metafields, 'faq_questions', 'faq_answers'),
+    compatibility: pairPublicFields(normalized.metafields, 'compatibility_company_list', 'compatibility_table_result'),
   };
   assignIfPresent(normalized, 'numericId', numericIdFromGid(productId));
   // `status` is intentionally not returned: only ACTIVE products pass the
@@ -729,8 +773,11 @@ function normalizeMetafields(nodes: MetafieldNode[]): ShopifyReadonlyMetafield[]
         namespace: stringOrUndefined(node.namespace) ?? '',
         key: stringOrUndefined(node.key) ?? '',
         type: stringOrUndefined(node.type) ?? '',
+        ...parsePublicValue(stringOrUndefined(node.type) ?? '', node.value),
       };
-      assignIfPresent(normalized, 'valuePreview', previewValue(node.value));
+      // Kept for old clients; typed value is authoritative and never partially parsed.
+      assignIfPresent(normalized, 'valuePreview', normalized.valueStatus === 'complete' ? previewValue(typeof normalized.value === 'string' ? normalized.value : JSON.stringify(normalized.value)) : undefined);
+      normalized.valuePreviewTruncated = normalized.valueStatus === 'complete' && (typeof normalized.value === 'string' ? normalized.value.length : JSON.stringify(normalized.value).length) > 160;
       assignIfPresent(normalized, 'reference', normalizeReference(node.reference));
       return normalized;
     });
@@ -740,6 +787,13 @@ function isPublicMetafield(node: MetafieldNode): boolean {
   const namespace = stringOrUndefined(node.namespace);
   const key = stringOrUndefined(node.key);
   return namespace === PUBLIC_METAFIELD_NAMESPACE && key !== undefined && PUBLIC_METAFIELD_KEYS.has(key);
+}
+
+function publicStockQuantity(value: unknown, tracked: unknown): number | null {
+  // Untracked inventory is not zero stock; negative balances are not purchasable units.
+  return tracked === true && typeof value === 'number' && Number.isSafeInteger(value)
+    ? Math.max(0, value)
+    : null;
 }
 
 function deriveAvailability(variant: ProductVariantNode): ShopifyReadonlyVariant['availability'] {
@@ -876,8 +930,10 @@ function redactSensitiveText(value: string): string {
 
 function productVariantsQuery(includeMetafields: boolean): string {
   return `#graphql
-    query CommonlandsReadProductVariants($query: String!, $first: Int!) {
-      productVariants(first: $first, query: $query) {
+    query CommonlandsReadProductVariants($query: String!, $first: Int!, $after: String) {
+      shop { currencyCode }
+      productVariants(first: $first, after: $after, query: $query) {
+        pageInfo { hasNextPage endCursor }
         nodes {
           ${VARIANT_FIELDS}
           product {
@@ -892,10 +948,12 @@ function productVariantsQuery(includeMetafields: boolean): string {
 
 function productByHandleQuery(includeMetafields: boolean): string {
   return `#graphql
-    query CommonlandsReadProductByHandle($handle: String!, $first: Int!) {
+    query CommonlandsReadProductByHandle($handle: String!, $first: Int!, $after: String) {
+      shop { currencyCode }
       productByHandle(handle: $handle) {
         ${PRODUCT_FIELDS}
-        variants(first: $first) {
+        variants(first: $first, after: $after) {
+          pageInfo { hasNextPage endCursor }
           nodes {
             ${VARIANT_FIELDS}
           }
@@ -912,6 +970,10 @@ const VARIANT_FIELDS = `
   title
   price
   inventoryQuantity
+  sellableOnlineQuantity
+  availableForSale
+  inventoryPolicy
+  selectedOptions { name value }
   inventoryItem {
     tracked
   }
@@ -947,6 +1009,7 @@ function metafieldFragment(includeMetafields: boolean): string {
   return `
     fragment VariantMetafields on ProductVariant {
       metafields(first: 100) {
+        pageInfo { hasNextPage }
         nodes {
           namespace
           key
@@ -963,6 +1026,7 @@ function metafieldFragment(includeMetafields: boolean): string {
     }
     fragment ProductMetafields on Product {
       metafields(first: 100) {
+        pageInfo { hasNextPage }
         nodes {
           namespace
           key
@@ -996,3 +1060,13 @@ const METAOBJECTS_QUERY = `#graphql
     }
   }
 `;
+
+function completePage(page: PageInfo | undefined): boolean | null {
+  return typeof page?.hasNextPage === 'boolean' ? !page.hasNextPage : null;
+}
+function readMetadata(shop: { currencyCode?: unknown } | undefined, page: PageInfo | undefined) {
+  return {
+    ...(typeof shop?.currencyCode === 'string' && /^[A-Z]{3}$/.test(shop.currencyCode) ? { currencyCode: shop.currencyCode } : {}),
+    pageInfo: { hasNextPage: typeof page?.hasNextPage === 'boolean' ? page.hasNextPage : null, endCursor: page?.endCursor ?? null },
+  };
+}

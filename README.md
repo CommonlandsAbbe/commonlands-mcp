@@ -325,3 +325,14 @@ return errors, not fixture replacements. Shopify remains the source for price,
 availability, variant IDs and product-page specifications. Lambda/DynamoDB owns
 optical calculations; differences between family and variant records are not
 silently reconciled. See [the phased PR plan](docs/phased-improvements.md).
+
+### Current stock and technical records
+
+`read_shopify_products` reads the Shopify backend on every call. Match the full
+variant SKU and GID. `availableQuantity` is online sellable stock;
+`websiteStockQuantity` corresponds to the theme's aggregate stock field. Unknown
+quantities are null. Neither count reserves inventory or promises a delivery date.
+
+Use complete typed metafield `value` instead of `valuePreview`. Check `valueStatus`,
+`pageInfo` and `metafieldsComplete` before treating a record as complete. See
+[inventory and specification semantics](docs/inventory-availability.md).
