@@ -27,7 +27,7 @@ export function shopVariant(sku = 'CIL250-F2.0', id = '123') {
 export function mockShop(nodes: unknown[]) {
   return vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => String(url).includes('oauth')
     ? Response.json({ access_token: 'test-token', expires_in: 86400 })
-    : Response.json({ data: { productVariants: { nodes } } }));
+    : Response.json({ data: { productVariants: { nodes, pageInfo: { hasNextPage: false, endCursor: null } } } }));
 }
 afterEach(() => { vi.restoreAllMocks(); __resetLensCatalogCacheForTests(); });
 
@@ -58,6 +58,11 @@ describe('live product truth', () => {
   it('does not silently enter fixture mode when production configuration is missing', async () => {
     const result = await callTool('search_lens_catalog', { query: 'CIL250' }, { ENVIRONMENT: 'production' });
     expect(result.error.code).toBe(-32603);
+  });
+  it('fails closed for named-lens calculate_field_of_view in unconfigured production', async () => {
+    const result = await callTool('calculate_field_of_view', { lens_sku: 'CIL250', sensor: 'IMX477' }, { ENVIRONMENT: 'production' });
+    expect(result.error.code).toBe(-32603);
+    expect(result).not.toHaveProperty('result');
   });
   it('normalizes aliases without conflating CS-mount', () => {
     expect(normalizeMountText('C-mount')).toBe(normalizeMountText('C FA'));

@@ -1301,7 +1301,8 @@ function withToolAnnotations(tool: ToolDefinition): ToolDefinition {
   };
 }
 
-function resourceListResponse(id: unknown): Response {
+function resourceListResponse(id: unknown, env: Env): Response {
+  if (usesLiveProductTruth(env)) return rpcResult(id, { resources: RESOURCES });
   const lensResources = CATALOG_SNAPSHOT.lenses.map((lens) => ({
     uri: `commonlands://lenses/${lens.sku}`,
     name: `Commonlands lens ${lens.sku}`,
@@ -1321,6 +1322,18 @@ function resourceListResponse(id: unknown): Response {
 async function resourceReadResponse(id: unknown, params: unknown, env: Env): Promise<Response> {
   if (!isRecord(params) || typeof params.uri !== 'string') {
     return rpcError(id, { code: -32602, message: 'Invalid params: uri is required' });
+  }
+
+  if (usesLiveProductTruth(env) && params.uri === 'commonlands://catalog/lenses') {
+    const response = await toolCallResponse(id, { name: 'search_lens_catalog', arguments: { limit: 25 } }, env);
+    const body = await response.json() as { error?: JsonRpcError; result?: { structuredContent?: unknown } };
+    if (body.error) return rpcError(id, body.error);
+    return rpcResult(id, { contents: [{ uri: params.uri, mimeType: 'application/json', text: JSON.stringify({ data: body.result?.structuredContent, limit: 25, scope: 'first_page_optical_discovery', commerceCatalog: 'https://mcp.commonlands.com/catalog' }) }] });
+  }
+  if (usesLiveProductTruth(env) && params.uri.startsWith('commonlands://lenses/')) {
+    const sku = params.uri.slice('commonlands://lenses/'.length);
+    const resolved = await resolveLiveProduct(env, sku);
+    return rpcResult(id, { contents: [{ uri: params.uri, mimeType: 'application/json', text: JSON.stringify(resolved) }] });
   }
 
   if (params.uri === 'commonlands://catalog/lenses') {
@@ -1852,10 +1865,15 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
     if (toolName === 'prepare_shopify_purchase_handoff' || toolName === 'get_purchase_route_options') {
       return rpcError(id, { code: -32601, message: 'This fixture handoff is retired. Resolve the exact full SKU using read_shopify_products, then use the authorized cart or RFQ tools.' });
     }
-    if (toolName === 'search_catalog') {
-      return toolResult(id, await readShopifyProducts(env, { query: args.query, limit: args.limit, includeMetafields: true }));
-    }
     const catalog = isRecord(args.catalog) ? args.catalog : {};
+    if (toolName === 'search_catalog') {
+      return toolResult(id, await readShopifyProducts(env, { query: catalog.query ?? args.query, limit: catalog.limit ?? args.limit, includeMetafields: true }));
+    }
+    if (toolName === 'lookup_catalog' && Array.isArray(catalog.ids)) {
+      if (catalog.ids.length < 1 || catalog.ids.length > 10 || !catalog.ids.every(value => typeof value === 'string')) return rpcError(id, { code: -32602, message: 'catalog.ids must contain 1-10 SKUs.' });
+      const resolutions = await Promise.all(catalog.ids.map(value => resolveLiveProduct(env, String(value))));
+      return toolResult(id, { schemaVersion: 'commonlands.product_resolution_list.v1', resolutions });
+    }
     const identifier = firstString(args.sku, catalog.id, args.id);
     if (!identifier) return rpcError(id, { code: -32602, message: 'A lens family or exact full SKU is required.' });
     return toolResult(id, await resolveLiveProduct(env, identifier));
@@ -2053,6 +2071,7 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
         }));
       }
 
+      if (usesLiveProductTruth(env)) return rpcError(id, { code: -32603, message: 'Live optics backend is not configured; fixture substitution is disabled.' });
       const lens = getLensBySku(normalized.lensSku);
       if (!lens) {
         return rpcError(id, { code: -32004, message: `Lens not found: ${normalized.lensSku}` });
@@ -3466,7 +3485,7 @@ async function handleMcp(request: Request, env: Env, ctx?: ExecutionContext): Pr
   if (parsed.method === 'initialize') response = initializeResponse(parsed.id, parsed.params);
   else if (parsed.method === 'tools/list') response = toolListResponse(parsed.id, env);
   else if (parsed.method === 'tools/call') response = await toolCallResponse(parsed.id, parsed.params, env);
-  else if (parsed.method === 'resources/list') response = resourceListResponse(parsed.id);
+  else if (parsed.method === 'resources/list') response = resourceListResponse(parsed.id, env);
   else if (parsed.method === 'resources/read') response = await resourceReadResponse(parsed.id, parsed.params, env);
   else if (parsed.method === 'prompts/list') response = promptListResponse(parsed.id);
   else if (parsed.method === 'prompts/get') response = promptGetResponse(parsed.id, parsed.params);
