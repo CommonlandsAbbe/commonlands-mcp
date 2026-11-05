@@ -1,5 +1,7 @@
 # Commonlands MCP Architecture
 
+> Branch update: the phased improvements change production product lookup and inventory behavior. See [the phase plan](phased-improvements.md), [live inventory and typed specifications](inventory-availability.md), and [quantity purchase options](purchase-options.md). Older fixture responses below are historical examples, not current purchase evidence. These changes require manual deployment.
+
 > Commerce update (v0.4.3): cart create/read/update/cancel and checkout create/read use Shopify UCP. Retain owner tokens; customers review and pay on Shopify. The [current commerce guide](commerce.md) supersedes older endpoint, payload, and hidden-checkout examples below. Live `tools/list` remains authoritative.
 
 ## Current scope

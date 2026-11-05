@@ -14,7 +14,14 @@ Public MCP server for Commonlands precision optics. Use it to choose M12/C-mount
 ## Copy-paste agent instruction
 
 ```text
-Use Commonlands MCP at https://mcp.commonlands.com/mcp for lens selection. Start with tools/list. Catalog EFL, image circle, max FoV/FOV@image-circle, and distortion display fields are insufficient to compute FoV on a specific sensor; do not interpolate or estimate sensor FoV from those fields. Use calculate_field_of_view for one lens/sensor pair, match_lens_to_sensor for sensor/target-FoV selection, search_lens_catalog for broad catalog discovery, and get_lens_distortion_profile for distortion status. Preserve the returned method, distortion_model, coverage_ok, image_circle_mm, sensor_diagonal_mm, and rectilinear_comparison. Call read_shopify_products before stating live price, availability, Product/Variant GIDs, URL, SKU, media, metafields, inventory, or cart payload. Only call create_cart/update_cart after the buyer confirms exact live Variant GIDs and quantities. Checkout tools are not live unless they appear in tools/list. Commonlands does not perform Shopify catalog/inventory/order/customer writes. For buyer-authorized agent purchases, use the returned agent_checkout route in the buyer's separate Shop MCP connection; never send payment credentials to Commonlands.
+Connect to https://mcp.commonlands.com/mcp and discover its current tools.
+Start with the image sensor: model, active area, resolution and pixel pitch.
+Establish the required horizontal field of view and working distance.
+Use match_lens_to_sensor to find candidates. Use calculate_field_of_view for
+final lens/sensor FoV and distortion; preserve its method and status.
+Resolve the chosen family with resolve_lens_product and select a full SKU.
+Use get_purchase_options for current price, stock and the requested quantity.
+Confirm variants, quantities and totals with the buyer before cart or RFQ actions.
 ```
 
 ## Agent workflow
@@ -38,8 +45,8 @@ Catalog EFL, image circle, max FoV/FOV@image-circle, and distortion display fiel
 1. `read_shopify_products` = live Shopify product truth.
 2. `calculate_field_of_view` / `match_lens_to_sensor` = **live FoV backend** (AWS Lambda + DynamoDB lens catalog) when configured. Sensor inputs resolve through the live DynamoDB sensor catalog with fixture fallback. These are the routed public optics tools.
 3. Compatibility aliases (`compute_fov`, `compute_fov_catalog`, `match_lenses_to_sensor`) still dispatch where practical, but new clients should route through the intent-named tools above.
-4. Ranking tools (`match_lens_to_sensor`, `recommend_lenses_for_application`, `compare_lenses`) rank against **live FoV-backend specs and field of view** when the live backend is enabled, so they use real per-SKU specs (EFL, mount, image circle, FoV). They still exclude live Shopify stock/price/variant IDs; use `read_shopify_products` for purchasable truth. If the live backend is unconfigured they fall back to fixture scaffold.
-5. The remaining fixture catalog/product-page tools = useful engineering context, not final commerce truth. If the live backend is ever unconfigured, FoV tools fail closed and sensor lookups fall back to a small reference fixture.
+4. Ranking tools (`match_lens_to_sensor`, `recommend_lenses_for_application`, `compare_lenses`) rank against **live FoV-backend specs and field of view** when the live backend is enabled, so they use real per-SKU specs (EFL, mount, image circle, FoV). They still exclude live Shopify stock/price/variant IDs; use `read_shopify_products` for purchasable truth. In production, a missing or failed backend returns an explicit error.
+5. Production legacy product aliases use live Shopify resolution and are omitted from discovery. Fixture handoff tools are retired. Offline development fixtures remain labeled and cannot replace failed production reads. Sensor lookups retain their separately labeled reference fallback.
 
 If fixture data conflicts with `read_shopify_products` or the live FoV/sensor backends, use the live truth.
 
@@ -51,18 +58,18 @@ If fixture data conflicts with `read_shopify_products` or the live FoV/sensor ba
 
 ## Current live surface
 
-The production configuration exposes **24 tools**, including `create_cart`, `get_cart`, `update_cart`, `cancel_cart`, `create_checkout`, and `get_checkout`. Commerce uses Shopify UCP at `https://commonlands.com/api/ucp/mcp`. `complete_checkout` is disabled on Commonlands. Cart responses include an `agent_checkout` route to the buyer's separate Shop MCP connection, where authorized agents can complete eligible purchases. Customers can also review and pay on Shopify. Always trust live `tools/list`. See [cart and checkout integration](docs/commerce.md).
+The production tool list depends on enabled features. This branch adds live product resolution and quantity purchase options and removes fixture aliases from discovery. It retains `create_cart`, `get_cart`, `update_cart`, `cancel_cart`, `create_checkout`, and `get_checkout`. Commerce uses Shopify UCP at `https://commonlands.com/api/ucp/mcp`. `complete_checkout` is disabled on Commonlands. Cart responses include an `agent_checkout` route to the buyer's separate Shop MCP connection, where authorized agents can complete eligible purchases. Customers can also review and pay on Shopify. Always trust live `tools/list`. See [cart and checkout integration](docs/commerce.md).
 
 Key tools:
 
 - Public optics routing: `calculate_field_of_view`, `match_lens_to_sensor`, `search_lens_catalog`, `get_lens_distortion_profile`.
-- Catalog/context (in `tools/list`): `search_catalog`, `lookup_catalog`, `get_product`, `get_product_page_details`, `compare_lenses`, `recommend_lenses_for_application`.
+- Optical comparison: `compare_lenses`, `recommend_lenses_for_application`. Current product selection: `resolve_lens_product`, `get_purchase_options`.
 - Legacy hidden aliases (still dispatch for old clients, not listed in `tools/list`): `compute_fov`, `compute_fov_catalog`, `match_lenses_to_sensor`, `search_lenses`, `get_lens_details`.
 - Resources/prompts: `commonlands://sensors/{part}`, `commonlands://lenses/{sku}`, `commonlands://catalog/sensors`, `commonlands://catalog/lenses`, and prompt `select_lens_for_sensor_fov_working_distance`.
 - Live Shopify read-only truth: `read_shopify_products`, `get_shopify_readonly_config_status`.
 - Buyer-confirmed Shopify cart handoff: `create_cart`, `get_cart`, `update_cart`, `cancel_cart`, followed by `create_checkout` and `get_checkout` when visible in `tools/list`.
 - RFQ / question handoff: `submit_rfq` forwards a buyer quote request or question to the fixed Commonlands engineering inbox (SendGrid). The agent cannot choose the recipient; it sends an inquiry only (no order, payment, or Shopify write) and stays inert (routes to the contact page) until `SENDGRID_API_KEY` + `RFQ_TO_EMAIL` + `RFQ_FROM_EMAIL` are configured.
-- Diagnostics/readiness: `get_catalog_snapshot_status`, `get_shopify_ucp_readiness`, `prepare_shopify_purchase_handoff`, `get_purchase_route_options`.
+- Diagnostics/readiness: `get_catalog_snapshot_status`, `get_shopify_ucp_readiness`. Legacy fixture purchase handoffs are retired in production.
 
 ## Public-data scope (Shopify reads)
 
@@ -73,9 +80,10 @@ in `src/shopify-read-adapter.ts`, see `PUBLIC_DATA_POLICY`):
 - **Published active products only.** Products must be ACTIVE and have a
   Shopify-provided Online Store URL on commonlands.com. An ACTIVE product
   with no publication is filtered out; the adapter never invents its URL.
-- **No exact inventory.** Variants carry a coarse `availability` signal
-  (`in_stock` / `low_stock` / `out_of_stock` / `untracked`); raw counts and
-  inventory item IDs are never returned.
+- **Current per-variant inventory.** Shopify supplies website and online sellable
+  quantities on each request. Untracked or missing quantities are null. The old
+  `availability` category remains for compatibility; inventory item/location IDs
+  remain private. Counts do not reserve inventory or guarantee fulfillment.
 - **Metafields are opt-in and allowlisted.** `includeMetafields` defaults to
   `false`; when enabled, only the `custom.*` display fields rendered on public
   product pages are returned. App/private namespaces and non-allowlisted keys
@@ -336,3 +344,14 @@ quantities are null. Neither count reserves inventory or promises a delivery dat
 Use complete typed metafield `value` instead of `valuePreview`. Check `valueStatus`,
 `pageInfo` and `metafieldsComplete` before treating a record as complete. See
 [inventory and specification semantics](docs/inventory-availability.md).
+
+### Quantity options and web access
+
+See [quantity purchase options](docs/purchase-options.md) for exact-SKU requests,
+current stock, base-price estimates, RFQ routing and owner-authorized Shopify
+shipping/tax estimates. Unverified volume pricing and delivery dates stay unknown.
+
+Web-only agents can read `/catalog` with cursor pagination or `/products/{full-SKU}`
+on the MCP host. Add `?format=markdown` for a readable specification record. These
+routes use the same live Shopify adapter and return `Cache-Control: no-store`.
+They become available only after manual deployment of this branch.

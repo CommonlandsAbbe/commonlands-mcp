@@ -368,6 +368,7 @@ describe('Commonlands MCP Worker', () => {
     const toolNames = tools.map((tool) => tool.name);
 
     expect(toolNames).toEqual([
+      'get_purchase_options',
       'resolve_lens_product',
       'calculate_field_of_view',
       'match_lens_to_sensor',

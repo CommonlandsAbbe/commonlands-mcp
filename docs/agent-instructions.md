@@ -16,21 +16,26 @@ There is no `find_lenses` tool in the current public surface. For "find lenses f
 
 ## Default Lens-Selection Workflow
 
-1. Call `tools/list` and trust the live tool list over documentation.
-2. If the user names a sensor or target FoV, call `match_lens_to_sensor` first. Its lens records carry per-sensor HFOV/VFOV/DFOV when available, nested `fov`, image-circle coverage class, pixel counts, field-edge distortion, and provenance/source metadata.
-3. If the user names one SKU and one sensor, call `calculate_field_of_view`.
-4. Use `search_lens_catalog` or `search_catalog` only for broad SKU/title/mount discovery, not for sensor-specific FoV.
-5. Use `match_lens_to_sensor`, `compare_lenses`, or `recommend_lenses_for_application` as shortlist/explanation helpers. Treat them as fixture-backed context unless the returned payload says otherwise.
-6. Before recommending a purchasable product, call `read_shopify_products` for live commerce truth.
-7. Only call `create_cart` or `update_cart` after the buyer explicitly confirms live Variant GIDs and quantities.
+1. Identify the sensor model or active dimensions, resolution and pixel pitch.
+2. Establish the required horizontal FoV and working distance. Discover the current tools with `tools/list`.
+3. Use `match_lens_to_sensor` to find candidates, then `calculate_field_of_view` for final lens/sensor FoV and distortion. Preserve source, method and status.
+4. Use `resolve_lens_product` to map the chosen family to current published Shopify variants. Select the full SKU explicitly.
+5. Use `get_purchase_options` with that full SKU and requested quantity. Use `read_shopify_products` with metafields enabled for complete public specifications.
+6. A base-price multiplication is an estimate. Do not invent quantity tiers, shipping, tax, lead time or quote expiry. Unknown means unknown.
+7. Only create a cart or submit an RFQ after the buyer confirms the exact variant and quantity. Existing owner credentials remain mandatory for cart and checkout reads.
 
 ## What To Trust
 
-- `read_shopify_products`: live Shopify product truth for product/variant IDs, SKU, price, inventory signal, URL, media, and selected metafields.
-- `calculate_field_of_view` and `match_lens_to_sensor`: authoritative Commonlands MCP path for sensor-specific FoV. In production they use the authenticated Lambda/DynamoDB FoV backend when configured; otherwise they return fixture/fail-closed behavior with warnings.
-- `search_lens_catalog`, `search_catalog`, `search_lens_catalog`, `get_product`, `get_product_page_details`, `match_lens_to_sensor`, `compare_lenses`, and `recommend_lenses_for_application`: useful context and shortlist helpers, not live product truth.
+Lambda/DynamoDB owns optical results; Shopify owns current commerce and variant
+facts. Production optical failures return errors without substituting fixtures.
+Legacy product aliases resolve live Shopify data, and old fixture handoffs are
+retired. Sensor reference fallback remains labeled. Do not resolve conflicting
+family/variant specifications by guessing. CIL039 remains at its approved 5MP.
 
-If fixture context conflicts with `read_shopify_products`, use Shopify truth for commerce facts. If a FoV tool fails closed, report the unsupported SKU/sensor pair instead of substituting a hand calculation.
+See [quantity and shipping semantics](purchase-options.md) and
+[complete typed specifications](inventory-availability.md). An official Shopify
+Shop MCP connection is separate from Commonlands MCP and browser WebMCP; use the
+existing authenticated buyer handoff described in [commerce](commerce.md).
 
 ## FoV Output Handling
 
@@ -60,11 +65,13 @@ For a request like "Find M12 lenses for IMX477 around 50 degrees HFOV":
 Good answer shape:
 
 ```text
-For IMX477, the closest optical candidates from match_lens_to_sensor are:
-- CIL250: HFOV 51.3, VFOV 39.6, DFOV 61.9, coverage inscribed with returned pixel counts, provenance fixture_parity_scaffold/fixture-polynomial-fov-0.1.0.
-- CIL078: HFOV ..., coverage ...
+For your selected sensor, these are the closest candidates returned by
+match_lens_to_sensor. I checked each final sensor/lens pair using
+calculate_field_of_view and retained its returned distortion status.
 
-I verified CIL250 through read_shopify_products for live URL, price, inventory signal, and Variant GID. I did not use catalog EFL/image-circle interpolation for these FoV values.
+I resolved the selected family to a full Shopify SKU and checked the requested
+quantity with get_purchase_options. Base price, online stock, backorder policy
+and any missing commercial terms are reported separately.
 ```
 
 ## Prohibited Behavior
@@ -73,5 +80,5 @@ I verified CIL250 through read_shopify_products for live URL, price, inventory s
 - Do not compute FoV from EFL and sensor dimensions in the model response.
 - Do not interpolate from catalog max FoV, image circle, or distortion display fields.
 - Do not expose raw Lambda/DynamoDB distortion coefficients, secrets, request arguments, customer data, or cart IDs beyond returned public fields.
-- Do not perform Shopify product, variant, collection, tag, metafield, inventory, order, customer, discount, RFQ, Acumatica, or database writes.
+- Do not perform Shopify product, variant, collection, tag, metafield, inventory, order, customer, discount, Acumatica, or database writes. Submit an RFQ only through the existing buyer-confirmed `submit_rfq` tool.
 - Do not ask users for card numbers, CVV/CVC, passwords, payment tokens, or customer account credentials.

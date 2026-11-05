@@ -28,3 +28,14 @@ Unresolved merchant facts: CIL250 weight differs between sources; there is no
 verified variant-specific mapping that explains it. Family optical specs and
 Shopify variant specs remain separately attributed. Quantity discount rules,
 shipping dates and private B2B pricing must not be inferred from page copy.
+
+## Review and merge sequence
+
+Prerequisite [#55](https://github.com/CommonlandsAbbe/commonlands-mcp/pull/55)
+reconciles main with the already deployed commerce code. Then review phase 1
+[#56](https://github.com/CommonlandsAbbe/commonlands-mcp/pull/56), phase 2
+[#57](https://github.com/CommonlandsAbbe/commonlands-mcp/pull/57), and phase 3 in
+that order. Each phase targets its predecessor to keep its diff small. Retarget
+the next PR to main after its predecessor merges. No merge or deployment was
+performed while preparing this stack. Existing uncommitted work in the primary
+checkout was preserved; these PRs were built in an isolated worktree.
