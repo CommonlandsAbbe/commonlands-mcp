@@ -309,3 +309,19 @@ the service calls the private Lambda backend using server-side credentials.
 Independently hosting this adapter requires an authorized compatible backend;
 the source-code license does not grant backend credentials or access to private
 code or datasets.
+
+## Live product identity
+
+Start with the image sensor model or active dimensions and pixel pitch. Set your
+required horizontal field of view, then use `match_lens_to_sensor` and
+`calculate_field_of_view` to obtain Commonlands' sensor-specific FoV and distortion.
+Use `resolve_lens_product` with the chosen optical part number to find its current
+published Shopify variants. Select the **full SKU** explicitly before purchasing.
+A family such as CIL250 is not a unique configuration.
+
+Production legacy product lookup aliases now resolve through Shopify; legacy
+fixture handoffs are retired and omitted from discovery. Optical backend failures
+return errors, not fixture replacements. Shopify remains the source for price,
+availability, variant IDs and product-page specifications. Lambda/DynamoDB owns
+optical calculations; differences between family and variant records are not
+silently reconciled. See [the phased PR plan](docs/phased-improvements.md).

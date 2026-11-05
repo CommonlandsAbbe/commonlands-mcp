@@ -1,3 +1,5 @@
+import { resolveLiveProduct, normalizeMountText } from './product-resolver';
+import { fetchReadWithRetry, readFailureCategory } from './upstream-read';
 import { lensSpecifications, type LensSpecifications } from './lens-specifications';
 import {
   assertSafePublicCatalogUrls,
@@ -44,7 +46,7 @@ import {
   searchCatalog,
 } from './ucp-catalog';
 import { getCatalogSnapshotStatus } from './snapshot-status';
-import { BodyTooLargeError, fetchWithTimeout, readJsonWithLimit, readTextWithLimit } from './http-safety';
+import { BodyTooLargeError, readJsonWithLimit, readTextWithLimit } from './http-safety';
 
 export interface Env {
   ENVIRONMENT?: string;
@@ -277,6 +279,11 @@ const SERVER_INSTRUCTIONS = [
 ].join(' ');
 
 const TOOLS: ToolDefinition[] = [
+  {
+    name: 'resolve_lens_product', title: 'Resolve a live lens product',
+    description: 'Resolve a lens family or exact full SKU to current published Shopify variants. A family requires explicit variant selection; no fixture specifications or inferred configuration. Use the optical part number with calculate_field_of_view for sensor-specific optics.',
+    inputSchema: { type: 'object', properties: { sku: { type: 'string' } }, required: ['sku'], additionalProperties: false },
+  },
   {
     name: 'calculate_field_of_view',
     title: 'Calculate Commonlands field of view',
@@ -1215,7 +1222,7 @@ function toolListResponse(id: unknown, env: Env): Response {
 }
 
 function visibleTools(env: Env): ToolDefinition[] {
-  return TOOLS.filter((tool) => !tool.hiddenFromList && isToolEnabled(tool.name, env)).map(tool => {
+  return TOOLS.filter((tool) => !tool.hiddenFromList && isToolEnabled(tool.name, env) && !(usesLiveProductTruth(env) && LEGACY_PRODUCT_TOOLS.has(tool.name))).map(tool => {
     if (tool.name === 'update_checkout' || tool.name === 'cancel_checkout') {
       const updated = structuredClone(tool);
       const properties = updated.inputSchema.properties as Record<string, unknown>;
@@ -1294,7 +1301,8 @@ function withToolAnnotations(tool: ToolDefinition): ToolDefinition {
   };
 }
 
-function resourceListResponse(id: unknown): Response {
+function resourceListResponse(id: unknown, env: Env): Response {
+  if (usesLiveProductTruth(env)) return rpcResult(id, { resources: RESOURCES });
   const lensResources = CATALOG_SNAPSHOT.lenses.map((lens) => ({
     uri: `commonlands://lenses/${lens.sku}`,
     name: `Commonlands lens ${lens.sku}`,
@@ -1314,6 +1322,18 @@ function resourceListResponse(id: unknown): Response {
 async function resourceReadResponse(id: unknown, params: unknown, env: Env): Promise<Response> {
   if (!isRecord(params) || typeof params.uri !== 'string') {
     return rpcError(id, { code: -32602, message: 'Invalid params: uri is required' });
+  }
+
+  if (usesLiveProductTruth(env) && params.uri === 'commonlands://catalog/lenses') {
+    const response = await toolCallResponse(id, { name: 'search_lens_catalog', arguments: { limit: 25 } }, env);
+    const body = await response.json() as { error?: JsonRpcError; result?: { structuredContent?: unknown } };
+    if (body.error) return rpcError(id, body.error);
+    return rpcResult(id, { contents: [{ uri: params.uri, mimeType: 'application/json', text: JSON.stringify({ data: body.result?.structuredContent, limit: 25, scope: 'first_page_optical_discovery', commerceCatalog: 'https://mcp.commonlands.com/catalog' }) }] });
+  }
+  if (usesLiveProductTruth(env) && params.uri.startsWith('commonlands://lenses/')) {
+    const sku = params.uri.slice('commonlands://lenses/'.length);
+    const resolved = await resolveLiveProduct(env, sku);
+    return rpcResult(id, { contents: [{ uri: params.uri, mimeType: 'application/json', text: JSON.stringify(resolved) }] });
   }
 
   if (params.uri === 'commonlands://catalog/lenses') {
@@ -1812,6 +1832,11 @@ function roundNumber(value: number, places: number): number {
   return Math.round((value + Number.EPSILON) * factor) / factor;
 }
 
+const LEGACY_PRODUCT_TOOLS = new Set(['get_lens_details', 'get_product_page_details', 'search_catalog', 'lookup_catalog', 'get_product', 'prepare_shopify_purchase_handoff', 'get_purchase_route_options']);
+function usesLiveProductTruth(env: Env): boolean {
+  return env.ENVIRONMENT === 'production' || isFovLiveBackendEnabled(env) || getShopifyReadonlyStatus(env).configured;
+}
+
 async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise<Response> {
   if (!isRecord(params) || typeof params.name !== 'string') {
     return rpcError(id, { code: -32602, message: 'Invalid params: tool name is required' });
@@ -1832,6 +1857,34 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
     return rpcError(id, { code: -32601, message: `Tool not found: ${params.name}` });
   }
   const args = normalizeAliasedToolArgs(toolName, isRecord(params.arguments) ? params.arguments : {});
+  if (toolName === 'resolve_lens_product') {
+    if (typeof args.sku !== 'string') return rpcError(id, { code: -32602, message: 'sku is required' });
+    return toolResult(id, await resolveLiveProduct(env, args.sku));
+  }
+  if (usesLiveProductTruth(env) && LEGACY_PRODUCT_TOOLS.has(toolName)) {
+    if (toolName === 'prepare_shopify_purchase_handoff' || toolName === 'get_purchase_route_options') {
+      return rpcError(id, { code: -32601, message: 'This fixture handoff is retired. Resolve the exact full SKU using read_shopify_products, then use the authorized cart or RFQ tools.' });
+    }
+    const catalog = isRecord(args.catalog) ? args.catalog : {};
+    if (toolName === 'search_catalog') {
+      return toolResult(id, await readShopifyProducts(env, { query: catalog.query ?? args.query, limit: catalog.limit ?? args.limit, includeMetafields: true }));
+    }
+    if (toolName === 'lookup_catalog' && Array.isArray(catalog.ids)) {
+      if (catalog.ids.length < 1 || catalog.ids.length > 10 || !catalog.ids.every(value => typeof value === 'string')) return rpcError(id, { code: -32602, message: 'catalog.ids must contain 1-10 SKUs.' });
+      const resolutions = await Promise.all(catalog.ids.map(value => resolveLiveProduct(env, String(value))));
+      return toolResult(id, { schemaVersion: 'commonlands.product_resolution_list.v1', resolutions });
+    }
+    const identifier = firstString(args.sku, catalog.id, args.id);
+    if (!identifier) return rpcError(id, { code: -32602, message: 'A lens family or exact full SKU is required.' });
+    return toolResult(id, await resolveLiveProduct(env, identifier));
+  }
+  if (usesLiveProductTruth(env) && !isFovLiveBackendEnabled(env) && new Set([
+    'search_lenses', 'get_lens_distortion_profile', 'compute_fov', 'compute_fov_catalog',
+    'match_lenses_to_sensor', 'compare_lenses', 'recommend_lenses_for_application',
+  ]).has(toolName)) {
+    return rpcError(id, { code: -32603, message: 'Live optics backend is not configured; fixture substitution is disabled.' });
+  }
+
 
   if (toolName === 'search_lenses') {
     const query = typeof args.query === 'string' ? args.query : '';
@@ -1846,7 +1899,6 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
     // Live search: enumerate the full live lens catalog and tokenized-match against
     // SKU, mount, lens type, and resolution. This makes lens_type queries work, e.g.
     // "telephoto" returns every lens with lensType Telephoto, keyed by clean part number.
-    let liveBackendError: string | undefined;
     if (isFovLiveBackendEnabled(env)) {
       const sensor = await resolveSensor(env, SEARCH_REFERENCE_SENSOR);
       if (sensor) {
@@ -1862,8 +1914,9 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
             ...sensorQueryHint,
           });
         }
-        liveBackendError = live.error.message;
+        return rpcError(id, live.error);
       }
+      return rpcError(id, { code: -32603, message: 'Live catalog reference sensor is unavailable.' });
     }
 
     const results = searchLenses(query, limit).map(summarizeLens);
@@ -1874,13 +1927,6 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
       count: results.length,
       source: 'fixture-backed joined catalog snapshot',
       sourceWarning: FIXTURE_NOT_PRODUCT_TRUTH_WARNING,
-      ...(liveBackendError
-        ? {
-            liveBackendDegraded: true,
-            liveBackendError,
-            warnings: ['Live lens catalog was unavailable; these results come from the small fixture snapshot and may omit or misstate current products.'],
-          }
-        : {}),
       ...sensorQueryHint,
     });
   }
@@ -1902,6 +1948,7 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
           sensorPartNumber: sensor.partNumber,
           sensor,
         });
+        if ('error' in liveResult) return rpcError(id, liveResult.error);
         if (!('error' in liveResult)) {
           const lenses = Array.isArray(liveResult.structuredContent.lenses)
             ? (liveResult.structuredContent.lenses as SanitizedFovLens[])
@@ -1936,6 +1983,7 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
           }
         }
       }
+      return rpcError(id, { code: -32004, message: 'Live distortion record unavailable; no fixture substituted.' });
     }
 
     const lens = getLensBySku(sku);
@@ -2023,6 +2071,7 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
         }));
       }
 
+      if (usesLiveProductTruth(env)) return rpcError(id, { code: -32603, message: 'Live optics backend is not configured; fixture substitution is disabled.' });
       const lens = getLensBySku(normalized.lensSku);
       if (!lens) {
         return rpcError(id, { code: -32004, message: `Lens not found: ${normalized.lensSku}` });
@@ -2726,9 +2775,11 @@ async function computeFovWithLiveBackend(
     ...(input.workingDistanceMm !== undefined ? { workingDistanceMm: input.workingDistanceMm } : {}),
   };
 
+  const startedAt = Date.now();
+  const requestId = crypto.randomUUID();
   let response: Response;
   try {
-    response = await fetchWithTimeout(endpoint.url, {
+    response = await fetchReadWithRetry(endpoint.url, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -2737,8 +2788,8 @@ async function computeFovWithLiveBackend(
       },
       body: JSON.stringify(requestBody),
     }, FOV_BACKEND_TIMEOUT_MS, FOV_BACKEND_MAX_RESPONSE_BYTES);
-  } catch {
-    return { error: { code: -32603, message: 'Live FoV backend request failed' } };
+  } catch (error) {
+    return { error: { code: -32603, message: 'Live FoV backend request failed', data: { category: readFailureCategory(error), requestId, elapsedMs: Date.now() - startedAt } } };
   }
 
   if (!response.ok) {
@@ -2769,6 +2820,7 @@ async function computeFovWithLiveBackend(
         data: {
           upstreamStatus: response.status,
           stage: 'live_fov_backend_response',
+          category: isAuth ? 'authentication' : 'upstream_http', requestId, elapsedMs: Date.now() - startedAt,
         },
       },
     };
@@ -3273,14 +3325,12 @@ function searchLiveLenses(
 ): Array<Record<string, unknown>> {
   // Matches the tool inputSchema maximum of 25.
   const safeLimit = Math.min(Math.max(Math.trunc(limit) || 10, 1), 25);
-  const tokens = query.trim().toLowerCase().split(/\s+/u).filter(Boolean);
+  const tokens = normalizeMountText(query).trim().split(/\s+/u).filter(Boolean);
 
   const matched = tokens.length === 0
     ? lenses
     : lenses.filter((lens) => {
-        const searchable = [lens.sku, lens.mount, lens.lensType, lens.resolution]
-          .join(' ')
-          .toLowerCase();
+        const searchable = normalizeMountText([lens.sku, lens.mount, lens.lensType, lens.resolution].join(' '));
         return tokens.every((token) => searchable.includes(token));
       });
 
@@ -3435,7 +3485,7 @@ async function handleMcp(request: Request, env: Env, ctx?: ExecutionContext): Pr
   if (parsed.method === 'initialize') response = initializeResponse(parsed.id, parsed.params);
   else if (parsed.method === 'tools/list') response = toolListResponse(parsed.id, env);
   else if (parsed.method === 'tools/call') response = await toolCallResponse(parsed.id, parsed.params, env);
-  else if (parsed.method === 'resources/list') response = resourceListResponse(parsed.id);
+  else if (parsed.method === 'resources/list') response = resourceListResponse(parsed.id, env);
   else if (parsed.method === 'resources/read') response = await resourceReadResponse(parsed.id, parsed.params, env);
   else if (parsed.method === 'prompts/list') response = promptListResponse(parsed.id);
   else if (parsed.method === 'prompts/get') response = promptGetResponse(parsed.id, parsed.params);

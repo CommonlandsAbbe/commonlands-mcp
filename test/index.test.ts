@@ -368,6 +368,7 @@ describe('Commonlands MCP Worker', () => {
     const toolNames = tools.map((tool) => tool.name);
 
     expect(toolNames).toEqual([
+      'resolve_lens_product',
       'calculate_field_of_view',
       'match_lens_to_sensor',
       'search_lens_catalog',
@@ -452,7 +453,8 @@ describe('Commonlands MCP Worker', () => {
     const { body } = await rpc('tools/list', undefined, 'annotated-tools', shopifyCartEnv);
     const tools = getResult(body).tools as ToolSummary[];
 
-    expect(tools.length).toBeGreaterThanOrEqual(20);
+    expect(tools.length).toBeGreaterThanOrEqual(16);
+    expect(tools.map(tool => tool.name)).not.toContain('get_product');
     expect(tools.map((tool) => tool.name)).not.toContain('read_shopify_metaobjects');
     for (const tool of tools) {
       expect(tool.annotations).toMatchObject({

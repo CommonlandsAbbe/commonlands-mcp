@@ -1,3 +1,4 @@
+import { normalizeMountText } from './product-resolver';
 import { CATALOG_SNAPSHOT, type LensCatalogItem, type SensorCatalogItem } from './catalog';
 import { computeFov, type FovResult } from './optics';
 import { lensSpecifications, type LensSpecifications } from './lens-specifications';
@@ -114,7 +115,7 @@ export function matchLensesToSensorLive(
 ): LensRecommendation[] {
   const maxResults = clampMaxResults(input.maxResults);
   return lenses
-    .filter((lens) => (input.mount ? lens.mount.toLowerCase() === input.mount.trim().toLowerCase() : true))
+    .filter((lens) => (input.mount ? normalizeMountText(lens.mount) === normalizeMountText(input.mount.trim()) : true))
     .map((lens) => scoreLiveLens(lens, input))
     .sort((a, b) => sortRecommendations(a, b, input))
     .slice(0, maxResults)
@@ -308,7 +309,7 @@ function requireSensor(partNumber: string): SensorCatalogItem {
 }
 
 function matchesMount(lens: LensCatalogItem, mount?: string): boolean {
-  return mount ? lens.mount.toLowerCase() === mount.trim().toLowerCase() : true;
+  return mount ? normalizeMountText(lens.mount) === normalizeMountText(mount.trim()) : true;
 }
 
 function clampMaxResults(maxResults: number | undefined): number {
