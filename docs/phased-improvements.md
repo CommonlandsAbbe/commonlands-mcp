@@ -1,8 +1,9 @@
 # MCP improvement PRs
 
-These branches start from the deployed v0.4.4 commit `9b191b6`. Its commerce
-branch has not reached main; merge that prerequisite before this stack. No PR
-deploys the Worker. Deployment remains a separate manual operation.
+Phases 1–3 and their commerce prerequisite are merged and deployed as v0.4.4,
+commit `527bf43`. Production smoke checks verified live FoV, exact-variant
+Shopify inventory, quantity purchase options and public catalog reads. Deployment
+remains a separate manual operation; pushing or merging a PR does not deploy the Worker.
 
 1. **Live identity and reliability.** Route production legacy product reads to
    Shopify, require an exact full SKU for variant selection, normalize mount
@@ -29,13 +30,37 @@ verified variant-specific mapping that explains it. Family optical specs and
 Shopify variant specs remain separately attributed. Quantity discount rules,
 shipping dates and private B2B pricing must not be inferred from page copy.
 
-## Review and merge sequence
+## Completed PRs
 
 Prerequisite [#55](https://github.com/CommonlandsAbbe/commonlands-mcp/pull/55)
-reconciles main with the already deployed commerce code. Then review phase 1
+reconciled main with the previously deployed commerce code. Phase 1
 [#56](https://github.com/CommonlandsAbbe/commonlands-mcp/pull/56), phase 2
-[#57](https://github.com/CommonlandsAbbe/commonlands-mcp/pull/57), and phase 3 in
-that order. Each phase targets its predecessor to keep its diff small. Retarget
-the next PR to main after its predecessor merges. No merge or deployment was
-performed while preparing this stack. Existing uncommitted work in the primary
-checkout was preserved; these PRs were built in an isolated worktree.
+[#57](https://github.com/CommonlandsAbbe/commonlands-mcp/pull/57), and phase 3
+[#58](https://github.com/CommonlandsAbbe/commonlands-mcp/pull/58) followed in that
+order. All 179 tests passed before the authorized merge and manual deployment.
+Existing uncommitted work in the primary checkout was preserved; these PRs were
+built in an isolated worktree.
+
+## Phase 4: engineering requirements (current PR)
+
+Add a read-only `assess_lens_requirements` tool for one optical part number and
+sensor, reusing the existing live FoV path. Explicit ranges and limits produce
+satisfied, failed or unknown checks. Unpublished MTF/CRA/illumination evidence,
+unitless mechanical fields and display-only distortion cannot silently pass.
+Keep source-data revisions null when unavailable, and label sensor fallback.
+See [the contract and examples](engineering-requirements.md).
+
+Acceptance gates: existing verification suite plus exact-part matching, upstream
+failure, missing-unit/evidence, distortion-axis, boundary and privacy regressions.
+This increment does not create engineering datasets or claim that the broader
+phase 4 data work is complete. Approved, configuration-specific source records
+are required before adding quantitative MTF/CRA/illumination checks.
+
+## Subsequent separate PRs
+
+5. Carry exact variants, per-line quantities and technical-selection context into
+   the existing buyer-confirmed RFQ preview/submission. Add reference/status only
+   with a real persistence and status source; preserve fixed-recipient and privacy controls.
+6. Validate authorized Shop/Shopify handoffs and order/fulfillment status with
+   supported buyer authentication and explicit transaction authorization. Read-only
+   probes alone cannot demonstrate a completed payment or actual order.

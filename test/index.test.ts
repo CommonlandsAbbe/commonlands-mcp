@@ -370,6 +370,7 @@ describe('Commonlands MCP Worker', () => {
     expect(toolNames).toEqual([
       'get_purchase_options',
       'resolve_lens_product',
+      'assess_lens_requirements',
       'calculate_field_of_view',
       'match_lens_to_sensor',
       'search_lens_catalog',
