@@ -1,5 +1,7 @@
 # Connect Commonlands MCP to AI clients
 
+> Commerce update (v0.4.3): cart create/read/update/cancel and checkout create/read use Shopify UCP. Retain owner tokens; customers review and pay on Shopify. The [current commerce guide](commerce.md) supersedes older endpoint, payload, and hidden-checkout examples below. Live `tools/list` remains authoritative.
+
 Commonlands MCP is a remote Streamable HTTP MCP server for precision-optics workflows: M12 lenses, C-mount lenses, lens field of view, live read-only Shopify product truth, and Shopify-owned cart handoff.
 
 - **MCP endpoint:** `https://mcp.commonlands.com/mcp`

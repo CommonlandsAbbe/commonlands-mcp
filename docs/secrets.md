@@ -61,13 +61,13 @@ Rules:
 Rules:
 
 - Admin API access remains read-only.
-- No product, variant, inventory, metafield, collection, direct payment capture, raw card handling, customer-account, or catalog writes. Checkout completion is only proxied to Shopify Checkout MCP after Shopify authentication/authorization.
+- No product, variant, inventory, metafield, collection, direct payment capture, raw card handling, customer-account, or catalog writes. Commonlands does not proxy checkout completion. Authorized purchases use the buyer's separate Shop MCP connection.
 - Client secret/token material must be scoped narrowly and stored only in secret storage.
 
 ### Shopify Cart MCP
 
 - `ENABLE_COMMERCE_MUTATION_TOOLS` non-secret explicit gate; cart tools are exposed only when this is `true` and the target environment is approved/configured. Live `tools/list` is authoritative.
-- `SHOPIFY_CART_MCP_ENDPOINT` non-secret HTTPS merchant Cart MCP endpoint. Current confirmed Commonlands Storefront MCP endpoint is `https://commonlands-camera-components.myshopify.com/api/mcp`; the Worker also permits exact Commonlands merchant hosts only, not arbitrary tool-supplied endpoints.
+- `SHOPIFY_CART_MCP_ENDPOINT` non-secret HTTPS merchant Cart MCP endpoint. Current confirmed Commonlands Storefront MCP endpoint is `https://commonlands.com/api/ucp/mcp`; the Worker also permits exact Commonlands merchant hosts only, not arbitrary tool-supplied endpoints.
 - `SHOPIFY_UCP_AGENT_PROFILE` optional non-secret profile URL; defaults to the live Commonlands UCP discovery URL.
 
 Rules:
@@ -79,15 +79,15 @@ Rules:
 ### Shopify Checkout MCP
 
 - `ENABLE_CHECKOUT_MUTATION_TOOLS` non-secret explicit gate; basic checkout tools (`create_checkout`, `get_checkout`) are hidden unless set to `true` after the Shopify Checkout MCP endpoint is validated/configured and operator approval is recorded.
-- `ENABLE_EXTRA_CHECKOUT_MUTATION_TOOLS` non-secret explicit gate; extra checkout operations (`update_checkout`, `complete_checkout`, `cancel_checkout`) are hidden unless set to `true` after official review.
-- `SHOPIFY_CHECKOUT_MCP_ENDPOINT` non-secret HTTPS merchant Checkout MCP endpoint on `commonlands.com`, normally `https://commonlands.com/api/checkout/mcp` when available.
+- `ENABLE_EXTRA_CHECKOUT_MUTATION_TOOLS` non-secret explicit gate; extra checkout operations (`update_checkout`, `cancel_checkout`) are hidden unless set to `true` after official review.
+- `SHOPIFY_CHECKOUT_MCP_ENDPOINT` non-secret HTTPS merchant Checkout MCP endpoint on `commonlands.com`, normally `https://commonlands.com/api/ucp/mcp` when available.
 - `SHOPIFY_UCP_AGENT_PROFILE` optional non-secret profile URL; defaults to the live Commonlands UCP discovery URL.
 
 Rules:
 
-- Checkout MCP remains hidden on the current live surface pending approval, Cloudflare protections, endpoint binding, and merchant-side availability.
+- Checkout create/read are enabled in v0.4.3. CART_TOKEN_SECRET is required for owner binding; cart conversion verifies cart_access_token, and checkout reads verify checkout_access_token. See commerce.md.
 - Checkout state is stored and mutated by Shopify Checkout MCP; Commonlands Worker remains stateless and stores no checkout database/session/customer/payment record.
-- `complete_checkout` requires Shopify-authenticated buyer/payment verification and idempotency. No raw payment credentials, customer records, discounts/gift cards, inventory reservation/mutation, inventory sync changes, product writes, metafield writes, or catalog writes are accepted by Commonlands MCP.
+- `complete_checkout` is disabled regardless of flags; verification booleans supplied by an agent are not payment authorization. No raw payment credentials, customer records, discounts/gift cards, inventory reservation/mutation, inventory sync changes, product writes, metafield writes, or catalog writes are accepted by Commonlands MCP.
 - Do not log returned credentials, signed URLs, or authorization material if Shopify Checkout MCP ever adds authenticated transport.
 
 ### Cloudflare
@@ -99,3 +99,7 @@ Cloudflare account ID, zone ID, routes, and deploy tokens should be stored in Gi
 - Rotate any credential accidentally exposed during setup.
 - Keep a short access log in the PR or deployment notes: credential name, owner, scope, environment, and date added.
 - Do not include secret values in PR descriptions, screenshots, fixtures, tests, logs, or docs.
+
+## Shop MCP purchase route
+
+Cart responses in v0.4.4 include an external `agent_checkout` route. No new Worker secret is needed. The buyer's MCP client connects directly to `https://mcp.shop.com/` and holds its Shop OAuth credentials; never put those credentials into Commonlands tool arguments or Worker configuration. Shop performs its own merchant authorization. Commonlands Admin API credentials cannot unlock native order completion. See [commerce integration](commerce.md).

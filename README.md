@@ -14,7 +14,7 @@ Public MCP server for Commonlands precision optics. Use it to choose M12/C-mount
 ## Copy-paste agent instruction
 
 ```text
-Use Commonlands MCP at https://mcp.commonlands.com/mcp for lens selection. Start with tools/list. Catalog EFL, image circle, max FoV/FOV@image-circle, and distortion display fields are insufficient to compute FoV on a specific sensor; do not interpolate or estimate sensor FoV from those fields. Use calculate_field_of_view for one lens/sensor pair, match_lens_to_sensor for sensor/target-FoV selection, search_lens_catalog for broad catalog discovery, and get_lens_distortion_profile for distortion status. Preserve the returned method, distortion_model, coverage_ok, image_circle_mm, sensor_diagonal_mm, and rectilinear_comparison. Call read_shopify_products before stating live price, availability, Product/Variant GIDs, URL, SKU, media, metafields, inventory, or cart payload. Only call create_cart/update_cart after the buyer confirms exact live Variant GIDs and quantities. Checkout tools are not live unless they appear in tools/list. Never ask for card data or perform Shopify catalog/inventory/order/customer writes.
+Use Commonlands MCP at https://mcp.commonlands.com/mcp for lens selection. Start with tools/list. Catalog EFL, image circle, max FoV/FOV@image-circle, and distortion display fields are insufficient to compute FoV on a specific sensor; do not interpolate or estimate sensor FoV from those fields. Use calculate_field_of_view for one lens/sensor pair, match_lens_to_sensor for sensor/target-FoV selection, search_lens_catalog for broad catalog discovery, and get_lens_distortion_profile for distortion status. Preserve the returned method, distortion_model, coverage_ok, image_circle_mm, sensor_diagonal_mm, and rectilinear_comparison. Call read_shopify_products before stating live price, availability, Product/Variant GIDs, URL, SKU, media, metafields, inventory, or cart payload. Only call create_cart/update_cart after the buyer confirms exact live Variant GIDs and quantities. Checkout tools are not live unless they appear in tools/list. Commonlands does not perform Shopify catalog/inventory/order/customer writes. For buyer-authorized agent purchases, use the returned agent_checkout route in the buyer's separate Shop MCP connection; never send payment credentials to Commonlands.
 ```
 
 ## Agent workflow
@@ -27,7 +27,7 @@ Use Commonlands MCP at https://mcp.commonlands.com/mcp for lens selection. Start
 6. Use `prompts/list` / `prompts/get` with `select_lens_for_sensor_fov_working_distance` when a client surfaces MCP prompts.
 7. Verify purchasable truth with `read_shopify_products` before quoting final SKU, URL, price, availability, Shopify IDs, or cart payloads.
 8. Create/update a Shopify cart only after explicit buyer confirmation of line items and quantities.
-9. Send the buyer to Shopify's returned cart/checkout URL. Do not claim Checkout MCP is live until checkout tools appear in `tools/list`.
+9. For an agent-authorized purchase, use the cart response `agent_checkout` route in the buyer's separate [Shop MCP connection](https://shop.dev/docs/connect), before converting the cart through Commonlands. Shop handles sign-in and payment approval. Otherwise send the buyer to Shopify's returned checkout URL.
 
 ## FoV rule
 
@@ -51,7 +51,7 @@ If fixture data conflicts with `read_shopify_products` or the live FoV/sensor ba
 
 ## Current live surface
 
-With the three standard cart tools enabled, this version exposes **21 tools** across catalog/search, FoV, Shopify read-only, cart, UCP catalog, RFQ, and purchase-handoff. Checkout tools, `cancel_cart`, and `read_shopify_metaobjects` remain excluded from that configuration. Always trust the live `tools/list` over any doc.
+The production configuration exposes **24 tools**, including `create_cart`, `get_cart`, `update_cart`, `cancel_cart`, `create_checkout`, and `get_checkout`. Commerce uses Shopify UCP at `https://commonlands.com/api/ucp/mcp`. `complete_checkout` is disabled on Commonlands. Cart responses include an `agent_checkout` route to the buyer's separate Shop MCP connection, where authorized agents can complete eligible purchases. Customers can also review and pay on Shopify. Always trust live `tools/list`. See [cart and checkout integration](docs/commerce.md).
 
 Key tools:
 
@@ -60,7 +60,7 @@ Key tools:
 - Legacy hidden aliases (still dispatch for old clients, not listed in `tools/list`): `compute_fov`, `compute_fov_catalog`, `match_lenses_to_sensor`, `search_lenses`, `get_lens_details`.
 - Resources/prompts: `commonlands://sensors/{part}`, `commonlands://lenses/{sku}`, `commonlands://catalog/sensors`, `commonlands://catalog/lenses`, and prompt `select_lens_for_sensor_fov_working_distance`.
 - Live Shopify read-only truth: `read_shopify_products`, `get_shopify_readonly_config_status`.
-- Buyer-confirmed Shopify cart handoff: `create_cart`, `get_cart`, `update_cart` when visible in `tools/list`.
+- Buyer-confirmed Shopify cart handoff: `create_cart`, `get_cart`, `update_cart`, `cancel_cart`, followed by `create_checkout` and `get_checkout` when visible in `tools/list`.
 - RFQ / question handoff: `submit_rfq` forwards a buyer quote request or question to the fixed Commonlands engineering inbox (SendGrid). The agent cannot choose the recipient; it sends an inquiry only (no order, payment, or Shopify write) and stays inert (routes to the contact page) until `SENDGRID_API_KEY` + `RFQ_TO_EMAIL` + `RFQ_FROM_EMAIL` are configured.
 - Diagnostics/readiness: `get_catalog_snapshot_status`, `get_shopify_ucp_readiness`, `prepare_shopify_purchase_handoff`, `get_purchase_route_options`.
 
@@ -94,7 +94,7 @@ model as Shopify's own public Storefront cart — but they are bounded:
 
 - **Per-IP rate limits** (Workers Rate Limiting API, `wrangler.toml`):
   120 requests/min per IP across `/mcp`, and 10 cart mutations/min per IP for
-  `create_cart`/`update_cart`. Exceeding either returns HTTP 429 with
+  cart mutations, checkout creation, and RFQ submissions. Exceeding either returns HTTP 429 with
   `retry-after: 60`.
 - **Strict payloads:** 1–25 line items per cart, quantity 1–999 per line, and
   item IDs must be live Shopify ProductVariant GIDs — fixture IDs, SKUs, and
@@ -103,16 +103,14 @@ model as Shopify's own public Storefront cart — but they are bounded:
   cart state, TTL, and expiry (`expiryAuthority: shopify_cart_ttl_expires_at`)
   belong to Shopify, which prunes abandoned carts automatically. No cart,
   session, customer, or payment state is ever stored in the Worker.
-- **No checkout surface:** checkout/cancel tools are hidden; the server cannot
-  take payment, create orders or customers, apply discounts, or write
-  inventory, so an abusive caller cannot mutate anything durable.
+- **Checkout handoff:** the agent prepares a checkout and returns Shopify’s `continue_url`. Cart conversion requires the cart owner token; checkout reads require a separate checkout owner token. The Commonlands server cannot complete payment or place an order. For buyer-authorized agent purchases, cart responses provide the exact handoff to Shop MCP; the buyer's client sends its credentials and approved payment directly to Shop.
 
 ## Safety boundaries
 
 - Do not use fixture prices, availability, product URLs, SKU variants, or IDs as final commerce truth.
 - Do not create or update carts unless the buyer has confirmed live Variant GIDs and quantities.
-- Do not use Checkout MCP yet; checkout endpoints will be enabled later after validation and approval.
-- Do not ask for or transmit card numbers, CVV/CVC, payment tokens, passwords, or customer account credentials.
+- Call `create_checkout` after buyer confirmation, preserve `checkout_access_token`, and return `checkout.continue_url`. The buyer reviews and pays on Shopify.
+- Do not ask for or transmit card numbers, CVV/CVC, payment tokens, passwords, or customer account credentials through Commonlands. In the separate Shop connection, the buyer client sends only Shop-offered payment instruments back to Shop after buyer approval.
 - Do not perform Shopify product, variant, collection, tag, metafield, inventory, order, customer, discount, RFQ, Acumatica, or database writes.
 - Do not expose gated datasheet URLs or backend secrets.
 - For live FoV, call Commonlands MCP only. Do not call the AWS Lambda/API Gateway backend directly.

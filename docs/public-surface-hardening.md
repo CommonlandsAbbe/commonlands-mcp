@@ -1,5 +1,7 @@
 # Public MCP surface hardening — 2026-05-03
 
+> Commerce update (v0.4.3): cart create/read/update/cancel and checkout create/read use Shopify UCP. Retain owner tokens; customers review and pay on Shopify. The [current commerce guide](commerce.md) supersedes older endpoint, payload, and hidden-checkout examples below. Live `tools/list` remains authoritative.
+
 Commonlands MCP is public/read-mostly for catalog and product truth, with a narrow approved Shopify-owned cart proxy when commerce mutation gates and endpoint bindings are configured. Commerce mutation tools exist in code for proxy coverage, but visibility is fail-closed: tools are hidden from `tools/list` and blocked in `tools/call` unless explicit environment gates and endpoint capability checks pass.
 
 ## Public surface

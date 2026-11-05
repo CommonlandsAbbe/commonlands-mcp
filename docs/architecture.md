@@ -1,5 +1,7 @@
 # Commonlands MCP Architecture
 
+> Commerce update (v0.4.3): cart create/read/update/cancel and checkout create/read use Shopify UCP. Retain owner tokens; customers review and pay on Shopify. The [current commerce guide](commerce.md) supersedes older endpoint, payload, and hidden-checkout examples below. Live `tools/list` remains authoritative.
+
 ## Current scope
 
 The Worker is being built in PR-sized phases:

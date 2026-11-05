@@ -15,6 +15,13 @@ invocation_logs = true
 [observability.traces]
 
 [vars]
+# Approved cart and checkout handoff. Shopify owns state and hosts payment.
+ENABLE_COMMERCE_MUTATION_TOOLS = "true"
+SHOPIFY_CART_MCP_ENDPOINT = "https://commonlands.com/api/ucp/mcp"
+ENABLE_CHECKOUT_MUTATION_TOOLS = "true"
+SHOPIFY_CHECKOUT_MCP_ENDPOINT = "https://commonlands.com/api/ucp/mcp"
+ENABLE_EXTRA_CHECKOUT_MUTATION_TOOLS = "false"
+SHOPIFY_UCP_AGENT_PROFILE = "https://mcp.commonlands.com/.well-known/ucp"
 FOV_LIVE_BACKEND_ENABLED = "true"
 FOV_LAMBDA_ENDPOINT = "https://ia97wrz7ag.execute-api.us-west-2.amazonaws.com/default/fov"
 # When "true", compute_fov_catalog omits partNums so the FoV Lambda scans its full
@@ -43,7 +50,7 @@ dataset = "commonlands_mcp_events"
 
 # Per-IP abuse controls for the public endpoint (Workers Rate Limiting API).
 # Global budget for all /mcp requests, plus a stricter budget for cart
-# mutations (create_cart/update_cart) since the endpoint is unauthenticated.
+# mutations (including checkout handoff) since the endpoint is unauthenticated.
 # Code fails open if a binding is absent (local dev, tests).
 [[unsafe.bindings]]
 name = "MCP_RATE_LIMITER"
