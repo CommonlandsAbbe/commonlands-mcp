@@ -1178,7 +1178,7 @@ describe('Commonlands MCP Worker', () => {
       if (url.endsWith('/admin/api/2026-04/graphql.json')) {
         const body = String(init?.body);
         expect(body).toContain('productByHandle');
-        expect(body).toContain('variants(first: $first)');
+        expect(body).toContain('variants(first: $first, after: $after)');
         expect(body).not.toContain('metafields(first: 0)');
         expect(body).not.toContain('product_handle');
         expect(body).not.toMatch(/mutation|customer|order/i);
@@ -1380,10 +1380,35 @@ describe('Commonlands MCP Worker', () => {
     ]);
     expect(JSON.stringify(products)).not.toMatch(/docsend|mm-google-shopping|product_recommendation/);
 
-    // Coarse availability only: low_stock at quantity 3, no raw counts.
+    // Published stock is authorized; inventory item IDs remain private.
     const variants = products[0]?.variants as JsonObject[];
-    expect(variants[0]).toMatchObject({ sku: 'CIL250', availability: 'low_stock' });
-    expect(JSON.stringify(variants)).not.toMatch(/inventoryQuantity|inventoryItemId/);
+    expect(variants[0]).toMatchObject({ sku: 'CIL250', availability: 'low_stock', websiteStockQuantity: 3, availableQuantity: null });
+    expect(JSON.stringify(variants)).not.toMatch(/inventoryItemId/);
+  });
+
+  it.each([
+    { tracked: true, stock: 42, online: 12, policy: 'DENY', sale: true, expectedStock: 42, expectedOnline: 12 },
+    { tracked: true, stock: -2, online: 0, policy: 'CONTINUE', sale: true, expectedStock: 0, expectedOnline: 0 },
+    { tracked: false, stock: 42, online: 12, policy: 'DENY', sale: true, expectedStock: null, expectedOnline: null },
+    { tracked: true, stock: null, online: null, policy: 'DENY', sale: false, expectedStock: null, expectedOnline: null },
+  ])('preserves per-variant website and online stock semantics: $tracked/$stock/$online', async (sample) => {
+    const node = shopifyProductVariantNode({ productId: 'gid://shopify/Product/39', handle: 'test-lens', title: 'Test lens', sku: 'CIL039-F2.8-M12A650', variantId: 'gid://shopify/ProductVariant/3901', price: '39.00', inventoryQuantity: 42, metafields: [] });
+    Object.assign(node, { inventoryQuantity: sample.stock, sellableOnlineQuantity: sample.online, inventoryItem: { tracked: sample.tracked, id: 'private-inventory-id' }, inventoryPolicy: sample.policy, availableForSale: sample.sale });
+    const second = { ...node, id: 'gid://shopify/ProductVariant/3902', sku: 'CIL039-F2.8-M12B650', inventoryQuantity: 7, sellableOnlineQuantity: 5, inventoryItem: { tracked: true } };
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      if (url.endsWith('/admin/oauth/access_token')) return Response.json({ access_token: 'test-inventory-token', expires_in: 86400 });
+      expect(String(init?.body)).toContain('sellableOnlineQuantity');
+      expect(String(init?.body)).toContain('availableForSale');
+      return Response.json({ data: { productVariants: { nodes: [node, second] } } });
+    }) as typeof fetch;
+    const { body } = await rpc('tools/call', { name: 'read_shopify_products', arguments: { sku: 'CIL039', limit: 5 } }, 'inventory', shopifyReadonlyEnv);
+    const result = getStructuredContent(body);
+    const variants = ((result.products as JsonObject[])[0]?.variants as JsonObject[]);
+    expect(variants[0]).toMatchObject({ sku: 'CIL039-F2.8-M12A650', variantId: 'gid://shopify/ProductVariant/3901', inventoryTracked: sample.tracked, websiteStockQuantity: sample.expectedStock, availableQuantity: sample.expectedOnline, availableForSale: sample.sale, continueSellingWhenOutOfStock: sample.policy === 'CONTINUE' });
+    expect(variants[1]).toMatchObject({ sku: 'CIL039-F2.8-M12B650', websiteStockQuantity: 7, availableQuantity: 5 });
+    expect(result.generatedAt).toBeTypeOf('string');
+    expect(JSON.stringify(result)).not.toContain('private-inventory-id');
   });
 
   it('defaults read_shopify_products to metafields off', async () => {

@@ -544,10 +544,11 @@ const TOOLS: ToolDefinition[] = [
     name: 'read_shopify_products',
     title: 'Read Shopify products',
     description:
-      'Use this for live purchasable product truth: product and variant IDs, SKUs, prices, coarse availability, product URLs, and public product-page metafields. Public data only: active products, no exact inventory counts, and metafields limited to the custom.* display fields shown on commonlands.com product pages. Read-only; does not create carts, checkouts, orders, customers, inventory mutations, or Shopify writes. Fixture catalog tools are scaffold data only.',
+      'Use this for live purchasable product truth: product and variant IDs, full SKUs, prices, availability, product URLs, and public product-page metafields. Each variant includes websiteStockQuantity (tracked inventory count used by website stock labels), availableQuantity (online sellable stock), inventoryTracked, availableForSale, and continueSellingWhenOutOfStock. Null quantities mean unknown or untracked, not zero. Match the full selected SKU and variantId; never sum different variants. Each call reads current Shopify backend data. Use generatedAt for read freshness. Typed metafield value is authoritative; valuePreview is display-only. Check pageInfo and metafieldsComplete. Counts reserve no inventory and do not guarantee delivery to a customer location; verify checkout warnings. Only active Online Store products are returned. Private inventory IDs and locations remain excluded. Read-only; does not create carts, checkouts, orders, customers, inventory mutations, or Shopify writes. Fixture catalog tools are scaffold data only.',
     inputSchema: {
       type: 'object',
       properties: {
+        after: { type: 'string', description: 'Shopify endCursor from the previous page; keep the same search.' },
         sku: { type: 'string', description: 'Optional variant SKU, for example CIL250.' },
         handle: { type: 'string', description: 'Optional Shopify product handle.' },
         query: { type: 'string', description: 'Optional safe Shopify product/variant search text.' },
