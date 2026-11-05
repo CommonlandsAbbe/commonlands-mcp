@@ -1,3 +1,5 @@
+import { getPurchaseOptions, checkoutEstimate } from './purchase-options';
+import { productMarkdown } from './product-markdown';
 import { resolveLiveProduct, normalizeMountText } from './product-resolver';
 import { fetchReadWithRetry, readFailureCategory } from './upstream-read';
 import { lensSpecifications, type LensSpecifications } from './lens-specifications';
@@ -268,7 +270,7 @@ const CALCULATE_FIELD_OF_VIEW_OUTPUT_SCHEMA = {
 const SERVER_INSTRUCTIONS = [
   `Commonlands MCP public endpoint is ${PUBLIC_MCP_ENDPOINT}. Use this endpoint in client configuration, metadata, and agent-facing descriptions.`,
   'Commonlands MCP helps agents select precision optics for machine vision, robotics, and embedded vision: M12 lenses, C-mount lenses, and lens field of view calculations.',
-  'Usage flow: discover lenses with search_lens_catalog/search_catalog, inspect distortion with get_lens_distortion_profile, compute lens field of view with calculate_field_of_view, rank options with match_lens_to_sensor/compare_lenses/recommend_lenses_for_application, then use read_shopify_products for live purchasable truth before quoting price, availability, Shopify variantId, product URL, or cart payloads.',
+  'Start with image sensor details: model, active area, resolution and pixel pitch. Establish the required horizontal FoV and working distance. Call match_lens_to_sensor to find lenses, then calculate_field_of_view for each final lens/sensor pair and preserve its distortion status. Resolve the chosen family with resolve_lens_product. Select its full SKU, then call get_purchase_options for the requested quantity. Use read_shopify_products for complete public specifications. Never treat a base-price estimate as a binding quote.',
   FOV_COMPUTATION_RULE,
   'Do not run DIY optics math, interpolate catalog FoV, infer coverage, or assemble sensor-specific optical numbers outside Commonlands MCP computed responses.',
   'Source-labeling policy: label every optical or commerce claim with its source; preserve returned provenance.method, provenance.rev, coverage class, distortion-at-field-edge status, and Shopify live-read versus fixture/source-warning distinctions.',
@@ -279,6 +281,17 @@ const SERVER_INSTRUCTIONS = [
 ].join(' ');
 
 const TOOLS: ToolDefinition[] = [
+  {
+    name: 'get_purchase_options', title: 'Check quantity purchase options',
+    description: 'Read current Shopify price, currency, online inventory and backorder policy for an exact full SKU and quantity. Base-price arithmetic is not a binding quote; unverified volume terms require an RFQ. Optionally read an existing owner-authorized checkout for shipping/tax estimates. Creates no cart, checkout, order or RFQ.',
+    inputSchema: { type: 'object', properties: {
+      sku: { type: 'string', description: 'Exact full variant SKU from resolve_lens_product.' },
+      quantity: { type: 'integer', minimum: 1, maximum: 10000 },
+      variant_id: { type: 'string', description: 'Optional Shopify Variant GID; must match the full SKU.' },
+      checkout_id: { type: 'string', description: 'Optional existing checkout to read; its single line must match this variant and quantity.' },
+      checkout_access_token: { type: 'string', description: 'Matching owner credential from create_checkout; never a Shop OAuth token.' },
+    }, required: ['sku', 'quantity'], additionalProperties: false },
+  },
   {
     name: 'resolve_lens_product', title: 'Resolve a live lens product',
     description: 'Resolve a lens family or exact full SKU to current published Shopify variants. A family requires explicit variant selection; no fixture specifications or inferred configuration. Use the optical part number with calculate_field_of_view for sensor-specific optics.',
@@ -1858,6 +1871,15 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
     return rpcError(id, { code: -32601, message: `Tool not found: ${params.name}` });
   }
   const args = normalizeAliasedToolArgs(toolName, isRecord(params.arguments) ? params.arguments : {});
+  if (toolName === 'get_purchase_options') {
+    const options = await getPurchaseOptions(env, args);
+    if (options.status !== 'ok' || !options.selection || !options.requestedQuantity || args.checkout_id === undefined) return toolResult(id, options);
+    if (!isToolEnabled('get_checkout', env)) return toolResult(id, { ...options, fulfillment: { status: 'checkout_read_disabled' } });
+    const liveCheckout = await callShopifyCheckoutMcp(env, 'get_checkout', { id: args.checkout_id, checkout_access_token: args.checkout_access_token });
+    return toolResult(id, { ...options, fulfillment: liveCheckout.connector.status === 'ok' && isRecord(liveCheckout.checkout) && liveCheckout.checkout.id === args.checkout_id
+      ? checkoutEstimate(liveCheckout.checkout, options.selection.variantId, options.requestedQuantity)
+      : { status: 'checkout_unavailable', shipping: null, tax: null, total: null, message: 'Use the matching checkout owner credential and retry the existing checkout read.' } });
+  }
   if (toolName === 'resolve_lens_product') {
     if (typeof args.sku !== 'string') return rpcError(id, { code: -32602, message: 'sku is required' });
     return toolResult(id, await resolveLiveProduct(env, args.sku));
@@ -2515,7 +2537,7 @@ function toolFailureStatus(content: unknown): string | undefined {
   if (!isRecord(content)) return undefined;
   const status = isRecord(content.connector) ? content.connector.status : content.status;
   // Only fixed outcome labels enter telemetry; never copy messages or payloads.
-  return typeof status === 'string' && ['not_configured', 'invalid_request', 'shopify_error', 'delivery_failed'].includes(status)
+  return typeof status === 'string' && ['not_configured', 'invalid_request', 'shopify_error', 'delivery_failed', 'unavailable', 'not_found', 'incomplete', 'variant_mismatch'].includes(status)
     ? status : undefined;
 }
 
@@ -3505,6 +3527,29 @@ assertSafePublicCatalogUrls();
 export default {
   async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+
+    if (url.pathname === '/catalog' || url.pathname.startsWith('/products/')) {
+      if (request.method !== 'GET') return methodNotAllowed();
+      const limited = await enforceRateLimits(request, env);
+      if (limited) return limited;
+      const headers = { 'cache-control': 'no-store' };
+      if (url.pathname === '/catalog') {
+        const result = await readShopifyProducts(env, {
+          catalog: true, limit: url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : 10,
+          ...(url.searchParams.has('after') ? { after: url.searchParams.get('after') } : {}),
+          ...(url.searchParams.has('query') ? { query: url.searchParams.get('query') } : {}),
+          includeMetafields: true,
+        });
+        return json(result, { status: result.connector.status === 'ok' ? 200 : result.connector.status === 'invalid_request' ? 400 : 503, headers });
+      }
+      let sku: string;
+      try { sku = decodeURIComponent(url.pathname.slice('/products/'.length)); }
+      catch { return json({ error: 'invalid_sku' }, { status: 400, headers }); }
+      const result = await resolveLiveProduct(env, sku);
+      const status = result.connector.status === 'invalid_request' ? 400 : result.selectionStatus === 'unavailable' ? 503 : result.selectionStatus === 'not_found' ? 404 : 200;
+      if (url.searchParams.get('format') === 'markdown') return new Response(productMarkdown(result), { status, headers: { ...headers, 'content-type': 'text/markdown; charset=utf-8', 'x-content-type-options': 'nosniff' } });
+      return json(result, { status, headers });
+    }
 
     if (url.pathname === '/healthz') {
       if (request.method !== 'GET') return methodNotAllowed();
