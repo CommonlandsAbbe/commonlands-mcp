@@ -19,6 +19,8 @@ Start with the image sensor: model, active area, resolution and pixel pitch.
 Establish the required horizontal field of view and working distance.
 Use match_lens_to_sensor to find candidates. Use calculate_field_of_view for
 final lens/sensor FoV and distortion; preserve its method and status.
+If available in tools/list, use assess_lens_requirements to check explicit limits.
+Report satisfied, failed and unknown checks separately.
 Resolve the chosen family with resolve_lens_product and select a full SKU.
 Use get_purchase_options for current price, stock and the requested quantity.
 Confirm variants, quantities and totals with the buyer before cart or RFQ actions.
@@ -64,6 +66,7 @@ Key tools:
 
 - Public optics routing: `calculate_field_of_view`, `match_lens_to_sensor`, `search_lens_catalog`, `get_lens_distortion_profile`.
 - Optical comparison: `compare_lenses`, `recommend_lenses_for_application`. Current product selection: `resolve_lens_product`, `get_purchase_options`.
+- Engineering checks: `assess_lens_requirements` uses the live FoV path and reports satisfied, failed and unknown requirements. See [supported checks and missing evidence](docs/engineering-requirements.md); trust the connected server's `tools/list` for availability.
 - Legacy hidden aliases (still dispatch for old clients, not listed in `tools/list`): `compute_fov`, `compute_fov_catalog`, `match_lenses_to_sensor`, `search_lenses`, `get_lens_details`.
 - Resources/prompts: `commonlands://sensors/{part}`, `commonlands://lenses/{sku}`, `commonlands://catalog/sensors`, `commonlands://catalog/lenses`, and prompt `select_lens_for_sensor_fov_working_distance`.
 - Live Shopify read-only truth: `read_shopify_products`, `get_shopify_readonly_config_status`.

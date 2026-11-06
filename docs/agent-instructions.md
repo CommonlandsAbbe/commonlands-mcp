@@ -24,6 +24,12 @@ There is no `find_lenses` tool in the current public surface. For "find lenses f
 6. A base-price multiplication is an estimate. Do not invent quantity tiers, shipping, tax, lead time or quote expiry. Unknown means unknown.
 7. Only create a cart or submit an RFQ after the buyer confirms the exact variant and quantity. Existing owner credentials remain mandatory for cart and checkout reads.
 
+When `assess_lens_requirements` appears in `tools/list`, use it for explicit limits
+on a shortlisted lens/sensor pair. Preserve its satisfied, failed and unknown
+checks. Unknown is not a pass; a nominal pixel-pitch rating is not measured MTF.
+The report covers the optical part number, not qualification of a selected
+Shopify variant. See [engineering requirements](engineering-requirements.md).
+
 ## What To Trust
 
 Lambda/DynamoDB owns optical results; Shopify owns current commerce and variant

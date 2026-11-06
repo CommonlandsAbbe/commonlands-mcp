@@ -3,6 +3,7 @@ import { productMarkdown } from './product-markdown';
 import { resolveLiveProduct, normalizeMountText } from './product-resolver';
 import { fetchReadWithRetry, readFailureCategory } from './upstream-read';
 import { lensSpecifications, type LensSpecifications } from './lens-specifications';
+import { assessLensRequirements, validateLensRequirements, LENS_REQUIREMENTS_SCHEMA, type LensRequirements } from './lens-requirements';
 import {
   assertSafePublicCatalogUrls,
   CATALOG_SNAPSHOT,
@@ -274,6 +275,7 @@ const SERVER_INSTRUCTIONS = [
   FOV_COMPUTATION_RULE,
   'Do not run DIY optics math, interpolate catalog FoV, infer coverage, or assemble sensor-specific optical numbers outside Commonlands MCP computed responses.',
   'Source-labeling policy: label every optical or commerce claim with its source; preserve returned provenance.method, provenance.rev, coverage class, distortion-at-field-edge status, and Shopify live-read versus fixture/source-warning distinctions.',
+  'Use assess_lens_requirements for explicit satisfied, failed and unknown checks on a shortlisted lens/sensor pair. Unknown engineering evidence requires confirmation; nominal pixel-pitch ratings are not measured MTF. Optical-part checks do not qualify a selected Shopify variant.',
   'For sensor-specific lens finding, prefer match_lens_to_sensor when the user gives a sensor or target FoV, then call calculate_field_of_view for each final lens/sensor FoV claim. Use search_lens_catalog only for broad SKU/title/mount discovery.',
   'Commerce: retain owner tokens for carts and checkouts. For buyer-authorized agent purchases, use the cart response agent_checkout route to the separate Shop MCP connection before converting the cart here. Shop handles buyer sign-in and payment; its complete_checkout requires approval of current terms and a buyer-selected offered instrument. Only completed plus order confirms purchase. After uncertain completion, read status; never repeat payment. Otherwise use Commonlands create_checkout and its Shopify continue_url for buyer payment.',
   'Safety boundaries: fixture-backed tools are context only; use live Shopify product truth and tools/list. Commonlands does not accept Shop OAuth tokens, payment instruments, or caller-supplied verification flags. Send Shop credentials only to Shop MCP in the buyer client. Direct Commonlands payment, order, customer, inventory, and product writes remain disabled.',
@@ -296,6 +298,23 @@ const TOOLS: ToolDefinition[] = [
     name: 'resolve_lens_product', title: 'Resolve a live lens product',
     description: 'Resolve a lens family or exact full SKU to current published Shopify variants. A family requires explicit variant selection; no fixture specifications or inferred configuration. Use the optical part number with calculate_field_of_view for sensor-specific optics.',
     inputSchema: { type: 'object', properties: { sku: { type: 'string' } }, required: ['sku'], additionalProperties: false },
+  },
+  {
+    name: 'assess_lens_requirements',
+    title: 'Check a lens against engineering requirements',
+    description: 'Start with the sensor dimensions and a shortlisted optical part number. Check FoV ranges, image-circle coverage, nominal mount and axis-specific calculated distortion using the existing live FoV backend. Explicitly report unknown mass/dimensions without source units and missing engineering evidence. No fixture lens substitution, recalculated optics, product qualification or purchase action.',
+    inputSchema: {
+      type: 'object', required: ['lens_sku', 'requirements'], additionalProperties: false,
+      properties: {
+        lens_sku: { type: 'string', pattern: '^[A-Za-z0-9-]{2,32}$', description: 'Exact optical part number from search/matching, e.g. CIL353; not an inferred Shopify configuration.' },
+        sensor: { type: 'string', pattern: '^[A-Za-z0-9-]{2,32}$', description: 'Sensor part number. Alternatively provide custom dimensions, not both.' },
+        widthPx: CUSTOM_SENSOR_PROPERTIES.widthPx, heightPx: CUSTOM_SENSOR_PROPERTIES.heightPx,
+        pixelSizeUm: CUSTOM_SENSOR_PROPERTIES.pixelSizeUm,
+        sensorWidthMm: CUSTOM_SENSOR_PROPERTIES.sensorWidthMm, sensorHeightMm: CUSTOM_SENSOR_PROPERTIES.sensorHeightMm,
+        requirements: LENS_REQUIREMENTS_SCHEMA,
+      },
+      oneOf: [{ required: ['sensor'] }, { required: ['widthPx', 'heightPx', 'pixelSizeUm'] }, { required: ['sensorWidthMm', 'sensorHeightMm'] }],
+    },
   },
   {
     name: 'calculate_field_of_view',
@@ -1677,7 +1696,7 @@ function buildCustomSensor(spec: CustomSensorSpec): SensorCatalogItem | { error:
 async function resolveSensorInput(
   env: Env,
   args: Record<string, unknown>,
-): Promise<{ sensor: SensorCatalogItem; partNumber: string; source: 'catalog' | 'custom' } | { error: JsonRpcError }> {
+): Promise<{ sensor: SensorCatalogItem; partNumber: string; source: 'live' | 'fixture' | 'custom' } | { error: JsonRpcError }> {
   const partRaw = sensorPartNumberFromArgs(args);
   const spec = customSensorSpecFromArgs(args);
   const hasCustom = hasAnyCustomSensorField(spec);
@@ -1686,8 +1705,8 @@ async function resolveSensorInput(
     const partError = validateSafeIdentifier(partRaw, 'sensor');
     if (partError) return { error: partError };
     const partNumber = normalizeSafeIdentifier(partRaw);
-    const sensor = await resolveSensor(env, partNumber);
-    if (sensor) return { sensor, partNumber, source: 'catalog' };
+    const resolved = await resolveSensorWithSource(env, partNumber);
+    if (resolved) return { ...resolved, partNumber };
     if (!hasCustom) return { error: await sensorNotFoundErrorAsync(env, partNumber) };
     // Unknown part number but the agent also gave dimensions: honour them.
   }
@@ -2067,6 +2086,51 @@ async function toolCallResponse(id: unknown, params: unknown, env: Env): Promise
       sensor: resolved.sensor,
       source: resolved.source === 'live' ? 'live-dynamodb-sensor-table' : 'fixture-backed sensor snapshot',
     });
+  }
+
+  if (toolName === 'assess_lens_requirements') {
+    const bad = (message: string) => rpcError(id, { code: -32602, message: `Invalid params: ${message}` });
+    const allowed = ['lens_sku', 'sensor', 'widthPx', 'heightPx', 'pixelSizeUm', 'sensorWidthMm', 'sensorHeightMm', 'requirements'];
+    if (Object.keys(args).some(key => !allowed.includes(key))) return bad('unsupported assessment input');
+    const lensError = validateSafeIdentifier(args.lens_sku, 'lens_sku');
+    if (lensError) return rpcError(id, lensError);
+    const requirementError = validateLensRequirements(args.requirements);
+    if (requirementError) return bad(requirementError);
+    const pixelKeys = ['widthPx', 'heightPx', 'pixelSizeUm'];
+    const mmKeys = ['sensorWidthMm', 'sensorHeightMm'];
+    const hasPixels = pixelKeys.some(key => Object.hasOwn(args, key));
+    const hasMm = mmKeys.some(key => Object.hasOwn(args, key));
+    const hasPart = Object.hasOwn(args, 'sensor');
+    if (Number(hasPixels) + Number(hasMm) + Number(hasPart) !== 1) return bad('provide one sensor part number, pixel dimensions with pitch, or active dimensions in mm');
+    if (hasPart) {
+      const sensorError = validateSafeIdentifier(args.sensor, 'sensor');
+      if (sensorError) return rpcError(id, sensorError);
+    } else {
+      for (const key of hasPixels ? pixelKeys : mmKeys) {
+        const value = args[key];
+        if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return bad('custom sensor dimensions must be positive numbers');
+        if ((key === 'widthPx' || key === 'heightPx') && !Number.isInteger(value)) return bad('pixel counts must be integers');
+      }
+    }
+    if (!isFovLiveBackendEnabled(env)) return rpcError(id, { code: -32603, message: 'Requirements assessment needs the live optics backend; fixture substitution is disabled.' });
+    const resolved = await resolveSensorInput(env, args);
+    if ('error' in resolved) return rpcError(id, resolved.error);
+    const lensSku = normalizeSafeIdentifier(args.lens_sku as string);
+    const live = await computeFovWithLiveBackend(env, { lensSku, sensorPartNumber: resolved.partNumber, sensor: resolved.sensor });
+    if ('error' in live) return rpcError(id, live.error);
+    const detail = live.structuredContent;
+    const matches = Array.isArray(detail.lenses) ? detail.lenses.filter((lens): lens is Record<string, unknown> =>
+      isRecord(lens) && typeof lens.partNum === 'string' && lens.partNum.trim().toUpperCase() === lensSku) : [];
+    // A mismatched, duplicate or partial response cannot qualify the requested part.
+    const errors = Array.isArray(detail.errors) ? detail.errors : [];
+    if (matches.length !== 1 || detail.truncated === true || errors.length > 0) {
+      return rpcError(id, { code: -32603, message: 'Live optics did not return one unambiguous, complete result for the requested lens; assessment unavailable.' });
+    }
+    const lens = matches[0]!;
+    const optics = buildCalculateFieldOfViewResponse({ ...detail, lenses: [lens] }, resolved.sensor, { lensSku, sensorPartNumber: resolved.partNumber });
+    return toolResult(id, assessLensRequirements({ lensSku, lens, optics, requirements: args.requirements as unknown as LensRequirements,
+      sensor: { partNumber: resolved.partNumber, activeAreaMm: resolved.sensor.activeAreaMm, source: resolved.source },
+    }));
   }
 
   if (toolName === 'calculate_field_of_view') {
