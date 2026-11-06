@@ -71,7 +71,7 @@ export function validateLensRequirements(value: unknown): string | null {
     else if (key === 'mount' && mountName(item) === null) return 'mount must be M12/S-mount, C-mount/C FA, or CS-mount';
     else if (key === 'distortion') {
       if (!record(item) || !exactKeys(item, ['axis', 'max_absolute_percent'])
-        || !['horizontal', 'vertical', 'diagonal'].includes(String(item.axis))
+        || typeof item.axis !== 'string' || !['horizontal', 'vertical', 'diagonal'].includes(item.axis)
         || !finite(item.max_absolute_percent) || item.max_absolute_percent < 0 || item.max_absolute_percent > 100) {
         return 'distortion requires an axis and max_absolute_percent between 0 and 100';
       }

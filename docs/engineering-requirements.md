@@ -6,7 +6,7 @@ find candidates. For a shortlisted optical part number, use
 `assess_lens_requirements` to see which requested checks pass, fail or still need
 engineering confirmation.
 
-This tool is being added in the phase 4 PR. Check the connected server's
+This tool is included in the phase 4 source changes. Check the connected server's
 `tools/list` before using it; merging a PR does not deploy the Worker.
 
 Example tool arguments:

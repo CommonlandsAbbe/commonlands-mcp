@@ -66,7 +66,7 @@ Key tools:
 
 - Public optics routing: `calculate_field_of_view`, `match_lens_to_sensor`, `search_lens_catalog`, `get_lens_distortion_profile`.
 - Optical comparison: `compare_lenses`, `recommend_lenses_for_application`. Current product selection: `resolve_lens_product`, `get_purchase_options`.
-- Engineering checks (phase 4 PR): `assess_lens_requirements` uses the live FoV path and reports satisfied, failed and unknown requirements. See [supported checks and missing evidence](docs/engineering-requirements.md); trust the connected server's `tools/list` for availability.
+- Engineering checks: `assess_lens_requirements` uses the live FoV path and reports satisfied, failed and unknown requirements. See [supported checks and missing evidence](docs/engineering-requirements.md); trust the connected server's `tools/list` for availability.
 - Legacy hidden aliases (still dispatch for old clients, not listed in `tools/list`): `compute_fov`, `compute_fov_catalog`, `match_lenses_to_sensor`, `search_lenses`, `get_lens_details`.
 - Resources/prompts: `commonlands://sensors/{part}`, `commonlands://lenses/{sku}`, `commonlands://catalog/sensors`, `commonlands://catalog/lenses`, and prompt `select_lens_for_sensor_fov_working_distance`.
 - Live Shopify read-only truth: `read_shopify_products`, `get_shopify_readonly_config_status`.

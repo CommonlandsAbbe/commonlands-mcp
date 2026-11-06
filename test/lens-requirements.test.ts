@@ -153,6 +153,8 @@ it.each([
   { horizontal_fov_deg: { min: 60, max: 70, tolerance: 10 } },
   { full_sensor_coverage: false }, { mount: 'not a mount' }, { max_weight_g: -1 }, { max_diameter_mm: '12' },
   { distortion: { max_absolute_percent: 3 } }, { distortion: { axis: 'horizontal', max_absolute_percent: -3 } },
+  { distortion: { axis: ['horizontal'], max_absolute_percent: 3 } },
+  { distortion: { axis: { toString: null }, max_absolute_percent: 3 } },
   { require_evidence: [] }, { require_evidence: ['mtf', 'mtf'] }, { require_evidence: ['invented'] },
   { caller_verified: true },
 ])('rejects invalid requirements before any upstream fetch: %j', async requirements => {

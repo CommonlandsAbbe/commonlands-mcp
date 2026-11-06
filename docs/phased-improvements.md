@@ -41,9 +41,10 @@ order. All 179 tests passed before the authorized merge and manual deployment.
 Existing uncommitted work in the primary checkout was preserved; these PRs were
 built in an isolated worktree.
 
-## Phase 4: engineering requirements (current PR)
+## Phase 4: engineering requirements
 
-Add a read-only `assess_lens_requirements` tool for one optical part number and
+[PR #59](https://github.com/CommonlandsAbbe/commonlands-mcp/pull/59) adds a read-only
+`assess_lens_requirements` tool for one optical part number and
 sensor, reusing the existing live FoV path. Explicit ranges and limits produce
 satisfied, failed or unknown checks. Unpublished MTF/CRA/illumination evidence,
 unitless mechanical fields and display-only distortion cannot silently pass.
