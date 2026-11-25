@@ -272,6 +272,31 @@ include these attributes in its DynamoDB projection and returned lens objects;
 adding attributes to the database alone is insufficient. This repository contains
 the MCP adapter, not that Lambda's implementation.
 
+### Lens total track length (TTL)
+
+Call `search_lens_catalog` with the optical part number, for example
+`{"query":"CIL514"}`. Read `results[].totalTrackLengthMm` for the catalog
+front-to-image-plane dimension. A null value means the source lacks a usable
+length or reference plane. Optical part numbers can cover several configurations.
+Use the drawing for the selected variant and focus setting for mechanical fit.
+
+The private FoV Lambda must project and return `ttl`, `mount`, and `flange_dist`
+on both single-part and catalog reads. In the raw LensList contract, M12 `ttl`
+already reaches the image plane. C-mount (`C FA`) `ttl` ends at the mounting
+flange. The adapter adds that record's flange-to-image `flange_dist` once.
+The response retains the valid raw `ttl` and labels its endpoint in
+`ttlReference`. MBFL measures from a different surface.
+
+If a source begins returning an already-normalized C-mount `ttl`, it must also
+return `ttlReference: "front_to_image_plane"`. Use `"unknown"` for a row with
+an unresolved reference. Never mix normalized and raw C-mount lengths without
+this distinction.
+
+Run `node scripts/smoke-lens-ttl.mjs` after a release of either service
+(or pass a staging MCP URL). The current reference cases are CIL250 at 30 mm
+and CIL514 at 61.52 mm (44 + 17.52). Check the source revision and drawing
+before changing either expectation.
+
 - If the client connects but shows no tools, run a direct `tools/list` smoke test and refresh/restart the client.
 - If a client rejects `serverUrl`, try `url`; if it rejects remote HTTP entirely, use `mcp-remote` through `npx`.
 - If product facts conflict, trust `read_shopify_products` over fixture catalog tools.
